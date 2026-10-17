@@ -76,6 +76,7 @@ describe('settingsStore - per-category push preferences', () => {
     'session-failed': true,
     'plan-complete': true,
     'spawn-stalled': false,
+    'workflow-complete': true,
   } as const;
 
   const CATEGORY_KEY = 'settings.pushCategoriesEnabled.v2';
@@ -107,6 +108,35 @@ describe('settingsStore - per-category push preferences', () => {
       ...DEFAULTS,
       'input-required': false,
       'turn-complete': false,
+    });
+  });
+
+  /**
+   * Every install that ever touched a toggle holds a full v2 map written
+   * before workflow-complete existed (protocol 0.21.0). The key is simply
+   * absent there, so it takes its default and the upgrade switches it on,
+   * while every stored choice survives untouched.
+   */
+  it('switches workflow-complete on for a v2 map stored before the category existed', async () => {
+    storedValues.set(
+      CATEGORY_KEY,
+      JSON.stringify({
+        'input-required': true,
+        'turn-complete': false,
+        'session-failed': true,
+        'plan-complete': false,
+        'spawn-stalled': true,
+      }),
+    );
+    await useSettingsStore.getState().hydrate();
+
+    expect(useSettingsStore.getState().pushCategoriesEnabled).toEqual({
+      'input-required': true,
+      'turn-complete': false,
+      'session-failed': true,
+      'plan-complete': false,
+      'spawn-stalled': true,
+      'workflow-complete': true,
     });
   });
 
@@ -537,6 +567,7 @@ describe('settingsStore - hydrate never gets stuck unhydrated', () => {
         'session-failed': false,
         'plan-complete': false,
         'spawn-stalled': false,
+        'workflow-complete': false,
       }),
     );
     storedValues.set('settings.hapticsEnabled', 'false');

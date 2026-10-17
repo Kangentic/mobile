@@ -9,7 +9,12 @@ import { CapabilityError } from '@/channel';
 import { PAUSE_WAIT_MS, archiveTask, deleteTaskFromBoard, pauseTaskSession, resumeTaskSession } from '@/connection/actions';
 import { findTaskById, isDoneColumn, selectColumnsOrdered, useBoardStore } from '@/state/boardStore';
 import { triggerHaptic } from '@/lib/haptics';
+import { WorkflowGlyph } from '@/components/board/WorkflowGlyph';
+import { workflowBlocksArchive, workflowMoveTargetIds } from '@/workflow/workflowMove';
 import { RESUME_FAILED_MESSAGE, useResumeOffer } from './task/useResumeOffer';
+
+/** The hub's glyph size (ActionRow's icons), for the workflow's own mark. */
+const WORKFLOW_GLYPH_SIZE = 20;
 
 /**
  * Every row here needs both route params. Missing one is a routing defect the
@@ -79,6 +84,17 @@ export function TaskActionsScreen(): React.JSX.Element {
     () => (board ? selectColumnsOrdered(board).some(isDoneColumn) : false),
     [board],
   );
+  // A workflow task (protocol 0.21.0, design screens 3 to 5). Move stays in the
+  // list but is disabled while no column will take it (a running workflow's
+  // locked card), and Archive is disabled for every workflow task, since only
+  // the desktop can take a task out of its workflow. Neither says why, as the
+  // desktop's own menu does not on a touch screen.
+  const workflow = task?.workflow ?? null;
+  const moveAvailable = useMemo(() => {
+    if (!task || !workflow || !board) return true;
+    return workflowMoveTargetIds(task, selectColumnsOrdered(board)).size > 0;
+  }, [task, workflow, board]);
+  const archiveBlockedByWorkflow = workflowBlocksArchive(workflow);
 
   const [actionInFlight, setActionInFlight] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -229,6 +245,16 @@ export function TaskActionsScreen(): React.JSX.Element {
     router.replace({ pathname: '/edit-task', params: { taskId, projectId } });
   }, [taskId, projectId, router]);
 
+  // The desktop card menu's Open workflow, worded as this sheet's View pull
+  // request is. The workflow lives in its HOME project, which can be another
+  // board's, so that is the project the view asks.
+  const workflowId = workflow?.id ?? null;
+  const workflowHomeProjectId = workflow?.project_id ?? null;
+  const onViewWorkflow = useCallback(() => {
+    if (workflowId === null || workflowHomeProjectId === null) return;
+    router.replace({ pathname: '/workflow', params: { workflowId, projectId: workflowHomeProjectId } });
+  }, [workflowId, workflowHomeProjectId, router]);
+
   const onArchive = useCallback(() => {
     if (!taskId || !projectId) {
       setErrorMessage(MISSING_TASK_CONTEXT);
@@ -324,11 +350,20 @@ export function TaskActionsScreen(): React.JSX.Element {
             testID="task-action-view-pr"
           />
         ) : null}
+        {workflow !== null ? (
+          <SheetActionRow
+            label="View workflow"
+            glyph={<WorkflowGlyph colorSlot={workflow.color_slot} size={WORKFLOW_GLYPH_SIZE} />}
+            onPress={onViewWorkflow}
+            disabled={busy}
+            testID="task-action-view-workflow"
+          />
+        ) : null}
         <ActionRow
           label="Move to column"
           iconName="swap-horizontal"
           onPress={onMove}
-          disabled={busy}
+          disabled={busy || !moveAvailable}
           testID="task-action-move"
         />
         <ActionRow
@@ -342,8 +377,8 @@ export function TaskActionsScreen(): React.JSX.Element {
           label="Archive"
           iconName="archive"
           onPress={onArchive}
-          disabled={busy || !archiveAvailable}
-          caption={archiveAvailable ? null : 'No Done column on this board'}
+          disabled={busy || !archiveAvailable || archiveBlockedByWorkflow}
+          caption={archiveAvailable || archiveBlockedByWorkflow ? null : 'No Done column on this board'}
           testID="task-action-archive"
         />
         <ActionRow

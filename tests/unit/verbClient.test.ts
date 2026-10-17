@@ -210,6 +210,26 @@ describe('VerbClient', () => {
   });
 
   /**
+   * The desktop forwards a board tool's `data` as `result`, and pausing or
+   * resuming a workflow returns none, so their success reaches the phone as
+   * `{}`. Read strictly, every successful pause would show as a failure.
+   */
+  it('accepts a workflow pause or resume whose success carries no result', async () => {
+    const { verbs } = await establishedHarness((request) => okResponse(request, {}));
+
+    await expect(verbs.boardToolWrite('pause_workflow', { project: 'project-1', workflow: 'workflow-1' })).resolves.toBeNull();
+    await expect(verbs.boardToolWrite('resume_workflow', { project: 'project-1', workflow: 'workflow-1' })).resolves.toBeNull();
+  });
+
+  it('still refuses any other board-tool write that carries no result', async () => {
+    const { verbs } = await establishedHarness((request) => okResponse(request, {}));
+
+    await expect(verbs.boardToolWrite('create_task', { title: 'New', description: '', column: 'To Do' })).rejects.toBeInstanceOf(
+      CapabilityError,
+    );
+  });
+
+  /**
    * move-task is the one verb whose answer waits on real desktop work rather
    * than a lookup. An older desktop awaits the whole of handleTaskMove - PTY
    * suspend, worktree removal, respawn - and 9% of measured task:move calls ran

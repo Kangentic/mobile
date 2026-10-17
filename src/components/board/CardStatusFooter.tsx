@@ -1,8 +1,9 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
-import { CirclePause } from 'lucide-react-native';
+import { CirclePause, LoaderCircle } from 'lucide-react-native';
 import type { SessionUsageWire } from '@kangentic/protocol';
 import { ContextUsageBar, Row, StatusSpinner, Text, useTheme } from '@/components';
+import type { WorkflowWaitingFooter } from '@/workflow/workflowWaiting';
 import type { CardSessionDisplay } from './cardSessionDisplay';
 
 /** The desktop footer's glyph size (lucide Loader2 / CirclePause at 12). */
@@ -16,6 +17,12 @@ const PAUSED_LABEL = 'Paused';
 export interface CardStatusFooterProps {
   display: CardSessionDisplay;
   usage: SessionUsageWire | null;
+  /**
+   * A workflow task's wait in To Do (`workflowWaitingFooter`): "Blocked by
+   * #413...", "Queued...", "Paused". Drawn only where the session has nothing
+   * to say (none or exited), as the desktop's card draws it.
+   */
+  waiting?: WorkflowWaitingFooter | null;
   /** The card's testID: the usage bar keys off it as `-usage`, a status bar as `-status-bar`. */
   testID: string;
 }
@@ -32,7 +39,9 @@ export interface CardStatusFooterProps {
  *   - preparing (a respawn's step): spinner, the desktop's own step text
  *   - queued: spinner, "Queued..."
  *   - suspended: a still pause circle, "Paused"
- *   - none, exited: nothing
+ *   - none, exited: a workflow task's wait when it waits in To Do (a STILL
+ *     spinner shape, since a task waiting on another is not loading, or the
+ *     pause circle), else nothing
  *
  * Every bar keeps the usage bar's box (a caption row over a 4 dp track), so a
  * card holds one height from queued through running. Returns null when there
@@ -42,7 +51,7 @@ export interface CardStatusFooterProps {
  * exists before it draws the divider above it. It calls no hooks; the bars it
  * returns are components that do.
  */
-export function cardStatusFooter({ display, usage, testID }: CardStatusFooterProps): React.JSX.Element | null {
+export function cardStatusFooter({ display, usage, waiting = null, testID }: CardStatusFooterProps): React.JSX.Element | null {
   switch (display.kind) {
     case 'running': {
       // The desktop shows the human model name or nothing: never a raw id.
@@ -61,12 +70,13 @@ export function cardStatusFooter({ display, usage, testID }: CardStatusFooterPro
       return <StatusBar glyph="pause" label={PAUSED_LABEL} testID={`${testID}-status-bar`} />;
     case 'none':
     case 'exited':
-      return null;
+      if (waiting === null) return null;
+      return <StatusBar glyph={waiting.paused ? 'pause' : 'still'} label={waiting.label} testID={`${testID}-status-bar`} />;
   }
 }
 
 /** The desktop's `CardStatusBar`: a faint label row over an inert, empty track. */
-function StatusBar({ glyph, label, testID }: { glyph: 'spinner' | 'pause'; label: string; testID: string }): React.JSX.Element {
+function StatusBar({ glyph, label, testID }: { glyph: 'spinner' | 'still' | 'pause'; label: string; testID: string }): React.JSX.Element {
   const theme = useTheme();
   const glyphColor = theme.colors.textMuted;
   return (
@@ -77,6 +87,11 @@ function StatusBar({ glyph, label, testID }: { glyph: 'spinner' | 'pause'; label
           // agent...", or a respawn's next step) gets its own spin window rather
           // than inheriting one a long queue already used up.
           <StatusSpinner key={label} size={STATUS_GLYPH_SIZE} color={glyphColor} testID={`${testID}-spinner`} />
+        ) : glyph === 'still' ? (
+          // The desktop's waiting footer: Loader2's shape at rest (task-card-view.tsx).
+          <View testID={`${testID}-waiting`}>
+            <LoaderCircle size={STATUS_GLYPH_SIZE} color={glyphColor} />
+          </View>
         ) : (
           // The testID rides a wrapping View: lucide forwards `testID` as the
           // web-only `data-testid`, which neither RNTL nor Maestro can select.

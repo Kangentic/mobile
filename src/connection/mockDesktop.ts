@@ -2,6 +2,7 @@ import {
   generateX25519KeyPair,
   parseCapabilityRequestPayload,
   type BoardTaskWire,
+  type BoardTaskWorkflowWire,
   type BridgeEvent,
   type CapabilityErrorCode,
   type CapabilityRequestMessage,
@@ -2458,8 +2459,150 @@ export function initialTasks2(): BoardTaskWire[] {
       created_at: nowIso,
       updated_at: nowIso,
     }),
+    // checkout-api's workflow tasks (protocol 0.21.0; see MOCK_WORKFLOWS).
+    // Every one is sessionless on purpose: the Agents feed lists only tasks
+    // with a session, so none of them reaches the feed's store screenshot, and
+    // the checkout-api board is never photographed.
+    ...MOCK_WORKFLOW_TASK_SEEDS.map((seed, seedIndex) =>
+      boardTaskFixture({
+        id: seed.taskId,
+        display_id: seed.displayId,
+        title: seed.title,
+        description: seed.description,
+        swimlane_id: seed.columnId,
+        position: 10 + seedIndex,
+        created_at: nowIso,
+        updated_at: nowIso,
+      }),
+    ),
   ];
 }
+
+/**
+ * checkout-api's workflows (protocol 0.21.0), one per state the phone draws
+ * differently: one RUNNING (a locked card, a card in a human gate, cards
+ * blocked by one and by two tasks, a queued one, and a finished one), one
+ * PAUSED, and one not started (a draft, which has no board rows at all, so it
+ * is reached only through `list_workflows` and `get_workflow`).
+ */
+interface MockWorkflowDefinition {
+  id: string;
+  title: string;
+  colorSlot: number;
+  initialState: 'running' | 'paused' | 'draft';
+}
+
+const MOCK_WORKFLOW_HARDENING: MockWorkflowDefinition = { id: 'mock-workflow-hardening', title: 'Checkout hardening', colorSlot: 5, initialState: 'running' };
+const MOCK_WORKFLOW_PRICING: MockWorkflowDefinition = { id: 'mock-workflow-pricing', title: 'Multi-currency pricing rollout', colorSlot: 2, initialState: 'paused' };
+const MOCK_WORKFLOW_GIFT_CARDS: MockWorkflowDefinition = { id: 'mock-workflow-gift-cards', title: 'Gift card balance API', colorSlot: 1, initialState: 'draft' };
+export const MOCK_WORKFLOWS: readonly MockWorkflowDefinition[] = [MOCK_WORKFLOW_HARDENING, MOCK_WORKFLOW_PRICING, MOCK_WORKFLOW_GIFT_CARDS];
+
+interface MockWorkflowTaskSeed {
+  taskId: string;
+  displayId: number;
+  title: string;
+  description: string;
+  columnId: string;
+  workflowId: string;
+  /** The working columns it visits, in board order. */
+  route: string[];
+  /** The tasks it waits for, finished ones included, by number. */
+  waitsFor: string[];
+  /** A column no agent judges, and the one column a hand may move it on to from there. */
+  humanGate: { columnId: string; targetColumnId: string } | null;
+}
+
+export const MOCK_WORKFLOW_TASK_SEEDS: readonly MockWorkflowTaskSeed[] = [
+  {
+    taskId: 'mock-task-wf-retry',
+    displayId: 6,
+    title: 'Retry the webhook delivery before marking it failed',
+    description: 'A single timeout marks the delivery failed today. Back off and retry three times first.',
+    columnId: 'lane2-executing',
+    workflowId: MOCK_WORKFLOW_HARDENING.id,
+    route: ['lane2-executing', 'lane2-code-review', 'lane2-merge'],
+    waitsFor: ['#5'],
+    humanGate: null,
+  },
+  {
+    taskId: 'mock-task-wf-refunds',
+    displayId: 7,
+    title: 'Verify refunds against the sandbox gateway',
+    description: 'Run the six refund cases by hand against the sandbox and note anything the gateway rejects.',
+    columnId: 'lane2-testing',
+    workflowId: MOCK_WORKFLOW_HARDENING.id,
+    route: ['lane2-executing', 'lane2-testing', 'lane2-merge'],
+    waitsFor: ['#5'],
+    humanGate: { columnId: 'lane2-testing', targetColumnId: 'lane2-merge' },
+  },
+  {
+    taskId: 'mock-task-wf-soak',
+    displayId: 8,
+    title: 'Run the checkout soak test',
+    description: 'Hold two hundred carts open for an hour and watch for connection leaks.',
+    columnId: 'lane2-backlog',
+    workflowId: MOCK_WORKFLOW_HARDENING.id,
+    route: ['lane2-executing', 'lane2-code-review', 'lane2-merge'],
+    waitsFor: ['#6'],
+    humanGate: null,
+  },
+  {
+    taskId: 'mock-task-wf-runbook',
+    displayId: 9,
+    title: 'Write the checkout runbook',
+    description: 'What to check first when charges fail, and who to page.',
+    columnId: 'lane2-backlog',
+    workflowId: MOCK_WORKFLOW_HARDENING.id,
+    route: ['lane2-planning', 'lane2-executing'],
+    waitsFor: ['#6', '#7'],
+    humanGate: null,
+  },
+  {
+    taskId: 'mock-task-wf-keys',
+    displayId: 10,
+    title: 'Rotate the sandbox gateway keys',
+    description: 'Sandbox only; production keys rotate on their own schedule.',
+    columnId: 'lane2-backlog',
+    workflowId: MOCK_WORKFLOW_HARDENING.id,
+    route: ['lane2-executing'],
+    waitsFor: [],
+    humanGate: null,
+  },
+  {
+    taskId: 'mock-task-wf-currency',
+    displayId: 11,
+    title: "Show prices in the shopper's currency",
+    description: 'Convert at the daily rate and round the way each currency expects.',
+    columnId: 'lane2-backlog',
+    workflowId: MOCK_WORKFLOW_PRICING.id,
+    route: ['lane2-executing', 'lane2-code-review'],
+    waitsFor: [],
+    humanGate: null,
+  },
+  {
+    taskId: 'mock-task-wf-euro',
+    displayId: 12,
+    title: 'Price the catalog in euros',
+    description: 'Start with the twenty best sellers and compare against the competitor list.',
+    columnId: 'lane2-planning',
+    workflowId: MOCK_WORKFLOW_PRICING.id,
+    route: ['lane2-planning', 'lane2-executing'],
+    waitsFor: [],
+    humanGate: null,
+  },
+];
+
+/** Checkout hardening's first task, already finished: it is in no board projection, so only the workflow's own read names it. */
+const MOCK_WORKFLOW_DONE_MEMBER = { key: '#5', displayId: 5, title: 'Add an idempotency key to charges', workflowId: MOCK_WORKFLOW_HARDENING.id };
+
+/** Gift card balance API's planned tasks: a draft's tasks have no board rows and no numbers yet. */
+const MOCK_WORKFLOW_PLANNED_TITLES = [
+  'Design the balance lookup',
+  'Add the balance endpoint',
+  'Show the balance at checkout',
+  'Cap partial payments at the balance',
+  'Write the balance webhook',
+];
 
 /** Per-turn token counts, shaped like the desktop parser's extractTurnUsage output. */
 function mockTurnUsage(inputTokens: number, outputTokens: number): TranscriptTurnUsageWire {
@@ -4097,6 +4240,134 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
   }
 
   /**
+   * Each workflow's live state (protocol 0.21.0). Reset per connection with the
+   * rest of the scenario; `pause_workflow` and `resume_workflow` flip it.
+   */
+  const workflowStates = new Map<string, string>(MOCK_WORKFLOWS.map((workflow) => [workflow.id, workflow.initialState]));
+
+  function mockWorkflowDefinition(workflowId: string | undefined): MockWorkflowDefinition | null {
+    return MOCK_WORKFLOWS.find((workflow) => workflow.id === workflowId) ?? null;
+  }
+
+  /** A task finished by the workflow's own count: the static first task, or one sitting in Done. */
+  function workflowTaskDone(key: string): boolean {
+    if (key === MOCK_WORKFLOW_DONE_MEMBER.key) return true;
+    const seed = MOCK_WORKFLOW_TASK_SEEDS.find((candidate) => `#${candidate.displayId}` === key);
+    const task = seed ? tasks2.find((candidate) => candidate.id === seed.taskId) : undefined;
+    return task !== undefined && (task.archived_at !== null || mockColumnRoleOf(task, MOCK_PROJECT_2.id) === 'done');
+  }
+
+  /**
+   * A row's `workflow`, as the desktop's workflow-wire.ts builds it: the lock
+   * sentence only while the workflow runs and the card is not in a human gate,
+   * and the gate's target only while it sits in that gate.
+   */
+  function mockWorkflowWire(task: BoardTaskWire): BoardTaskWorkflowWire | null {
+    const seed = MOCK_WORKFLOW_TASK_SEEDS.find((candidate) => candidate.taskId === task.id);
+    const definition = seed ? mockWorkflowDefinition(seed.workflowId) : null;
+    if (!seed || !definition) return null;
+    const state = workflowStates.get(definition.id) ?? definition.initialState;
+    const gateTargetId = state === 'running' && seed.humanGate !== null && task.swimlane_id === seed.humanGate.columnId ? seed.humanGate.targetColumnId : null;
+    return {
+      id: definition.id,
+      title: definition.title,
+      project_id: MOCK_PROJECT_2.id,
+      state,
+      color_slot: definition.colorSlot,
+      route: seed.route,
+      waiting_for: seed.waitsFor.filter((key) => !workflowTaskDone(key)),
+      lock_reason: state === 'running' && gateTargetId === null ? `#${task.display_id} is locked while ${definition.title} runs.` : null,
+      gate_target_id: gateTargetId,
+    };
+  }
+
+  /** `list_workflows`: a project's unfinished workflows. Only checkout-api has any, so storefront-web's Board shows no Workflows button. */
+  function mockWorkflowList(projectId: string | undefined): JsonValue {
+    if (projectId !== MOCK_PROJECT_2.id) return [];
+    return MOCK_WORKFLOWS.map((workflow) => ({ id: workflow.id, title: workflow.title, state: workflowStates.get(workflow.id) ?? workflow.initialState }));
+  }
+
+  /** `get_workflow`: the workflow, its home, and its tasks with their columns, routes and links. */
+  function mockWorkflowDetail(workflowId: string | undefined): JsonValue | null {
+    const definition = mockWorkflowDefinition(workflowId);
+    if (!definition) return null;
+    const state = workflowStates.get(definition.id) ?? definition.initialState;
+    const columns = mockColumns2();
+    const columnName = (columnId: string) => columns.find((column) => column.id === columnId)?.name ?? '';
+    let members: JsonValue[];
+    if (state === 'draft') {
+      members = MOCK_WORKFLOW_PLANNED_TITLES.map((title, plannedIndex) => ({
+        key: `plan-${plannedIndex + 1}`,
+        taskId: null,
+        displayId: null,
+        projectId: MOCK_PROJECT_2.id,
+        board: null,
+        title,
+        column: 'To Do (created at Start)',
+        place: 'planned',
+        route: [],
+        waitsFor: plannedIndex === 0 ? [] : [`plan-${plannedIndex}`],
+      }));
+    } else {
+      members = [];
+      if (definition.id === MOCK_WORKFLOW_DONE_MEMBER.workflowId) {
+        members.push({
+          key: MOCK_WORKFLOW_DONE_MEMBER.key,
+          // In no projection the phone can open, so nothing to link to.
+          taskId: null,
+          displayId: MOCK_WORKFLOW_DONE_MEMBER.displayId,
+          projectId: MOCK_PROJECT_2.id,
+          board: null,
+          title: MOCK_WORKFLOW_DONE_MEMBER.title,
+          column: 'Done',
+          place: 'done',
+          route: ['Executing'],
+          waitsFor: [],
+        });
+      }
+      for (const seed of MOCK_WORKFLOW_TASK_SEEDS) {
+        if (seed.workflowId !== definition.id) continue;
+        const task = tasks2.find((candidate) => candidate.id === seed.taskId);
+        if (!task) continue;
+        const role = mockColumnRoleOf(task, MOCK_PROJECT_2.id);
+        members.push({
+          key: `#${task.display_id}`,
+          taskId: task.id,
+          displayId: task.display_id,
+          projectId: MOCK_PROJECT_2.id,
+          board: null,
+          title: task.title,
+          column: columnName(task.swimlane_id),
+          place: task.archived_at !== null || role === 'done' ? 'done' : role === 'todo' ? 'todo' : 'working',
+          route: seed.route.map(columnName),
+          waitsFor: seed.waitsFor,
+        });
+      }
+    }
+    return {
+      workflow: { id: definition.id, title: definition.title, state, color_slot: definition.colorSlot },
+      homeProjectId: MOCK_PROJECT_2.id,
+      tasks: members,
+    };
+  }
+
+  /** Pause or resume a workflow, refusing in the desktop's words when there is nothing to do. */
+  function controlMockWorkflow(request: CapabilityRequestMessage, workflowId: string | undefined, control: 'pause' | 'resume'): CapabilityResponseMessage {
+    const definition = mockWorkflowDefinition(workflowId);
+    if (!definition) return failWith(request, `No workflow "${workflowId ?? ''}".`);
+    const state = workflowStates.get(definition.id) ?? definition.initialState;
+    if (control === 'pause' && state !== 'running') return failWith(request, `"${definition.title}" is ${state}, so there is nothing to pause.`);
+    if (control === 'resume' && state !== 'paused') return failWith(request, `"${definition.title}" is ${state}, not paused.`);
+    workflowStates.set(definition.id, control === 'pause' ? 'paused' : 'running');
+    const memberIds = MOCK_WORKFLOW_TASK_SEEDS.filter((seed) => seed.workflowId === definition.id).map((seed) => seed.taskId);
+    later(50, () => {
+      emit({ kind: 'board', projectId: MOCK_PROJECT_2.id, taskId: memberIds[0] ?? '', payload: { change: 'task-updated', ids: memberIds } });
+    });
+    // The desktop's success carries no data, so the bridge sends `{}`.
+    return ok(request, {});
+  }
+
+  /**
    * Mirrors the desktop handler: a request that names a `view` gets no
    * backlog, 'sessions' gets the session-bearing tasks plus whole-column
    * counts, and a request that names none gets the pre-0.9.0 payload. From
@@ -4115,8 +4386,13 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
     }
     const servedProjectId = isSecondProject ? MOCK_PROJECT_2.id : MOCK_PROJECT.id;
     // A 0.18.0 desktop sends `pausable` on every row, computed from the live
-    // session state at serve time (isTaskPausable).
-    const servedTasks = allTasks.map((task) => ({ ...task, pausable: isTaskPausable(task, servedProjectId) }));
+    // session state at serve time (isTaskPausable), and a 0.21.0 one its
+    // `workflow`, from the workflow's live state (mockWorkflowWire).
+    const servedTasks = allTasks.map((task) => ({
+      ...task,
+      pausable: isTaskPausable(task, servedProjectId),
+      workflow: mockWorkflowWire(task),
+    }));
     return {
       projectId: servedProjectId,
       columns: isSecondProject ? mockColumns2() : mockColumns(),
@@ -4588,6 +4864,12 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       }
       case 'board-tool-read': {
         const payload = parseCapabilityRequestPayload('board-tool-read', request.payload);
+        const readParams = (payload.params ?? {}) as { project?: string; workflow?: string };
+        if (payload.tool === 'list_workflows') return ok(request, { result: mockWorkflowList(readParams.project) });
+        if (payload.tool === 'get_workflow') {
+          const detail = mockWorkflowDetail(readParams.workflow);
+          return detail === null ? failWith(request, `No workflow "${readParams.workflow ?? ''}".`) : ok(request, { result: detail });
+        }
         return ok(request, { result: { note: `${payload.tool} completed.` } });
       }
       case 'board-tool-write': {
@@ -4643,6 +4925,10 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
             emit({ kind: 'board', projectId: located.projectId, taskId: removed.id, payload: { change: 'task-deleted', ids: [removed.id] } });
           });
           return ok(request, { result: { deleted: removed.id } });
+        }
+        if (payload.tool === 'pause_workflow' || payload.tool === 'resume_workflow') {
+          const params = (payload.params ?? {}) as { workflow?: string };
+          return controlMockWorkflow(request, params.workflow, payload.tool === 'pause_workflow' ? 'pause' : 'resume');
         }
         return ok(request, { result: { note: `${payload.tool} completed.` } });
       }

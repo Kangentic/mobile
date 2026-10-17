@@ -107,7 +107,7 @@ function createAllChannels(): Promise<void> {
       // update importance once the user has customised it, which is why the
       // relabel deliberately leaves importance alone rather than pretending to
       // change it.
-      description: 'An agent settled into idle, or a plan was approved.',
+      description: 'An agent went idle, a plan was approved, or a workflow finished.',
       importance: AndroidImportance.DEFAULT,
     },
     {

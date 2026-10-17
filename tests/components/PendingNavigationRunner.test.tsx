@@ -20,6 +20,7 @@ import { act, render } from '@testing-library/react-native';
 import { PendingNavigationRunner } from '@/navigation/PendingNavigationRunner';
 import { consumePendingNavigation, publishPendingNavigation } from '@/navigation/pendingNavigation';
 import { routeFromPushResponse } from '@/notifications/tapRouter';
+import { useBoardStore } from '@/state/boardStore';
 
 jest.mock('react-native-safe-area-context', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
@@ -127,6 +128,9 @@ describe('PendingNavigationRunner', () => {
     // the publish is silently swallowed, which reads as a broken consumer rather
     // than a test-setup mistake. Give every case its own identifier.
     consumePendingNavigation();
+    // The cold-start shape: nothing has arrived from the desktop yet, so the
+    // project list is empty and no project is selected.
+    useBoardStore.getState().reset();
   });
 
   /**
@@ -224,6 +228,71 @@ describe('PendingNavigationRunner', () => {
     });
     // The made-up task id never reaches the router, as a param or a path.
     expect(JSON.stringify(mockRouterNavigate.mock.calls)).not.toContain('made-up-terminal-task');
+
+    await (await render(<PendingNavigationRunner />)).unmount();
+    expect(mockRouterNavigate).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * A workflow-complete tap (protocol 0.21.0) names no task, only the
+   * workflow's HOME project, so it selects that project and lands on the Board
+   * tab. Published BEFORE mount with an EMPTY project list, which is the
+   * cold-start shape: the selection is made unconditionally rather than waiting
+   * for a list that has not arrived, and the Board resolves it once the list
+   * does. Sheets are dismissed first, as for a reset, so the Board is what the
+   * user sees.
+   *
+   * Mutations that redden this: dropping the `open-project-board` branch in
+   * performPendingNavigation (the intent falls through to '/task/[taskId]'),
+   * skipping selectProject, or gating it on the project being in the list.
+   */
+  it('selects the home project and navigates to the Board for an intent published before mount, with no projects yet', async () => {
+    mockRouterCanDismiss.mockReturnValue(true);
+    expect(useBoardStore.getState().projects).toEqual([]);
+    publishPendingNavigation({ kind: 'open-project-board', projectId: 'home-project' });
+
+    await render(<PendingNavigationRunner />);
+
+    expect(useBoardStore.getState().selectedProjectId).toBe('home-project');
+    expect(mockRouterDismissAll).toHaveBeenCalledTimes(1);
+    expect(mockRouterNavigate).toHaveBeenCalledTimes(1);
+    expect(mockRouterNavigate).toHaveBeenCalledWith('/board');
+    expect(mockRouterPush).not.toHaveBeenCalled();
+  });
+
+  it('skips dismissAll for an open-project-board intent when there is nothing to dismiss', async () => {
+    mockRouterCanDismiss.mockReturnValue(false);
+    publishPendingNavigation({ kind: 'open-project-board', projectId: 'home-project' });
+
+    await render(<PendingNavigationRunner />);
+
+    expect(mockRouterDismissAll).not.toHaveBeenCalled();
+    expect(useBoardStore.getState().selectedProjectId).toBe('home-project');
+    expect(mockRouterNavigate).toHaveBeenCalledWith('/board');
+  });
+
+  /**
+   * End to end through the shipping tap router, warm: a decrypted
+   * workflow-complete envelope with EMPTY task and session ids opens the Board
+   * on its home project, once, and never reaches '/task/[taskId]'.
+   */
+  it('carries a decrypted workflow-complete push tap through to the Board, once, and not on remount', async () => {
+    mockDecryptPushBlob.mockResolvedValue({
+      title: 'Workflow complete',
+      body: 'Checkout hardening - All 6 tasks are in Done.',
+      category: 'workflow-complete',
+      data: { taskId: '', projectId: 'home-project', sessionId: '', category: 'workflow-complete' },
+    });
+    await render(<PendingNavigationRunner />);
+
+    await act(async () => {
+      await publishTap('workflow-warm-notification');
+    });
+
+    expect(useBoardStore.getState().selectedProjectId).toBe('home-project');
+    expect(mockRouterNavigate).toHaveBeenCalledTimes(1);
+    expect(mockRouterNavigate).toHaveBeenCalledWith('/board');
+    expect(JSON.stringify(mockRouterNavigate.mock.calls)).not.toContain('/task/[taskId]');
 
     await (await render(<PendingNavigationRunner />)).unmount();
     expect(mockRouterNavigate).toHaveBeenCalledTimes(1);

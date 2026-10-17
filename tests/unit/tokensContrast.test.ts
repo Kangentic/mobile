@@ -92,6 +92,33 @@ describe('terminal palette', () => {
   }
 });
 
+describe('workflow slot colors', () => {
+  const surfaces: Record<string, string> = {
+    surfaceInset: colors.surfaceInset,
+    surface: colors.surface,
+    surfaceRaised: colors.surfaceRaised,
+    surfaceOverlay: colors.surfaceOverlay,
+  };
+
+  darkTerminalTheme.workflowSlots.forEach((slotColor, slotIndex) => {
+    it(`slot ${slotIndex + 1} reads at >= 3 on every surface the workflow glyph sits on`, () => {
+      // A 12 to 20 dp glyph, so the non-text contrast floor applies. The
+      // strip draws it on surfaceInset, the hub and Workflows sheet on
+      // surfaceRaised and surfaceOverlay, the view's header on surface.
+      for (const surfaceColor of Object.values(surfaces)) {
+        expect(ratioBetween(slotColor, surfaceColor)).toBeGreaterThanOrEqual(3);
+      }
+    });
+  });
+
+  it('never matches a status color, so a workflow glyph never reads as one', () => {
+    const statusColors = [colors.accent, colors.success, colors.warning, colors.danger].map((color) => color.toLowerCase());
+    for (const slotColor of darkTerminalTheme.workflowSlots) {
+      expect(statusColors).not.toContain(slotColor.toLowerCase());
+    }
+  });
+});
+
 describe('two-hue rule', () => {
   it('keeps accent (brand amber) and warning (true yellow) distinct', () => {
     expect(colors.accent.toLowerCase()).not.toBe(colors.warning.toLowerCase());

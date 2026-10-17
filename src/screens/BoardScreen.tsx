@@ -4,24 +4,21 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import PagerView from 'react-native-pager-view';
 import { FlashList } from '@shopify/flash-list';
 import type { BoardColumnWire, BoardTaskWire } from '@kangentic/protocol';
-import { AppHeader, ConnectionBanner, EmptyState, IconButton, Screen, SkeletonCard, Stack, fabDiameter, useTheme, type AgentStatusKind } from '@/components';
+import { AppHeader, ConnectionBanner, EmptyState, IconButton, Row, Screen, SkeletonCard, Stack, fabDiameter, useTheme } from '@/components';
 import type { Theme } from '@/components/theme/tokens';
-import { collapseToSnippetText } from '@/conversation/pendingPromptSummary';
 import { ColumnChipBar } from '@/components/board/ColumnChipBar';
-import { TaskCard } from '@/components/board/TaskCard';
-import { cardSessionDisplay, toCardSession } from '@/components/board/cardSessionDisplay';
 import {
   isDoneColumn,
   selectArchived,
   selectColumnsOrdered,
   selectTasksForColumn,
-  sessionlessTaskStatus,
   useBoardStore,
   type ProjectBoard,
 } from '@/state/boardStore';
-import { useActivityStore, sectionForEntry, selectTaskRespawn } from '@/state/activityStore';
 import { ARCHIVED_PAGE_SIZE, loadArchivedTasks, openProjectBoard, refreshSnapshots } from '@/connection/actions';
 import { reportHandledError } from '@/observability/crashReporting';
+import { BoardTaskCard } from './board/BoardTaskCard';
+import { WorkflowsButton } from './board/WorkflowsButton';
 import { TerminalsButton } from './terminals/TerminalsButton';
 
 /** One shared empty array so a task-less column does not hand FlashList a new `data` identity per render. */
@@ -210,11 +207,10 @@ export function BoardScreen(): React.JSX.Element {
   // BoardScreen render, which defeats BoardTaskCard's React.memo for every
   // visible card in every column.
   const onLongPressTask = useCallback(
-    (task: BoardTaskWire) => {
-      if (!projectId) return;
-      router.push({ pathname: '/task-actions', params: { taskId: task.id, projectId } });
+    (task: BoardTaskWire, taskProjectId: string) => {
+      router.push({ pathname: '/task-actions', params: { taskId: task.id, projectId: taskProjectId } });
     },
-    [router, projectId],
+    [router],
   );
 
   return (
@@ -227,8 +223,17 @@ export function BoardScreen(): React.JSX.Element {
         subtitle={projectName ? 'Board' : undefined}
         onTitlePress={projects.length > 0 ? () => router.push('/project-picker') : undefined}
         divider={columns.length === 0}
-        // The project's Command Terminals (design change 1), beside Settings.
-        actions={projectId !== null ? <TerminalsButton projectId={projectId} /> : undefined}
+        // The project's workflows (protocol 0.21.0, design screen 6) and its
+        // Command Terminals (design change 1), beside Settings. Each button
+        // hides itself when its project has none to offer.
+        actions={
+          projectId !== null ? (
+            <Row gap="sm" style={styles.headerActions}>
+              <WorkflowsButton projectId={projectId} />
+              <TerminalsButton projectId={projectId} />
+            </Row>
+          ) : undefined
+        }
         testID="board-header"
       />
       <ConnectionBanner />
@@ -324,7 +329,7 @@ function ColumnPage({
   projectId: string;
   refreshing: boolean;
   onRefresh: () => void;
-  onLongPressTask: (task: BoardTaskWire) => void;
+  onLongPressTask: (task: BoardTaskWire, projectId: string) => void;
 }): React.JSX.Element {
   const theme = useTheme();
   // Stable across renders so FlashList's row components keep their memo:
@@ -389,113 +394,14 @@ function ColumnPage({
   );
 }
 
-const CARD_DESCRIPTION_LINES = 2;
-
-/**
- * The board's per-item connector: reads the session's activity/usage and
- * the project's ticket-number setting, then hands off to the shared
- * TaskCard (@/components/board/TaskCard) - the exact same card the Agents
- * feed renders, minus its extra project row (the board already establishes
- * project context by which board you're viewing).
- */
-const BoardTaskCard = React.memo(function BoardTaskCard({
-  task,
-  projectId,
-  onLongPressTask,
-}: {
-  task: BoardTaskWire;
-  projectId: string;
-  onLongPressTask: (task: BoardTaskWire) => void;
-}): React.JSX.Element {
-  const router = useRouter();
-  // Built here rather than per-row in renderItem: the parent hands down one
-  // stable callback, so this card's props stay identical between renders.
-  const onLongPress = useCallback(() => onLongPressTask(task), [onLongPressTask, task]);
-  const activityEntry = useActivityStore((state) => (task.session_id ? (state.bySessionId[task.session_id] ?? null) : null));
-  const showTicketNumbers = useBoardStore((state) => state.boardsByProjectId[projectId]?.showTicketNumbers ?? true);
-
-  // Desktop parity (TaskCard.handleClick): a task with no session on it opens
-  // straight into the edit form. Keyed on the session, not the column, because
-  // that is what the desktop keys on - a task parked in Testing with no agent
-  // is as sessionless as one in To Do, and a column check would send it to an
-  // empty session shell. Moving to To Do hard-resets a task (the desktop kills
-  // the session, worktree and branch), so that column can never have one.
-  //
-  // "No session" means what the DESKTOP means by it, which is not quite a null
-  // `session_id`: a paused task keeps its suspended session in the desktop's
-  // registry after a pause clears the pointer, and a first start has a spawn in
-  // flight before it has an id. Both open the desktop's task detail (its Resume
-  // button, its launch overlay), so both open the session screen here, told
-  // apart by the board row's own protocol 0.16.0 fields (sessionlessTaskStatus).
-  const sessionlessStatus = sessionlessTaskStatus(task);
-  const openTask = useCallback(() => {
-    // Checked before the session test, not after: an archived task ALWAYS has
-    // a null session_id (the move to Done suspends the agent and clears it),
-    // so the sessionless branch would otherwise swallow every completed task
-    // and offer to edit finished work instead of showing what it did.
-    if (task.archived_at !== null) {
-      router.push({ pathname: '/completed-task', params: { taskId: task.id, projectId } });
-      return;
-    }
-    if (task.session_id === null) {
-      if (sessionlessStatus !== null) {
-        router.push({ pathname: '/task/[taskId]', params: { taskId: task.id, projectId } });
-        return;
-      }
-      router.push({ pathname: '/edit-task', params: { taskId: task.id, projectId } });
-      return;
-    }
-    router.push({
-      pathname: '/task/[taskId]',
-      params: { taskId: task.id, sessionId: task.session_id, projectId },
-    });
-  }, [router, task.id, task.session_id, task.archived_at, sessionlessStatus, projectId]);
-
-  // Task-keyed, not session-keyed, and that is the entire point: during a
-  // swap the task's session_id is null, so `activityEntry` above is null and
-  // this card used to show nothing at all for the several seconds the desktop
-  // was handing the work to a new agent. Now it shows the desktop's step in
-  // the footer, as the desktop card does (cardSessionDisplay).
-  const respawn = useActivityStore((state) => selectTaskRespawn(state, task.id));
-  const sessionDisplay = cardSessionDisplay({ session: toCardSession(activityEntry), respawn, task });
-
-  // Desktop TaskCard parity: spinner while thinking, mail while the
-  // session waits on the user (permission or idle), and no icon for a
-  // session that is not running (queued, paused, mid-respawn, ended): its
-  // footer says which. A queued session reports idle (no PTY, so it never
-  // thinks), so `sessionStatus`, not the activity state, is what keeps it
-  // from wearing the envelope.
-  const statusKind: AgentStatusKind | null =
-    activityEntry !== null && sessionDisplay.kind === 'running'
-      ? sectionForEntry(activityEntry) === 'working'
-        ? 'working'
-        : sectionForEntry(activityEntry) === 'needs-you' || activityEntry.unreadCount > 0
-          ? 'idle-unread'
-          : 'idle'
-      : null;
-  const descriptionPreview = task.description.length > 0 ? collapseToSnippetText(task.description) : '';
-
-  return (
-    <TaskCard
-      testID={`board-card-${task.id}`}
-      task={task}
-      statusKind={statusKind}
-      showTicketNumbers={showTicketNumbers}
-      sessionDisplay={sessionDisplay}
-      usage={activityEntry?.usage ?? null}
-      bodyText={descriptionPreview}
-      bodyNumberOfLines={CARD_DESCRIPTION_LINES}
-      onPress={openTask}
-      onLongPress={onLongPress}
-    />
-  );
-});
-
 const styles = StyleSheet.create({
   flex: {
     flex: 1,
   },
   fabContainer: {
     position: 'absolute',
+  },
+  headerActions: {
+    alignItems: 'center',
   },
 });

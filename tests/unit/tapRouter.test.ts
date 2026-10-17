@@ -138,6 +138,28 @@ const COMMAND_TERMINAL_TARGET = {
   sessionId: 'terminal-sess-1',
 };
 
+/**
+ * A workflow-complete envelope (protocol 0.21.0): every task of a workflow
+ * reached Done. `taskTitle` is the workflow's name, `projectId` is the
+ * workflow's HOME project, and the task and session ids are EMPTY strings,
+ * because no one task or session owns the event. The tap opens that project's
+ * board; an `open-task` with an empty id is the blank task screen.
+ */
+const DECRYPTED_WORKFLOW_COMPLETE = {
+  title: 'Workflow complete',
+  body: 'Checkout hardening - All 6 tasks are in Done.',
+  category: 'workflow-complete',
+  data: { taskId: '', projectId: 'home-project', sessionId: '', category: 'workflow-complete' },
+};
+
+/** The string-valued notifee `data` Android posts for a decrypted workflow-complete push. */
+const WORKFLOW_COMPLETE_PRESS_DATA = DECRYPTED_WORKFLOW_COMPLETE.data;
+
+const PROJECT_BOARD_TARGET = {
+  kind: 'open-project-board',
+  projectId: 'home-project',
+};
+
 describe('tapRouter - iOS push responses', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -220,7 +242,7 @@ describe('tapRouter - iOS push responses', () => {
 
   /**
    * Mutation that reddens this: drop the `sessionKind === 'command-terminal'`
-   * branch in openTask (the tap publishes open-task for the made-up task id).
+   * branch in resolveTapTarget (the tap publishes open-task for the made-up task id).
    */
   it('publishes open-command-terminal, not open-task, for a decrypted Command Terminal envelope', async () => {
     decryptPushBlobMock.mockResolvedValue(DECRYPTED_COMMAND_TERMINAL);
@@ -264,6 +286,62 @@ describe('tapRouter - iOS push responses', () => {
     // Each tap routes by ITS OWN envelope: the terminal in the middle does not
     // turn the task taps around it into terminal opens, or the reverse.
     expect(published).toEqual([DECRYPTED_TARGET, COMMAND_TERMINAL_TARGET, DECRYPTED_TARGET]);
+  });
+
+  /**
+   * REGRESSION. A workflow-complete envelope carries EMPTY task and session
+   * ids, and the iOS router used to publish it as `open-task` with
+   * `taskId: ''`, which is the blank task screen. It opens the workflow's home
+   * project on the Board instead.
+   *
+   * Mutation that reddens this: drop the `workflow-complete` branch in the tap
+   * resolution (the tap publishes open-task with an empty task id).
+   */
+  it('publishes open-project-board with the home project for a workflow-complete envelope with empty ids', async () => {
+    decryptPushBlobMock.mockResolvedValue(DECRYPTED_WORKFLOW_COMPLETE);
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+
+    await tapRouter.routeFromPushResponse(pushResponse({ blob: 'sealed-blob' }, 'workflow-notification'));
+
+    expect(published).toEqual([PROJECT_BOARD_TARGET]);
+    // Strict, so a stray empty `taskId` or `sessionId` cannot ride along.
+    expect(published[0]).toStrictEqual(PROJECT_BOARD_TARGET);
+    expect(routerMock.push).not.toHaveBeenCalled();
+    expect(routerMock.navigate).not.toHaveBeenCalled();
+  });
+
+  it('routes a workflow-complete envelope with no project id nowhere', async () => {
+    decryptPushBlobMock.mockResolvedValue({
+      ...DECRYPTED_WORKFLOW_COMPLETE,
+      data: { ...DECRYPTED_WORKFLOW_COMPLETE.data, projectId: '' },
+    });
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+
+    await tapRouter.routeFromPushResponse(pushResponse({ blob: 'sealed-blob' }, 'workflow-notification-no-project'));
+
+    expect(published).toHaveLength(0);
+    expect(pendingNavigation.getPendingNavigation()).toBeNull();
+  });
+
+  /**
+   * REGRESSION. iOS had no empty-task-id guard at all, so any task envelope
+   * with an empty task id opened a blank task screen. A task's alert needs its
+   * task, on both platforms: this one routes nowhere.
+   *
+   * Mutation that reddens this: drop the `taskId.length === 0` check from the
+   * task branch of the tap resolution.
+   */
+  it('publishes nothing for a task envelope whose task id is empty', async () => {
+    decryptPushBlobMock.mockResolvedValue({ ...DECRYPTED, data: { ...DECRYPTED.data, taskId: '' } });
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+
+    await tapRouter.routeFromPushResponse(pushResponse({ blob: 'sealed-blob' }, 'empty-task-notification'));
+
+    expect(published).toHaveLength(0);
+    expect(pendingNavigation.getPendingNavigation()).toBeNull();
   });
 
   it('routes nowhere when the blob cannot be decrypted', async () => {
@@ -600,7 +678,7 @@ describe('tapRouter - Android notifee presses', () => {
    * and must be ignored.
    *
    * Mutation that reddens this: drop the `data.sessionKind` read in
-   * openTaskFromNotification (the press publishes open-task).
+   * routeFromNotificationPress (the press publishes open-task).
    */
   it('publishes open-command-terminal for a press whose data names a Command Terminal', async () => {
     const { tapRouter, pendingNavigation } = await loadModules();
@@ -689,7 +767,7 @@ describe('tapRouter - Android notifee presses', () => {
    * REGRESSION. The local notifier (foreground-service mode, app backgrounded)
    * posts a Command Terminal alert whose data comes from its activity-store
    * entry, and a terminal's entry has NO task: `taskId` is the empty string
-   * (localNotifier.test.ts pins this exact data shape). openTaskFromNotification
+   * (localNotifier.test.ts pins this exact data shape). The press router
    * used to bail on `!taskId` BEFORE it read `sessionKind`, so tapping that alert
    * routed nowhere while the same terminal's PUSH alert (made-up non-empty taskId,
    * the test above) opened it. The identity that matters for a terminal is its
@@ -749,6 +827,96 @@ describe('tapRouter - Android notifee presses', () => {
     onForegroundEvent({
       type: 1,
       detail: { notification: { id: 'task-alert-empty', data: { taskId: '', projectId: 'project-1', sessionId: 'sess-term' } } },
+    });
+
+    expect(published).toHaveLength(0);
+  });
+
+  /**
+   * REGRESSION. A decrypted workflow-complete push is posted with EMPTY task
+   * and session ids in its notifee `data`, and the press router dropped
+   * every press whose task id was empty, so tapping "Workflow complete" did
+   * nothing. It opens the workflow's home project on the Board, through all
+   * three Android delivery paths (a killed app reports only the launch read).
+   *
+   * Mutation that reddens this: drop the `workflow-complete` branch in the tap
+   * resolution (the press publishes nothing).
+   */
+  it.each(['foreground', 'background', 'launch'] as const)(
+    'publishes open-project-board for a workflow-complete press with empty ids, delivered through the %s path',
+    async (deliveryPath) => {
+      const workflowNotification = { id: `workflow-alert-${deliveryPath}`, data: WORKFLOW_COMPLETE_PRESS_DATA };
+      if (deliveryPath === 'launch') {
+        notifeeMock.getInitialNotification.mockResolvedValue({ notification: workflowNotification, pressAction: { id: 'default' } });
+      }
+      const { tapRouter, pendingNavigation } = await loadModules();
+      const published = recordPublished(pendingNavigation);
+      tapRouter.registerNotificationTapHandlers();
+
+      if (deliveryPath === 'foreground') {
+        const onForegroundEvent = notifeeMock.onForegroundEvent.mock.calls[0][0] as (event: unknown) => void;
+        onForegroundEvent({ type: 1, detail: { notification: workflowNotification } });
+      } else if (deliveryPath === 'background') {
+        const onBackgroundEvent = notifeeMock.onBackgroundEvent.mock.calls[0][0] as (event: unknown) => Promise<void>;
+        await onBackgroundEvent({ type: 1, detail: { notification: workflowNotification } });
+      }
+      await flushMicrotasks();
+
+      expect(decryptPushBlobMock).not.toHaveBeenCalled();
+      expect(published).toEqual([PROJECT_BOARD_TARGET]);
+      expect(published[0]).toStrictEqual(PROJECT_BOARD_TARGET);
+      expect(routerMock.push).not.toHaveBeenCalled();
+      expect(routerMock.navigate).not.toHaveBeenCalled();
+    },
+  );
+
+  /** One press, two reports (FCM had started the process headlessly): it routes once, as a task press does. */
+  it('routes a workflow-complete press reported by both the listener and the launch read once', async () => {
+    const launchingNotification = { id: 'workflow-alert-twice', data: WORKFLOW_COMPLETE_PRESS_DATA };
+    notifeeMock.getInitialNotification.mockResolvedValue({ notification: launchingNotification, pressAction: { id: 'default' } });
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+    tapRouter.registerNotificationTapHandlers();
+
+    const onBackgroundEvent = notifeeMock.onBackgroundEvent.mock.calls[0][0] as (event: unknown) => Promise<void>;
+    await onBackgroundEvent({ type: 1, detail: { notification: launchingNotification } });
+    await flushMicrotasks();
+
+    expect(published).toEqual([PROJECT_BOARD_TARGET]);
+  });
+
+  it('publishes nothing for a workflow-complete press with no project id', async () => {
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+    tapRouter.registerNotificationTapHandlers();
+
+    const onForegroundEvent = notifeeMock.onForegroundEvent.mock.calls[0][0] as (event: unknown) => void;
+    onForegroundEvent({
+      type: 1,
+      detail: { notification: { id: 'workflow-alert-no-project', data: { ...WORKFLOW_COMPLETE_PRESS_DATA, projectId: '' } } },
+    });
+
+    expect(published).toHaveLength(0);
+    expect(pendingNavigation.getPendingNavigation()).toBeNull();
+  });
+
+  /**
+   * The relaxation is keyed on the CATEGORY: any other category's press with
+   * the same empty ids and a project id still publishes nothing, rather than
+   * opening a board (or a blank task) for an alert that names a task.
+   *
+   * Mutation that reddens this: route every empty-task-id press with a project
+   * id to its board.
+   */
+  it('still publishes nothing for another category whose press carries empty ids and a project id', async () => {
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+    tapRouter.registerNotificationTapHandlers();
+
+    const onForegroundEvent = notifeeMock.onForegroundEvent.mock.calls[0][0] as (event: unknown) => void;
+    onForegroundEvent({
+      type: 1,
+      detail: { notification: { id: 'idle-alert-empty', data: { ...WORKFLOW_COMPLETE_PRESS_DATA, category: 'turn-complete' } } },
     });
 
     expect(published).toHaveLength(0);

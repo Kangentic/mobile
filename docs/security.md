@@ -376,7 +376,10 @@ and in particular never puts the decrypted `taskId` there: tap routing re-derive
 decrypting on tap (`src/notifications/tapRouter.ts`), so task identity never enters the
 OS-visible object. The same holds for a Command Terminal's alert (protocol 0.20.0): its
 `sessionKind` and its name (carried in `taskTitle`) exist only inside the envelope, and the tap
-reads `sessionKind` after decrypting to open the terminal by its session. It logs nothing, on any path. Every failure - a missing key, a Keychain read
+reads `sessionKind` after decrypting to open the terminal by its session. A `workflow-complete`
+alert (protocol 0.21.0) carries the workflow's name in `taskTitle` and its home project, with
+empty task and session ids, again only inside the envelope; the tap reads the category after
+decrypting and opens that project's Board. It logs nothing, on any path. Every failure - a missing key, a Keychain read
 that returns nothing because the device is locked or the entitlement is absent, a decrypt
 failure, an unknown category, or simply running out of execution time - delivers the placeholder
 exactly as it arrived.

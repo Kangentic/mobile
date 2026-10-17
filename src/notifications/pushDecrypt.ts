@@ -49,10 +49,14 @@ export function extractBlobFromTaskData(data: unknown): string | null {
  * `data` (string values only, which notifee requires). `sessionKind` is set
  * only for a Command Terminal (protocol 0.20.0), whose `taskId` names no board
  * task: the tap then opens that terminal by `sessionId`, and must never open
- * the made-up task id as a task. A type alias rather than an interface, so it
- * assigns to notifee's string-keyed `data` as it is.
+ * the made-up task id as a task. `category` rides along so the Android press,
+ * which reads only this `data`, can route a workflow-complete (protocol
+ * 0.21.0), whose task and session ids are EMPTY, to its home project's Board.
+ * A type alias rather than an interface, so it assigns to notifee's
+ * string-keyed `data` as it is.
  */
 export type DecryptedPushRouting = {
+  category: PushCategory;
   taskId: string;
   projectId: string;
   sessionId: string;
@@ -85,6 +89,7 @@ export async function decryptPushBlob(blob: string): Promise<DecryptedPushNotifi
       body: plaintext.detail.length > 0 ? `${taskTitle} - ${plaintext.detail}` : taskTitle,
       category: plaintext.category,
       data: {
+        category: plaintext.category,
         taskId: plaintext.taskId,
         projectId: plaintext.projectId,
         sessionId: plaintext.sessionId,

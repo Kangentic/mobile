@@ -66,7 +66,7 @@ describe('decryptPushBlob', () => {
     expect(decrypted?.title).toBe('Agent needs your input');
     expect(decrypted?.body).toBe('Fix the flaky test - Bash: npm run test');
     expect(decrypted?.category).toBe('input-required');
-    expect(decrypted?.data).toEqual({ taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' });
+    expect(decrypted?.data).toStrictEqual({ category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' });
   });
 
   it('maps every category to its human title', async () => {
@@ -82,6 +82,7 @@ describe('decryptPushBlob', () => {
       'session-failed': 'Session stopped',
       'plan-complete': 'Plan complete',
       'spawn-stalled': 'Still preparing',
+      'workflow-complete': 'Workflow complete',
     } as const;
     for (const [category, expectedTitle] of Object.entries(expectedTitles)) {
       const blob = sealPushEnvelope(
@@ -197,6 +198,7 @@ describe('decryptPushBlob', () => {
     const decrypted = await pushDecrypt.decryptPushBlob(blob);
 
     expect(decrypted?.data).toStrictEqual({
+      category: 'input-required',
       taskId: 'made-up-terminal-task',
       projectId: 'project-1',
       sessionId: 'terminal-sess-1',
@@ -226,8 +228,46 @@ describe('decryptPushBlob', () => {
     const decrypted = await pushDecrypt.decryptPushBlob(blob);
 
     expect(decrypted).not.toBeNull();
-    expect(decrypted?.data).toStrictEqual({ taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' });
+    expect(decrypted?.data).toStrictEqual({ category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' });
     expect(Object.keys(decrypted?.data ?? {})).not.toContain('sessionKind');
+  });
+
+  /**
+   * A workflow-complete envelope (protocol 0.21.0): every task of a workflow
+   * reached Done. `taskTitle` is the workflow's name, `projectId` its HOME
+   * project, and the task and session ids are EMPTY strings. It must decrypt
+   * like any other (empty ids are not a malformed envelope), read as the
+   * desktop's own title, and carry its category in `data`, which is the only
+   * thing the Android press reads to route it to the Board rather than drop it.
+   *
+   * Mutation that reddens this: drop `category` from `data` in decryptPushBlob
+   * (the press can no longer tell it from a task alert with an empty id).
+   */
+  it('opens a workflow-complete envelope with empty ids, titled, with its category in data', async () => {
+    const pushKey = randomBytes(32);
+    const identity = generateX25519KeyPair();
+    secureStoreState.storedValues.set('push.decrypt.key', bytesToHex(pushKey));
+    const { pushDecrypt, pushIdentity } = await loadModules();
+    pushIdentity.setActivePushIdentityPublicKey(identity.publicKey);
+
+    const blob = sealPushEnvelope(
+      pushKey,
+      identity.publicKey,
+      plaintextFixture({
+        category: 'workflow-complete',
+        projectId: 'home-project',
+        taskId: '',
+        sessionId: '',
+        taskTitle: 'Checkout hardening',
+        detail: 'All 6 tasks are in Done.',
+      }),
+    );
+    const decrypted = await pushDecrypt.decryptPushBlob(blob);
+
+    expect(decrypted?.title).toBe('Workflow complete');
+    expect(decrypted?.body).toBe('Checkout hardening - All 6 tasks are in Done.');
+    expect(decrypted?.category).toBe('workflow-complete');
+    expect(decrypted?.data).toStrictEqual({ category: 'workflow-complete', taskId: '', projectId: 'home-project', sessionId: '' });
   });
 
   /**

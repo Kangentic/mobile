@@ -71,6 +71,21 @@ function formatChannel(channelValue: number): string {
 }
 
 /**
+ * `hex` at `alpha` opacity, as the `rgba()` string React Native composites over
+ * whatever is beneath it: a tint that reads the same on every surface, where a
+ * `mixHex` toward one surface would be wrong on the others. Throws on bad input
+ * for the reason `mixHex` does.
+ */
+export function hexWithAlpha(hex: string, alpha: number): string {
+  const color = parseHexColor(hex);
+  if (color === null) throw new Error(`hexWithAlpha requires a valid hex color, got "${hex}"`);
+  if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) {
+    throw new Error(`hexWithAlpha requires an alpha in [0, 1], got ${String(alpha)}`);
+  }
+  return `rgba(${color.red}, ${color.green}, ${color.blue}, ${alpha})`;
+}
+
+/**
  * Mixes `fromHex` toward `toHex` by `amount` (0 = pure from, 1 = pure to),
  * per channel in sRGB space, returning a normalized lowercase `#rrggbb`.
  * Throws on unparseable input or an out-of-range amount: mixing is only ever

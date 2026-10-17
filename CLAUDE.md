@@ -39,6 +39,9 @@ app/                           # expo-router route wrappers (thin - render the s
                                 #   mode of the task session view (no task, swap, Resume or archive)
   command-terminals.tsx, command-terminal-actions.tsx
                                 #   form sheets: a project's terminals, a terminal's long-press actions
+  workflow.tsx, workflows.tsx   # Workflows (protocol 0.21.0): one workflow's view as its own screen
+                                #   (the only place a workflow pauses or resumes), and the Board
+                                #   header's sheet of a project's workflows
   pair.tsx, pair-confirm.tsx    # pairing flow routes; pair.tsx renders the scan/paste screen
   +native-intent.ts             # deep links; routes ONLY the demo code (kangentic-pair://demo).
                                 #   OS routing of a REAL kangentic-pair:// payload is still a later
@@ -154,9 +157,12 @@ src/
                   #   header button and empty state), Board, task/ (SessionScreen, mode toggle,
                   #   input bar, ChatPane, ChangesTab, ResumePanel), CompletedTask, the form-sheet
                   #   screens (CreateTask/EditTask/MoveTask/TaskActions/ProjectPicker/SectionFilter,
-                  #   and the Command Terminal pair CommandTerminals/CommandTerminalActions), FileDiff,
-                  #   Pairing (Scan/Confirm), Settings, Devices, terminals/ (the Command Terminal
-                  #   screen and the Board header's Terminals button)
+                  #   and the Command Terminal pair CommandTerminals/CommandTerminalActions, and the
+                  #   Workflows sheet), FileDiff, Pairing (Scan/Confirm), Settings, Devices,
+                  #   terminals/ (the Command Terminal screen and the Board header's Terminals
+                  #   button), board/ (BoardTaskCard, the card connector the Board and the workflow
+                  #   view share, and the Board header's Workflows button), workflow/ (the
+                  #   workflow view)
   components/     # Design system primitives (incl. the shared SegmentedSwitcher) + brand/ (Overseer,
                   #   Brandmark, EmptyState), motion/ (presets, Skeleton, PressScale), conversation/
                   #   cells and prompt cards, terminal/ xterm pane + quick keys, board/ cards and
@@ -204,6 +210,10 @@ src/
   terminal/       # Pure liveTail PTY cleaner, clean-feed differ, key sequences, WebView bridge,
                   #   generated xterm.html
   diff/           # Pure unified-diff lines (jsdiff) + path display
+  workflow/       # Pure workflow rules ported from the desktop (protocol 0.21.0): state and color
+                  #   slot, who may move a card (workflowMove.ts, the desktop's workflow-lock.ts),
+                  #   the waiting footer, the
+                  #   list_workflows / get_workflow readers and the workflow view's sections
   notifications/  # Push key + registration, E2E envelope decrypt, notifee channels, background task,
                   #   local notifier, foreground service, sharedKeychain (permission, registration,
                   #   tap routing, Settings status and RICH display are all cross-platform; iOS
@@ -211,7 +221,8 @@ src/
   state/          # Zustand stores (activity/board/transcript/diff/channel/settings/readingView, all
                   #   channel-fed, in-memory; resume, the one Resume attempt per task that the
                   #   session screen, header and long-press hub share; commandTerminal, the
-                  #   Command Terminal starts and stops in flight) + the non-Zustand
+                  #   Command Terminal starts and stops in flight; workflow, the workflow reads
+                  #   and a Pause or Resume in flight) + the non-Zustand
                   #   terminalFeed PTY ring buffers +
                   #   memoryShed (registers the OS-memory-pressure reactions; lives here rather
                   #   than in observability/ because it touches the stores, and here rather than

@@ -39,11 +39,11 @@ export interface ColumnTrackStep {
  * excluding only ghosts, because the desktop's Done lane arrives flagged
  * `is_archived`. A board without one of the two simply has no such end.
  *
- * `route` is the column ids the task visits. Null means every working column,
- * which is right for an ordinary task and is phase 1's stand-in for a workflow
- * task, whose route is not on the wire yet; once it is, callers pass
- * `task.workflow?.route ?? null`. An empty array is a route that visits
- * nothing, not "no route".
+ * `route` is the column ids the task visits: a workflow task's
+ * `workflow.route` (protocol 0.21.0), which every caller passes as
+ * `task.workflow?.route ?? null`. Null means every working column, which is
+ * right for an ordinary task. An empty array is a route that visits nothing,
+ * not "no route".
  *
  * Returns no steps when the task's column is not a stop of the journey (an
  * archived or ghost working column, an unknown id, or no column at all), so

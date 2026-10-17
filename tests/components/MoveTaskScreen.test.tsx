@@ -2,6 +2,7 @@ import React from 'react';
 import { Dimensions, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 import type { TestInstance } from 'test-renderer';
+import type { BoardTaskWorkflowWire } from '@kangentic/protocol';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ThemeProvider } from '@/components';
 import { darkTerminalTheme } from '@/components/theme/tokens';
@@ -9,6 +10,7 @@ import { MoveTaskScreen } from '@/screens/MoveTaskScreen';
 import { CapabilityError } from '@/channel';
 import { useBoardStore } from '@/state/boardStore';
 import { boardColumnFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
+import { WORKFLOW_LOCK_REASON, workflowWireFixture } from '../helpers/workflows';
 import {
   clampSheetContentHeight,
   LIST_FLOOR_HEIGHT,
@@ -237,6 +239,191 @@ describe('MoveTaskScreen row highlight', () => {
     // exactly one row wears the accent.
     expect(rowStyle('lane-todo').backgroundColor).toBe(colors.surfaceRaised);
     expect(rowStyle('lane-todo').borderColor).toBe(colors.border);
+  });
+});
+
+/**
+ * A workflow task (protocol 0.21.0) is moved by the desktop's rule, not freely:
+ * a refused column stays in the list, disabled, with no reason (design sign-off,
+ * screens 3 to 5). Every column here carries its REAL role: `boardColumnFixture`
+ * defaults to `todo`, so a working column left to the default would be refused as
+ * a To Do move and every case below would pass for the wrong reason.
+ */
+describe('MoveTaskScreen workflow tasks', () => {
+  function seedWorkflowBoard(workflow: Partial<BoardTaskWorkflowWire> | null, taskColumnId = 'lane-doing'): void {
+    useBoardStore.setState({
+      projects: [{ id: 'project-1', name: 'Alpha' }],
+      boardsByProjectId: {
+        'project-1': {
+          columns: [
+            boardColumnFixture({ id: 'lane-todo', name: 'To Do', role: 'todo', position: 0 }),
+            boardColumnFixture({ id: 'lane-doing', name: 'Doing', role: null, position: 1 }),
+            boardColumnFixture({ id: 'lane-review', name: 'Review', role: null, position: 2 }),
+            boardColumnFixture({ id: 'lane-done', name: 'Done', role: 'done', position: 3 }),
+          ],
+          tasksById: {
+            'task-1': boardTaskFixture({
+              id: 'task-1',
+              swimlane_id: taskColumnId,
+              title: 'Fix the login redirect',
+              workflow: workflow === null ? null : workflowWireFixture(workflow),
+            }),
+          },
+          snapshotAt: 0,
+          showTicketNumbers: true,
+          view: 'full',
+          taskCountsByColumnId: {},
+          commandTerminals: [],
+          commandTerminalsOffered: false,
+        },
+      },
+      pendingMoves: [],
+    });
+  }
+
+  function rowDisabled(columnId: string): boolean {
+    return screen.getByTestId(`move-target-${columnId}`).props.accessibilityState.disabled as boolean;
+  }
+
+  function rowSelected(columnId: string): boolean {
+    return screen.getByTestId(`move-target-${columnId}`).props.accessibilityState.selected as boolean;
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockParams = { taskId: 'task-1', projectId: 'project-1' };
+    useBoardStore.getState().reset();
+  });
+
+  /**
+   * Mutation seen failing: `workflowAllowsMove` ending in `return true` instead
+   * of the gate comparison (a running workflow's locked card). The Review row
+   * read enabled: "Expected: true, Received: false" on its disabled state. (The
+   * To Do row stayed refused, by the role check ahead of it.)
+   */
+  it('refuses every column for a running workflow task that is locked and not at a gate', async () => {
+    seedWorkflowBoard({ state: 'running', lock_reason: WORKFLOW_LOCK_REASON, gate_target_id: null });
+    await renderMoveTaskScreen();
+
+    for (const columnId of ['lane-todo', 'lane-doing', 'lane-review', 'lane-done']) {
+      expect(rowDisabled(columnId)).toBe(true);
+    }
+    expect(screen.getByTestId('move-confirm').props.accessibilityState.disabled).toBe(true);
+  });
+
+  /**
+   * Mutations seen failing: dropping the gate preselection (`gateColumnId`
+   * forced to null) left the gated row unchosen: "Expected: true, Received:
+   * false" on its selected state, before Move was even looked at; and the same
+   * `return true` mutation as above opened the columns the gate refuses.
+   */
+  it('opens only the gate target for a running workflow task at a human gate, already chosen', async () => {
+    seedWorkflowBoard({ state: 'running', gate_target_id: 'lane-review' });
+    await renderMoveTaskScreen();
+
+    expect(rowDisabled('lane-review')).toBe(false);
+    for (const columnId of ['lane-todo', 'lane-doing', 'lane-done']) {
+      expect(rowDisabled(columnId)).toBe(true);
+    }
+    // Chosen without a tap, so reporting the step done is one press.
+    expect(rowSelected('lane-review')).toBe(true);
+    expect(screen.getByTestId('move-confirm').props.accessibilityState.disabled).toBe(false);
+
+    await act(async () => {
+      await fireEvent.press(screen.getByTestId('move-confirm'));
+    });
+
+    expect(mockMoveTaskOptimistic).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      taskId: 'task-1',
+      targetSwimlaneId: 'lane-review',
+      targetPosition: 0,
+    });
+  });
+
+  /**
+   * Mutation seen failing: deleting the `isTodoRole(toRole)` refusal in
+   * `workflowAllowsMove`. The To Do row came back enabled: "Expected: true,
+   * Received: false" on its disabled state.
+   */
+  it('refuses only To Do for a paused workflow task, and lets a hand pick any other column', async () => {
+    seedWorkflowBoard({ state: 'paused' });
+    await renderMoveTaskScreen();
+
+    expect(rowDisabled('lane-todo')).toBe(true);
+    expect(rowDisabled('lane-review')).toBe(false);
+    expect(rowDisabled('lane-done')).toBe(false);
+    // Two columns are open, so nothing is chosen for the user.
+    expect(screen.getByTestId('move-confirm').props.accessibilityState.disabled).toBe(true);
+  });
+
+  /**
+   * Regression: the preselect keyed on "exactly one column allowed", not on the
+   * gate. On a three-column board a paused workflow's card in Doing has one
+   * column open (Done, since To Do is refused), so Done came pre-chosen and one
+   * tap away: the archive the hub refuses, unchosen. Seen failing against that
+   * code: "Expected: false, Received: true" on Done's selected state.
+   */
+  it('chooses nothing for a paused workflow task whose one open column is not a gate', async () => {
+    seedWorkflowBoard({ state: 'paused', gate_target_id: null });
+    const board = useBoardStore.getState().boardsByProjectId['project-1'];
+    if (!board) throw new Error('board not seeded');
+    useBoardStore.setState({
+      boardsByProjectId: {
+        'project-1': { ...board, columns: board.columns.filter((column) => column.id !== 'lane-review') },
+      },
+    });
+    await renderMoveTaskScreen();
+
+    expect(rowDisabled('lane-done')).toBe(false);
+    expect(rowSelected('lane-done')).toBe(false);
+    expect(screen.getByTestId('move-confirm').props.accessibilityState.disabled).toBe(true);
+  });
+
+  /**
+   * Mutation seen failing: removing the `draft`/`done` early return, so a
+   * finished workflow's task fell through to the To Do refusal and the To Do row
+   * stayed disabled ("Expected: false, Received: true"), for both states.
+   */
+  it.each(['done', 'draft'])('lets a %s workflow task go anywhere, To Do included', async (state) => {
+    seedWorkflowBoard({ state });
+    await renderMoveTaskScreen();
+
+    for (const columnId of ['lane-todo', 'lane-review', 'lane-done']) {
+      expect(rowDisabled(columnId)).toBe(false);
+    }
+    // The current column is still not a target.
+    expect(rowDisabled('lane-doing')).toBe(true);
+  });
+
+  /**
+   * A state this app does not know reads as running (the protocol says so), the
+   * strictest reading: a state a newer desktop adds must not unlock a card the
+   * desktop still locks.
+   */
+  it('reads a workflow state it does not know as running, so the card stays locked', async () => {
+    seedWorkflowBoard({ state: 'archived-by-a-newer-desktop', lock_reason: WORKFLOW_LOCK_REASON });
+    await renderMoveTaskScreen();
+
+    expect(rowDisabled('lane-todo')).toBe(true);
+    expect(rowDisabled('lane-review')).toBe(true);
+    expect(rowDisabled('lane-done')).toBe(true);
+  });
+
+  /**
+   * Mutation seen failing: `if (!workflow) return false` in `workflowAllowsMove`
+   * (the ordinary task refused everywhere): "Expected: false, Received: true"
+   * on the first other column's disabled state.
+   */
+  it('leaves an ordinary task exactly as it was: every other column open, To Do included, nothing chosen', async () => {
+    seedWorkflowBoard(null);
+    await renderMoveTaskScreen();
+
+    for (const columnId of ['lane-todo', 'lane-review', 'lane-done']) {
+      expect(rowDisabled(columnId)).toBe(false);
+    }
+    expect(rowDisabled('lane-doing')).toBe(true);
+    expect(screen.getByTestId('move-confirm').props.accessibilityState.disabled).toBe(true);
   });
 });
 

@@ -151,6 +151,11 @@ function RootStack(): React.JSX.Element {
         <Stack.Screen name="command-terminals" options={formSheetOptions} />
         <Stack.Screen name="command-terminal-actions" options={formSheetOptions} />
         <Stack.Screen name="command-terminal" options={{ headerShown: false, title: 'Command Terminal' }} />
+        {/* Workflows (protocol 0.21.0, task #116): a project's workflows as a
+            sheet from the Board header, and one workflow as a full screen
+            with its own header, the one place it pauses or resumes. */}
+        <Stack.Screen name="workflows" options={formSheetOptions} />
+        <Stack.Screen name="workflow" options={{ headerShown: false, title: 'Workflow' }} />
         {/* Renders its own TaskHeader, exactly as the session screen does, so the
             two kinds of task open into the same chrome. */}
         <Stack.Screen name="completed-task" options={{ headerShown: false, title: 'Completed task' }} />

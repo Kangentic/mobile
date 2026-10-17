@@ -159,11 +159,14 @@ app/              # expo-router route wrappers (thin - render the src/screens/ i
                   #   file-diff.tsx hosts the per-file diff on the stack
   command-terminal.tsx  # an open Command Terminal (its own screen); command-terminals.tsx and
                   #   command-terminal-actions.tsx are its two form sheets
+  workflow.tsx    # one workflow's view (its own screen); workflows.tsx is the form sheet
+                  #   listing a project's workflows (protocol 0.21.0)
 src/
   screens/        # TriageHome (+ home/ empty states), Board, task/ (SessionScreen + lenses),
-                  #   terminals/ (the Command Terminal screen, the Board's Terminals button; its
-                  #   two sheets sit with the other sheet screens),
-                  #   FileDiff, Pairing (Scan/Confirm), Settings, Devices
+                  #   board/ (the Board's card connector and its Workflows button),
+                  #   workflow/ (the workflow view), terminals/ (the Command Terminal screen,
+                  #   the Board's Terminals button; its two sheets sit with the other sheet
+                  #   screens), FileDiff, Pairing (Scan/Confirm), Settings, Devices
   components/      # Design system + conversation/ cells and prompt cards, terminal/ pane +
                   #   quick keys, board/ sheets, composer/, diff/ line cells
   pairing/         # QR validation, device identity, the IKpsk0 pairing state machine, trust anchor storage
@@ -175,6 +178,9 @@ src/
   terminal/        # Pure liveTail PTY cleaner, key sequences, WebView bridge protocol,
                   #   the generated self-contained xterm.html asset
   diff/            # Pure unified-diff line computation (jsdiff) + path display helpers
+  workflow/        # Pure workflow rules ported from the desktop: state and color, who may move
+                  #   a card, the waiting footer, the get_workflow/list_workflows readers and
+                  #   the workflow view's sections
   notifications/   # Push registration, E2E blob decrypt, notifee channels, local notifier,
                   #   foreground service, background push task, tap routing (tap routing
                   #   and rich display are cross-platform; the iOS half decrypts in
@@ -185,8 +191,9 @@ src/
                   #   expo-router's imperative router enqueues rather than navigates, and the
                   #   queue drains in an effect that throws fatally when no navigator has
                   #   mounted (the iOS 0.6.3 build 13 cold-start crash)
-  state/           # Zustand stores (activity/board/transcript/diff/channel/settings/
-                  #   commandTerminal) + the non-Zustand terminalFeed PTY ring buffers
+  state/           # Zustand stores (activity/board/transcript/diff/channel/settings/readingView/
+                  #   resume/commandTerminal/workflow) + the non-Zustand terminalFeed PTY ring
+                  #   buffers
   voice/           # Dictation hook over the OS speech engines
   observability/   # Sentry crash reporting: the ONLY module allowed to import the SDK, plus
                   #   the pure event/breadcrumb scrubber (lint-enforced, crash-reporting-scope.md)
@@ -568,6 +575,41 @@ per-message cost), isolated in `src/voice/useDictation.ts`. Partial results stre
 composer; on a final result the default mode **auto-sends**, configurable in Settings to
 review-before-sending or off (`src/state/settingsStore.ts`, key `settings.dictationMode`).
 
+## Workflows
+
+A workflow is the desktop's set of linked tasks that runs through its boards by itself (protocol
+0.21.0, task #116; the design was signed off on 2026-10-17). The phone reads them and pauses or
+resumes them. Planning, starting and deleting a workflow stay on the desktop.
+
+- **What the board rows say.** `BoardTaskWire.workflow` names the workflow (id, title, home
+  project, state, color slot), the task's route, the unfinished tasks it waits for, the desktop's
+  lock sentence while only the workflow may move it, and a human gate's one open column. The
+  rules over those fields are ported in `src/workflow/` and pinned to the desktop's own sources:
+  `workflowAllowsMove` is `workflow-lock.ts` for its `mobile` origin, `workflowWaitingFooter` is
+  `workflow-waiting.ts`, and an unknown state reads as running, so a state a newer desktop adds
+  can never unlock a card.
+- **Board and Agents cards.** A workflow task's card draws the desktop's workflow strip: the
+  workflow's glyph in its color (the desktop's six dark chart colors, `theme.workflowSlots`),
+  its name, a pause glyph while paused, and the task's route as the step track. A workflow
+  task waiting in To Do gets the desktop's footer ("Blocked by #14...", "Queued...", "Paused").
+- **Moves.** The Move sheet lists every column and disables the ones a hand may not take the
+  task to, with no reason, as the desktop's menu keeps them. A locked card's Move and every
+  workflow task's Archive are disabled in the long-press sheet. Archive is disabled by the
+  phone itself, because the desktop would accept a paused workflow's archive as a plain move
+  into Done.
+- **Pause and Resume** live only in the workflow view, and act at once, as the desktop's header
+  does. They are the board-tool writes `pause_workflow` and `resume_workflow`, asked of the
+  workflow's home project. Both answer with no data, which the bridge forwards as `{}`, so
+  `verbClient.boardToolWrite` accepts a missing `result` for those two tools only. A paused
+  workflow's task offers View workflow where the desktop would refuse its Resume.
+- **Reading.** `list_workflows` (the Board header's Workflows button and sheet) and
+  `get_workflow` (the workflow view) are board-tool reads asked of the workflow's HOME project,
+  held in `useWorkflowStore` and re-read when a member task's row moves or changes state.
+  `src/workflow/workflowView.ts` reads both leniently: the protocol types every board-tool result
+  as `JsonValue`, so these narrow JSON rather than redeclare a type. The view groups the
+  workflow's tasks by board column in board order (the desktop canvas's cards, read like the
+  board), ordered inside a column by dependency depth, the canvas's own layering.
+
 ## Notification pipeline
 
 1. The desktop POSTs directly to Expo's push API (no maintainer server in the data path). FCM
@@ -645,11 +687,16 @@ token rotation or a category-preference change, and non-fatal without FCM creden
 an older desktop; `getPushRegistrationStatus()` feeds the Settings UI). Preferences are enforced
 **desktop-side**: the desktop filters outgoing notifications to the device's registered set
 before sealing, so the iOS Notification Service Extension never needs to know about them.
-`pushDecrypt.ts` opens envelopes with the phone's static public key as the AAD and maps the five
+`pushDecrypt.ts` opens envelopes with the phone's static public key as the AAD and maps the six
 categories (`categoryCopy.ts` - `input-required` / `turn-complete` / `session-failed` /
-`plan-complete` / `spawn-stalled`, named for cross-vendor task-lifecycle vocabulary rather than
-any one agent's terms) onto four notifee channels (needs-attention / completions / failures /
-stalls); any failure degrades to the generic placeholder. `channels.ts` creates a fifth,
+`plan-complete` / `spawn-stalled` / `workflow-complete`, named for cross-vendor task-lifecycle
+vocabulary rather than any one agent's terms) onto four notifee channels (needs-attention /
+completions / failures / stalls); any failure degrades to the generic placeholder.
+`workflow-complete` (protocol 0.21.0) is the one category about no single task: every task of a
+workflow reached Done, the envelope's `taskTitle` is the workflow's name, its `projectId` is the
+workflow's HOME project, and its task and session ids are empty. It rides the `completions`
+channel, and a tap opens that project on the Board tab (`open-project-board`, below) rather than a
+task. `channels.ts` creates a fifth,
 `connection` (LOW importance), which no category maps to: it carries only the background
 keepalive's ongoing "Connected to your desktop" foreground-service notification.
 
@@ -673,6 +720,7 @@ residual risk rather than a covered case.
 | `session-failed` | "Session stopped" | on |
 | `plan-complete` | "Plan complete" | on |
 | `spawn-stalled` | "Still preparing" | **off** |
+| `workflow-complete` | "Workflow complete" | on |
 
 `spawn-stalled` ("slow starts") is the one default-off category. It stays in the protocol, the
 Settings list, and the `stalls` channel - defaulted off, not removed, so re-enabling it sticks.
@@ -1122,8 +1170,9 @@ The stored preference is untouched, so it applies again the moment a second sect
 Killed-app data messages run through a
 headless expo-notifications background task (`backgroundPushTask.ts`, registered from `index.js`
 outside React). While backgrounded in foreground-service mode, `localNotifier.ts` turns
-activity-store transitions into the same notifications locally (three of the five categories have
-an activity-store signal to fire from; 30s per-session-per-category cooldown, suppressed while
+activity-store transitions into the same notifications locally (three of the six categories have
+an activity-store signal to fire from; `plan-complete`, `spawn-stalled` and `workflow-complete`
+are push-only; 30s per-session-per-category cooldown, suppressed while
 foregrounded, and gated by the same per-category Settings toggle as remote push), and
 `foregroundService.ts` owns the ongoing LOW-importance connection notification, and with it the
 service's native state: callers declare a desired state and one serialized reconcile loop applies
@@ -1141,6 +1190,13 @@ for a warm tap, `getLastNotificationResponseAsync()` for a cold start). That is 
 `taskId` out of the OS-visible payload; a plaintext routing id in `data` would be the easy version
 and is what `e2e-notification-privacy.md` forbids. A failed decrypt routes nowhere and the app
 opens to Home.
+
+A `workflow-complete` tap is the exception to "routes to the task screen": that envelope names no
+task (its task and session ids are empty), so on both platforms the router publishes
+`{ kind: 'open-project-board', projectId }` instead, the workflow's home project, which the runner
+performs by selecting that project and navigating to the Board tab, unconditionally, since a cold
+start has no project list yet and the Board falls back on its own. Any other category with an
+empty task id routes nowhere, on iOS as on Android (iOS used to open a blank task screen).
 
 Those two iOS deliveries are independent, and one tap can arrive through both, so the router
 de-duplicates on `notification.request.identifier` and routes a given tap once. This mirrors
@@ -1162,8 +1218,8 @@ performs a `router.navigate` from inside React. `navigate`, not `push`: in expo-
 reducer a push always appends, so a tap for the task already on top stacked a duplicate screen,
 while a navigate to the same task on top keeps that route (and its key, so no remount) and only
 replaces its params; a different task still appends. The target carries no `mode`, so the screen
-opens the lens the user last chose for that task (Terminal when none), for every push category;
-it used to force Chat. A cold-launch tap can mount the screen before the settings store has
+opens the lens the user last chose for that task (Terminal when none), for every push category
+that names a task; it used to force Chat. A cold-launch tap can mount the screen before the settings store has
 hydrated that choice, so the screen adopts it when hydration lands unless the user has already
 switched lens. The
 desktop-revocation reset in `connectionManager.ts` publishes a `reset-to-root` intent through the

@@ -1,13 +1,15 @@
 import { Platform } from 'react-native';
 import notifee, { EventType, type Notification } from '@notifee/react-native';
 import * as Notifications from 'expo-notifications';
-import { isPushSessionKind, type PushSessionKind } from '@kangentic/protocol';
-import { publishPendingNavigation } from '@/navigation/pendingNavigation';
+import { isPushCategory, isPushSessionKind, type PushCategory, type PushSessionKind } from '@kangentic/protocol';
+import { publishPendingNavigation, type PendingNavigation } from '@/navigation/pendingNavigation';
 import { decryptPushBlob, extractBlobFromTaskData } from './pushDecrypt';
 
 /**
  * Notification tap routing: a tap opens the task screen on the lens the user
- * last chose for that task (terminal when there is none), for every category.
+ * last chose for that task (terminal when there is none), for every category
+ * but workflow-complete, which names no task and opens its home project's
+ * Board (see resolveTapTarget).
  * Registered once at boot, outside React, so a press is caught on every path:
  * the listeners for an app already running (foreground, or a process FCM
  * started headlessly), and a one-time read for the press that launched a
@@ -19,7 +21,8 @@ import { decryptPushBlob, extractBlobFromTaskData } from './pushDecrypt';
  * - ANDROID reads it straight off the notification. Every notification this app
  *   DISPLAYS (local notifier, foreground service, decrypted push) is posted by
  *   notifee with { taskId, projectId, sessionId } already in its data, because
- *   the blob was decrypted before display.
+ *   the blob was decrypted before display. A decrypted push adds its
+ *   `category`, which is how a workflow-complete press is told from a task's.
  * - iOS carries only the sealed blob. The Notification Service Extension
  *   (targets/nse/) rewrites the title and body before the OS renders the alert,
  *   but deliberately never touches `userInfo`, so no task identity is stored in
@@ -39,19 +42,41 @@ import { decryptPushBlob, extractBlobFromTaskData } from './pushDecrypt';
  * `src/navigation/pendingNavigation.ts`.
  */
 
+/** The routing identity a tapped notification carries, as both platforms read it. */
+interface TapRouting {
+  /** Null for a notification that carries none: a local alert, or one posted before the category rode along. */
+  category: PushCategory | null;
+  taskId: string;
+  projectId: string;
+  sessionId: string;
+  sessionKind: PushSessionKind | null;
+}
+
 /**
- * Publishes where a tap should land. A Command Terminal's notification
- * (protocol 0.20.0, `sessionKind: 'command-terminal'`) opens that terminal by
- * its session: its `taskId` is the desktop's made-up one, which names no board
- * task and must never be opened as one.
+ * Where a tap should land, or null when the notification names nothing it
+ * can open. Each kind of alert needs its own identity, and an empty one routes
+ * nowhere rather than guessing:
+ *
+ * - workflow-complete (protocol 0.21.0) names no task or session at all, only
+ *   the workflow's HOME project, so it opens that project's Board.
+ * - A Command Terminal's alert (protocol 0.20.0, `sessionKind:
+ *   'command-terminal'`) opens that terminal by its session: its `taskId` is
+ *   the desktop's made-up one, which names no board task and must never be
+ *   opened as one.
+ * - Everything else is a task's alert and needs its task. NEVER an `open-task`
+ *   with an empty task id: that is a blank task screen that never connects.
  */
-function openTask(taskId: string, projectId: string, sessionId: string, sessionKind: PushSessionKind | null): void {
-  if (sessionKind === 'command-terminal') {
-    if (sessionId.length === 0) return;
-    publishPendingNavigation({ kind: 'open-command-terminal', projectId, sessionId });
-    return;
+function resolveTapTarget(routing: TapRouting): PendingNavigation | null {
+  if (routing.category === 'workflow-complete') {
+    if (routing.projectId.length === 0) return null;
+    return { kind: 'open-project-board', projectId: routing.projectId };
   }
-  publishPendingNavigation({ kind: 'open-task', taskId, projectId, sessionId });
+  if (routing.sessionKind === 'command-terminal') {
+    if (routing.sessionId.length === 0) return null;
+    return { kind: 'open-command-terminal', projectId: routing.projectId, sessionId: routing.sessionId };
+  }
+  if (routing.taskId.length === 0) return null;
+  return { kind: 'open-task', taskId: routing.taskId, projectId: routing.projectId, sessionId: routing.sessionId };
 }
 
 /**
@@ -63,34 +88,38 @@ function openTask(taskId: string, projectId: string, sessionId: string, sessionK
  * notification id, which is unique per displayed notification: no task
  * notification sets an id of its own (only the connection notification does,
  * and it carries no task), so a reposted alert is a new id and still routes.
- * Latched only once a press resolves to a task, so a press that routes
+ * Latched only once a press resolves to a target, so a press that routes
  * nothing (the connection notification, the decrypt placeholder) never
  * occupies the slot. Per process: the state dies with it, as the reports do.
  */
 let lastRoutedPressNotificationId: string | null = null;
 
-function openTaskFromNotification(notification: Notification | undefined): void {
+function routeFromNotificationPress(notification: Notification | undefined): void {
   if (!notification) return;
   const data = notification.data;
   if (!data) return;
-  const taskId = typeof data.taskId === 'string' ? data.taskId : '';
-  const sessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
-  // Parsed with the protocol's own guard, so a kind this build does not know
-  // routes as a task's alert would, as the envelope parser drops it.
-  const sessionKind = isPushSessionKind(data.sessionKind) ? data.sessionKind : null;
-  // What a press needs to route: a task's alert its task, a Command Terminal's
-  // its session. A terminal's LOCAL alert (the foreground-service notifier)
-  // carries an empty task id, since a terminal has none, so requiring a task
-  // id here dropped exactly that tap.
-  const routable = sessionKind === 'command-terminal' ? sessionId.length > 0 : taskId.length > 0;
-  if (!routable) return;
+  // What a press needs to route is resolveTapTarget's call: a task's alert its
+  // task, a Command Terminal's its session, a workflow-complete its project. A
+  // terminal's LOCAL alert (the foreground-service notifier) carries an empty
+  // task id, since a terminal has none, and a workflow-complete push carries
+  // empty task AND session ids, so requiring a task id here dropped both taps.
+  const target = resolveTapTarget({
+    // Parsed with the protocol's own guards, so a value this build does not
+    // know routes as a task's alert would, as the envelope parser drops it.
+    // A local alert carries no category and routes as it always did.
+    category: isPushCategory(data.category) ? data.category : null,
+    taskId: typeof data.taskId === 'string' ? data.taskId : '',
+    projectId: typeof data.projectId === 'string' ? data.projectId : '',
+    sessionId: typeof data.sessionId === 'string' ? data.sessionId : '',
+    sessionKind: isPushSessionKind(data.sessionKind) ? data.sessionKind : null,
+  });
+  if (target === null) return;
   const notificationId = notification.id;
   if (typeof notificationId === 'string' && notificationId.length > 0) {
     if (notificationId === lastRoutedPressNotificationId) return;
     lastRoutedPressNotificationId = notificationId;
   }
-  const projectId = typeof data.projectId === 'string' ? data.projectId : '';
-  openTask(taskId, projectId, sessionId, sessionKind);
+  publishPendingNavigation(target);
 }
 
 /**
@@ -110,9 +139,9 @@ function openTaskFromNotification(notification: Notification | undefined): void 
  *
  * NOTE this is a LAST-ATTEMPTED latch, not last-routed: it is written before
  * the decrypt below, so re-running this function with the same response routes
- * nowhere. That is why the pending slot holds the RESOLVED target published by
- * openTask rather than the raw response - re-running the decrypt after mount
- * would be swallowed here.
+ * nowhere. That is why the pending slot holds the RESOLVED target from
+ * resolveTapTarget rather than the raw response - re-running the decrypt after
+ * mount would be swallowed here.
  *
  * THIS ASSUMES THE DESKTOP NEVER COLLAPSES NOTIFICATIONS. iOS reuses the
  * request identifier when a push carries `apns-collapse-id`, so a sender that
@@ -131,7 +160,8 @@ let lastRoutedNotificationIdentifier: string | null = null;
  * and route from the plaintext. Every failure (no blob, no key, tampered blob,
  * stale sentAt) resolves to no navigation at all, which lands the user on Home -
  * the same safe fallback the Android path uses when a notification carries no
- * taskId. Nothing here is ever logged.
+ * taskId, and so does an envelope resolveTapTarget finds nothing to open in.
+ * Nothing here is ever logged.
  */
 export async function routeFromPushResponse(response: Notifications.NotificationResponse | null): Promise<void> {
   if (!response) return;
@@ -144,7 +174,15 @@ export async function routeFromPushResponse(response: Notifications.Notification
   if (blob === null) return;
   const decrypted = await decryptPushBlob(blob);
   if (!decrypted) return;
-  openTask(decrypted.data.taskId, decrypted.data.projectId, decrypted.data.sessionId, decrypted.data.sessionKind ?? null);
+  const target = resolveTapTarget({
+    category: decrypted.category,
+    taskId: decrypted.data.taskId,
+    projectId: decrypted.data.projectId,
+    sessionId: decrypted.data.sessionId,
+    sessionKind: decrypted.data.sessionKind ?? null,
+  });
+  if (target === null) return;
+  publishPendingNavigation(target);
 }
 
 let handlersRegistered = false;
@@ -155,10 +193,10 @@ export function registerNotificationTapHandlers(): void {
 
   if (Platform.OS === 'android') {
     notifee.onForegroundEvent((event) => {
-      if (event.type === EventType.PRESS) openTaskFromNotification(event.detail.notification);
+      if (event.type === EventType.PRESS) routeFromNotificationPress(event.detail.notification);
     });
     notifee.onBackgroundEvent(async (event) => {
-      if (event.type === EventType.PRESS) openTaskFromNotification(event.detail.notification);
+      if (event.type === EventType.PRESS) routeFromNotificationPress(event.detail.notification);
     });
     // A press that LAUNCHED A KILLED PROCESS reaches neither listener: notifee
     // reports it only through getInitialNotification (the iOS deprecation of
@@ -169,7 +207,7 @@ export function registerNotificationTapHandlers(): void {
     void notifee
       .getInitialNotification()
       .then((initial) => {
-        if (initial) openTaskFromNotification(initial.notification);
+        if (initial) routeFromNotificationPress(initial.notification);
       })
       .catch(() => {
         // No launching press, or the module is unavailable; nothing to route.

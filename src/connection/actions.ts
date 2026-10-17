@@ -26,6 +26,7 @@ import { useReadingViewStore } from '@/state/readingViewStore';
 import { resumeProgress, useResumeStore, type ResumeAttempt } from '@/state/resumeStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
+import { useWorkflowStore } from '@/state/workflowStore';
 import { isTerminalRetained, releaseTerminal, resetTerminalFeed, retainTerminal } from '@/state/terminalFeed';
 import { lastContentLineFromScrollback } from '@/terminal/liveTail';
 import {
@@ -106,7 +107,7 @@ export async function writeTerminal(sessionId: string, data: string): Promise<vo
 export const RESUME_WAIT_MS = 20_000;
 
 /** The desktop's refusal text (Resume's and Pause's) is shown as the desktop shows it, capped: it is peer-supplied display text. */
-const DESKTOP_REFUSAL_MESSAGE_MAX_LENGTH = 160;
+export const DESKTOP_REFUSAL_MESSAGE_MAX_LENGTH = 160;
 
 /**
  * The desktop task view's Resume, from the phone: resumes a PAUSED task's
@@ -776,6 +777,7 @@ export function wipeDesktopContent(): void {
   useDiffStore.getState().reset();
   useReadingViewStore.getState().reset();
   useCommandTerminalStore.getState().reset();
+  useWorkflowStore.getState().reset();
   resetTerminalFeed();
   awaitedPromptPeekCache.clear();
   lastMessagePeekBySession.clear();

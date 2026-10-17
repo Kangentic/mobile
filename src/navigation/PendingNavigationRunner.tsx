@@ -1,5 +1,6 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { router } from 'expo-router';
+import { useBoardStore } from '@/state/boardStore';
 import {
   consumePendingNavigation,
   getPendingNavigation,
@@ -44,6 +45,19 @@ function performPendingNavigation(navigation: PendingNavigation): void {
     // readiness assertion; navigate is the call that would have thrown.
     if (router.canDismiss()) router.dismissAll();
     router.navigate('/');
+    return;
+  }
+  if (navigation.kind === 'open-project-board') {
+    // A workflow-complete tap names no task, only the workflow's HOME project.
+    // Selected UNCONDITIONALLY, not once the project shows up in the list: on a
+    // cold start no project list has arrived yet, and the Board resolves the
+    // selection whenever it does. The store is the only handle, since the Board
+    // reads its project from there rather than from a route param.
+    useBoardStore.getState().selectProject(navigation.projectId);
+    // Dismissed first, as for a reset, so the Board is what the user sees
+    // rather than a sheet or a pushed screen left over it.
+    if (router.canDismiss()) router.dismissAll();
+    router.navigate('/board');
     return;
   }
   if (navigation.kind === 'open-command-terminal') {

@@ -1,11 +1,13 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
-import { Folder } from 'lucide-react-native';
+import { Folder, Pause } from 'lucide-react-native';
 import type { BoardColumnWire } from '@kangentic/protocol';
 import { Text, useTheme } from '@/components';
 import { getColumnIcon } from './columnIcons';
 import type { ColumnTrackStep } from './columnTrack';
 import { WaitLabel } from './WaitLabel';
+import type { WorkflowStripLabel } from '@/workflow/workflowState';
+import { WorkflowGlyph } from './WorkflowGlyph';
 
 /*
  * The band's frame and track are the desktop's own measurements, copied 1:1
@@ -27,6 +29,10 @@ const STRIP_GAP_BELOW = 8;
 const STRIP_GROUP_GAP = 8;
 const PROJECT_ICON_SIZE = 12;
 const PROJECT_ICON_GAP = 6;
+/** The desktop board strip's workflow label (WorkflowTaskCardBody.tsx): a 12 glyph, a 5 gap, and an 11 pause glyph when paused. */
+const WORKFLOW_ICON_SIZE = 12;
+const WORKFLOW_LABEL_GAP = 5;
+const WORKFLOW_PAUSE_SIZE = 11;
 const GLYPH_SIZE = 12;
 const GLYPH_STROKE = 1.75;
 /** The Board chip bar's and session header's dot (ColumnChipBar, TaskHeader), so the fallback is one shape everywhere. */
@@ -42,6 +48,9 @@ const DONE_SEGMENT_OPACITY = 0.55;
 /** The desktop's ahead bar is `color-mix(<column color> 45%, transparent)`; on a childless View, opacity is the same thing. */
 const AHEAD_SEGMENT_OPACITY = 0.45;
 
+/** The workflow a strip names on its left, as the desktop's board strip does (protocol 0.21.0). */
+export type StripWorkflow = WorkflowStripLabel;
+
 export interface ColumnStripProps {
   /** The task's column, or null when no cached board resolves it - the strip then draws no marker, never a guessed column. */
   column: BoardColumnWire | null;
@@ -49,6 +58,14 @@ export interface ColumnStripProps {
   track: readonly ColumnTrackStep[];
   /** Where the task lives. Known from the session even before its task reaches a board, so the band is rarely empty. */
   projectName: string | null;
+  /**
+   * The task's workflow, which takes the left side in place of the project
+   * (design screen 1, decision A1): the workflow's glyph in its color, its
+   * name, and the desktop's pause glyph while it is paused. The project is then
+   * only spoken. Absent or null for an ordinary task, and in the workflow view,
+   * whose cards name their project as the desktop's canvas does.
+   */
+  workflow?: StripWorkflow | null;
   /**
    * Epoch ms this session first needed the user (`selectWaitingSince`), or null
    * when it is working. Drawn just before the track; see the band's doc for why
@@ -108,6 +125,7 @@ export const ColumnStrip = React.memo(function ColumnStrip({
   column,
   track,
   projectName,
+  workflow = null,
   waitingSinceMs,
   waitTestID,
   testID,
@@ -118,7 +136,7 @@ export const ColumnStrip = React.memo(function ColumnStrip({
   return (
     <View
       testID={testID}
-      accessibilityLabel={stripAccessibilityLabel(projectName, column, visibleSteps)}
+      accessibilityLabel={stripAccessibilityLabel(projectName, workflow, column, visibleSteps)}
       style={[
         styles.strip,
         {
@@ -134,7 +152,19 @@ export const ColumnStrip = React.memo(function ColumnStrip({
         },
       ]}
     >
-      {projectName !== null ? (
+      {workflow !== null ? (
+        <View style={styles.workflow} testID={`${testID}-workflow`}>
+          <WorkflowGlyph colorSlot={workflow.colorSlot} size={WORKFLOW_ICON_SIZE} testID={`${testID}-workflow-glyph`} />
+          <Text variant="caption" color="secondary" numberOfLines={1} style={styles.projectName} testID={`${testID}-workflow-name`}>
+            {workflow.title}
+          </Text>
+          {workflow.paused ? (
+            <View testID={`${testID}-workflow-paused`}>
+              <Pause size={WORKFLOW_PAUSE_SIZE} color={theme.colors.textMuted} />
+            </View>
+          ) : null}
+        </View>
+      ) : projectName !== null ? (
         <View style={styles.project}>
           <Folder size={PROJECT_ICON_SIZE} color={theme.colors.textSecondary} />
           <Text variant="caption" color="primary" numberOfLines={1} style={styles.projectName} testID={`${testID}-project`}>
@@ -219,6 +249,7 @@ function columnMarker(column: BoardColumnWire, faintColor: string, stripTestID: 
  */
 function stripAccessibilityLabel(
   projectName: string | null,
+  workflow: StripWorkflow | null,
   column: BoardColumnWire | null,
   visibleSteps: readonly ColumnTrackStep[],
 ): string | undefined {
@@ -226,6 +257,9 @@ function stripAccessibilityLabel(
   // the band draws no track, so a step count would describe nothing on screen.
   const currentStepIndex = column === null ? -1 : visibleSteps.findIndex((step) => step.state === 'current');
   const parts = [
+    // A workflow's band draws the workflow, not the project, so the project is
+    // spoken after it rather than lost.
+    workflow !== null ? `Workflow ${workflow.title}${workflow.paused ? ', paused' : ''}` : null,
     projectName,
     column?.name ?? null,
     currentStepIndex === -1 ? null : `step ${currentStepIndex + 1} of ${visibleSteps.length}`,
@@ -259,6 +293,13 @@ const styles = StyleSheet.create({
   },
   projectName: {
     flexShrink: 1,
+  },
+  workflow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: WORKFLOW_LABEL_GAP,
+    flexShrink: 1,
+    minWidth: 0,
   },
   trailing: {
     flexDirection: 'row',
