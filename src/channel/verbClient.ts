@@ -80,6 +80,13 @@ const MOVE_TASK_TIMEOUT_MS = 45_000;
  */
 export const COMMAND_TERMINAL_START_TIMEOUT_MS = 30_000;
 
+/**
+ * The board-tool writes whose success carries no `result`: pausing and resuming
+ * a workflow return only a message meant for an MCP agent, which the bridge
+ * does not forward. See boardToolWrite.
+ */
+const BOARD_TOOL_WRITES_WITHOUT_RESULT: ReadonlySet<BoardToolWriteName> = new Set<BoardToolWriteName>(['pause_workflow', 'resume_workflow']);
+
 /** A capability request the desktop answered with ok:false (or whose response payload failed its parse guard). */
 export class CapabilityError extends Error {
   readonly verb: CapabilityVerb;
@@ -379,7 +386,15 @@ export class VerbClient {
   async boardToolWrite(tool: BoardToolWriteName, params: JsonValue): Promise<JsonValue> {
     const response = await this.requireOk('board-tool-write', { tool, params });
     return this.parsePayload('board-tool-write', response, (value) => {
-      if (!isRecord(value) || !('result' in value)) throw new Error('board-tool response is missing "result"');
+      if (!isRecord(value)) throw new Error('board-tool response is missing "result"');
+      if (!('result' in value)) {
+        // The desktop forwards its command's `data` as `result`, and the two
+        // workflow writes carry none (kangentic board-tool.ts:57), so
+        // `{ result: undefined }` reaches the phone as `{}`. That is their
+        // success shape. Every other write still needs its result.
+        if (BOARD_TOOL_WRITES_WITHOUT_RESULT.has(tool)) return null;
+        throw new Error('board-tool response is missing "result"');
+      }
       return value.result;
     });
   }

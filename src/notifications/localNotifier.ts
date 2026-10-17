@@ -22,7 +22,7 @@ import { ANDROID_NOTIFICATION_PRESENTATION } from './channels';
  * callers) rather than a separate local kind set, so a remote push
  * and a local alert for the same event class always agree on copy and
  * channel. Only three categories have an activity-store signal to fire
- * from; plan-complete and spawn-stalled are push-only.
+ * from; plan-complete, spawn-stalled and workflow-complete are push-only.
  */
 
 /** Matches the desktop's own per-(session, category) push cooldown. */

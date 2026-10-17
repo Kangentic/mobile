@@ -93,6 +93,76 @@ describe('ColumnStrip', () => {
   });
 
   /**
+   * A workflow task's band (protocol 0.21.0, design screen 1, decision A1): the
+   * workflow takes the project's place on the left, in the desktop board strip's
+   * shape, and the project is then only spoken.
+   */
+  describe('the workflow, on the left', () => {
+    const RUNNING_WORKFLOW = { title: 'Ship the checkout', colorSlot: 2, paused: false };
+    const PAUSED_WORKFLOW = { ...RUNNING_WORKFLOW, paused: true };
+
+    /**
+     * Mutation seen failing: preferring the project when both are known
+     * (`workflow !== null && projectName === null` as the workflow branch's
+     * condition): the project drew and the workflow name did not ("Unable to
+     * find an element with testID: strip-workflow-name", with `strip-project`
+     * in the dump).
+     */
+    it('names the workflow in the project\'s place, with no project beside it', async () => {
+      await renderStrip({ workflow: RUNNING_WORKFLOW });
+
+      expect(screen.getByTestId(`${STRIP_TEST_ID}-workflow-name`)).toHaveTextContent('Ship the checkout');
+      expect(screen.queryByTestId(`${STRIP_TEST_ID}-project`)).toBeNull();
+    });
+
+    it('draws the workflow even when no project is known', async () => {
+      await renderStrip({ workflow: RUNNING_WORKFLOW, projectName: null });
+
+      expect(screen.getByTestId(`${STRIP_TEST_ID}-workflow-name`)).toHaveTextContent('Ship the checkout');
+    });
+
+    it('draws the project exactly as before for an ordinary task, with no workflow parts', async () => {
+      await renderStrip({ workflow: null });
+
+      expect(screen.getByTestId(`${STRIP_TEST_ID}-project`)).toHaveTextContent('storefront-web');
+      expect(screen.queryByTestId(`${STRIP_TEST_ID}-workflow`)).toBeNull();
+      expect(screen.queryByTestId(`${STRIP_TEST_ID}-workflow-name`)).toBeNull();
+      expect(screen.queryByTestId(`${STRIP_TEST_ID}-workflow-paused`)).toBeNull();
+    });
+
+    /**
+     * Mutation seen failing: inverting the pause condition (`!workflow.paused`):
+     * the pause mark drew on the running workflow (`queryByTestId` returned the
+     * pause glyph's wrapper where null was expected).
+     */
+    it('marks a paused workflow with the pause glyph and a running one without', async () => {
+      await renderStrip({ workflow: RUNNING_WORKFLOW });
+      expect(screen.queryByTestId(`${STRIP_TEST_ID}-workflow-paused`)).toBeNull();
+      await screen.unmount();
+
+      await renderStrip({ workflow: PAUSED_WORKFLOW });
+      expect(screen.getByTestId(`${STRIP_TEST_ID}-workflow-paused`)).toBeTruthy();
+    });
+
+    /**
+     * Mutation seen failing: dropping the `Workflow <title>` part from the
+     * label: Received "storefront-web, Executing, step 3 of 5".
+     */
+    it('speaks the workflow first and still speaks the project, the column and the step', async () => {
+      await renderStrip({ workflow: RUNNING_WORKFLOW });
+      expect(screen.getByTestId(STRIP_TEST_ID).props.accessibilityLabel).toBe(
+        'Workflow Ship the checkout, storefront-web, Executing, step 3 of 5',
+      );
+      await screen.unmount();
+
+      await renderStrip({ workflow: PAUSED_WORKFLOW });
+      expect(screen.getByTestId(STRIP_TEST_ID).props.accessibilityLabel).toBe(
+        'Workflow Ship the checkout, paused, storefront-web, Executing, step 3 of 5',
+      );
+    });
+  });
+
+  /**
    * The design review chose a band that never names the column in words: the
    * icon, its color and its place in the track say which column. Drawing the
    * name back in would be a quiet reversal of that decision.

@@ -9,6 +9,7 @@ import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { boardColumnFixture, boardSnapshotFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 import { peekLastAssistantMessage, peekLastTerminalLine } from '@/connection/actions';
+import { workflowWireFixture } from '../helpers/workflows';
 
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
@@ -397,6 +398,54 @@ describe('TriageHomeScreen', () => {
       expect(stripLabel('sess-2')).toBe('Beta, Backlog, step 1 of 3');
       await act(async () => moveTask2To('p2-doing'));
       expect(stripLabel('sess-2')).toBe('Beta, In Progress, step 2 of 3');
+    });
+
+    /**
+     * Design screen 1 (decision A1): a workflow task's band names the workflow
+     * where the project would be, the project is still spoken, and the track is
+     * the task's own route, so a column the route skips is not drawn.
+     *
+     * Mutations seen failing: `workflow: null` in ActivityRow's strip (the
+     * workflow name was not found), and `buildJourneyTrack` without the route
+     * (four steps drawn, not three).
+     */
+    it('names the workflow in place of the project and draws only the route', async () => {
+      seedTwoProjectBoards();
+      useBoardStore.setState((state) => {
+        const board = state.boardsByProjectId['project-2'];
+        const task = board?.tasksById['task-2'];
+        if (board === undefined || task === undefined) throw new Error('seedTwoProjectBoards did not seed task-2');
+        return {
+          boardsByProjectId: {
+            ...state.boardsByProjectId,
+            'project-2': {
+              ...board,
+              columns: [
+                boardColumnFixture({ id: 'p2-todo', name: 'Backlog', role: 'todo', position: 0 }),
+                boardColumnFixture({ id: 'p2-doing', name: 'In Progress', role: null, position: 1 }),
+                boardColumnFixture({ id: 'p2-review', name: 'Review', role: null, position: 2 }),
+                boardColumnFixture({ id: 'p2-done', name: 'Shipped', role: 'done', position: 3 }),
+              ],
+              tasksById: {
+                ...board.tasksById,
+                'task-2': {
+                  ...task,
+                  swimlane_id: 'p2-doing',
+                  workflow: workflowWireFixture({ project_id: 'project-2', route: ['p2-doing'] }),
+                },
+              },
+            },
+          },
+        };
+      });
+      await renderHome();
+      await act(async () => {});
+
+      expect(screen.getByTestId('activity-row-sess-2-column-workflow-name')).toHaveTextContent('Ship the checkout');
+      expect(screen.queryByTestId('activity-row-sess-2-column-project')).toBeNull();
+      expect(stripLabel('sess-2')).toBe('Workflow Ship the checkout, Beta, In Progress, step 2 of 3');
+      expect(screen.getByTestId('activity-row-sess-2-column-track').children).toHaveLength(3);
+      expect(screen.queryByTestId('activity-row-sess-2-column-step-p2-review-ahead')).toBeNull();
     });
 
     it('keeps the band and the project on the fallback card, with no marker rather than a guessed column', async () => {
@@ -2073,6 +2122,49 @@ describe('TriageHomeScreen', () => {
       expect(screen.getByTestId('task-row-task-1-column-step-p1-todo-done')).toBeTruthy();
       expect(screen.getByTestId('task-row-task-1-column-marker')).toBeTruthy();
       expect(screen.getByTestId('task-row-task-1-column-step-p1-done-ahead')).toBeTruthy();
+    });
+
+    /**
+     * Design screen 1 (decision A1) on the sessionless card: a workflow task's
+     * band names the workflow where the project would be, the project is still
+     * spoken, and the track is the task's own route. A pause the phone did not
+     * watch draws this card, and the workflow's tasks are the ones that pause
+     * with it, so it must say so as the session's row does. The board has a
+     * Review column the route skips: with the route dropped it would be drawn
+     * and the track would read four steps, not three.
+     *
+     * Mutations seen failing, one at a time: `workflow: null` in
+     * SessionlessTaskRow's strip memo ("Unable to find an element with testID:
+     * task-row-task-1-column-workflow-name"), and `buildJourneyTrack` without
+     * the route there (the workflow name found, then the label read "step 2 of 4"
+     * where "step 2 of 3" was expected).
+     */
+    it('names the workflow in place of the project and draws only the route, as a session\'s row does', async () => {
+      makeTaskOneSessionless({
+        resumable: true,
+        swimlane_id: 'p1-doing',
+        workflow: workflowWireFixture({ project_id: 'project-1', route: ['p1-doing'] }),
+      });
+      useBoardStore.setState((state) => {
+        const board = state.boardsByProjectId['project-1'];
+        if (board === undefined) throw new Error('seedStores did not seed project-1');
+        const columns = [
+          boardColumnFixture({ id: 'p1-todo', name: 'To Do', role: 'todo', position: 0 }),
+          boardColumnFixture({ id: 'p1-doing', name: 'In Progress', role: null, position: 1 }),
+          boardColumnFixture({ id: 'p1-review', name: 'Review', role: null, position: 2 }),
+          boardColumnFixture({ id: 'p1-done', name: 'Done', role: 'done', position: 3 }),
+        ];
+        return { boardsByProjectId: { ...state.boardsByProjectId, 'project-1': { ...board, columns } } };
+      });
+      await renderHome();
+
+      expect(screen.getByTestId('task-row-task-1-column-workflow-name')).toHaveTextContent('Ship the checkout');
+      expect(screen.queryByTestId('task-row-task-1-column-project')).toBeNull();
+      expect(screen.getByTestId('task-row-task-1-column').props.accessibilityLabel).toBe(
+        'Workflow Ship the checkout, Alpha, In Progress, step 2 of 3',
+      );
+      expect(screen.getByTestId('task-row-task-1-column-track').children).toHaveLength(3);
+      expect(screen.queryByTestId('task-row-task-1-column-step-p1-review-ahead')).toBeNull();
     });
 
     it('draws a first start under Active with the desktop\'s own step', async () => {

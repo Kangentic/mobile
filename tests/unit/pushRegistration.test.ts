@@ -185,9 +185,11 @@ describe('registerPushWithDesktop', () => {
     registerPush.mockResolvedValue({ registered: true });
 
     // spawn-stalled ("slow starts") defaults OFF, so the desktop is told not to
-    // send it without the user having to find the toggle.
+    // send it without the user having to find the toggle. workflow-complete
+    // (protocol 0.21.0) defaults ON, in PUSH_CATEGORIES order (it is last).
+    const defaultCategories = ['input-required', 'turn-complete', 'session-failed', 'plan-complete', 'workflow-complete'];
     await pushRegistration.registerPushWithDesktop(verbs);
-    expect(registerPush.mock.calls[0][0].categories).toEqual(['input-required', 'turn-complete', 'session-failed', 'plan-complete']);
+    expect(registerPush.mock.calls[0][0].categories).toEqual(defaultCategories);
 
     await settingsStoreModule.useSettingsStore.getState().setPushCategoryEnabled('spawn-stalled', true);
     await pushRegistration.registerPushWithDesktop(verbs);
@@ -199,20 +201,21 @@ describe('registerPushWithDesktop', () => {
       'session-failed',
       'plan-complete',
       'spawn-stalled',
+      'workflow-complete',
     ]);
 
     // Revert the toggle: sameCategories compares the CURRENT category list
-    // against whatever was registered last (now the 5-category list from the
+    // against whatever was registered last (now the 6-category list from the
     // call above), not against some remembered "have I ever seen this exact
-    // set" latch. Turning spawn-stalled back off makes the current list (4
-    // categories) unequal to the last-registered list (5), so this must hit
+    // set" latch. Turning spawn-stalled back off makes the current list (5
+    // categories) unequal to the last-registered list (6), so this must hit
     // the wire again - a one-way latch that only re-registers on the FIRST
     // change away from the default would instead skip this call.
     await settingsStoreModule.useSettingsStore.getState().setPushCategoryEnabled('spawn-stalled', false);
     await pushRegistration.registerPushWithDesktop(verbs);
 
     expect(registerPush).toHaveBeenCalledTimes(3);
-    expect(registerPush.mock.calls[2][0].categories).toEqual(['input-required', 'turn-complete', 'session-failed', 'plan-complete']);
+    expect(registerPush.mock.calls[2][0].categories).toEqual(defaultCategories);
   });
 });
 

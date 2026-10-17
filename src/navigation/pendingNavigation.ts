@@ -52,6 +52,16 @@ export type PendingNavigation =
       readonly projectId: string;
       readonly sessionId: string;
     }
+  /**
+   * A workflow-complete notification (protocol 0.21.0): every task of a
+   * workflow reached Done, so there is no one task to open. Its envelope names
+   * the workflow's HOME project and carries empty task and session ids, so it
+   * opens that project's board rather than an `open-task` with an empty id.
+   */
+  | {
+      readonly kind: 'open-project-board';
+      readonly projectId: string;
+    }
   | { readonly kind: 'reset-to-root' };
 
 let pendingNavigation: PendingNavigation | null = null;

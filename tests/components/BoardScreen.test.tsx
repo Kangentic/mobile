@@ -6,7 +6,9 @@ import { BoardScreen } from '@/screens/BoardScreen';
 import { ENDED_ROW_GRACE_MS, useActivityStore } from '@/state/activityStore';
 import { useBoardStore, type ProjectBoard } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
-import { streamSnapshotFixture } from '@/devsupport/desktopFixtures';
+import { useWorkflowStore } from '@/state/workflowStore';
+import { boardColumnFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
+import { workflowWireFixture } from '../helpers/workflows';
 
 jest.mock('react-native-safe-area-context', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
@@ -44,6 +46,13 @@ jest.mock('@/connection/actions', () => ({
   deleteTaskFromBoard: (input: unknown) => mockDeleteTaskFromBoard(input),
   archiveTask: (input: unknown) => mockArchiveTask(input),
   refreshSnapshots: jest.fn().mockResolvedValue(undefined),
+}));
+
+// The Board header's Workflows button reads the project's workflows on mount;
+// the store is seeded directly where a test needs a list, so no real read runs.
+const mockFetchProjectWorkflows = jest.fn().mockResolvedValue(undefined);
+jest.mock('@/connection/workflowActions', () => ({
+  fetchProjectWorkflows: (projectId: string) => mockFetchProjectWorkflows(projectId),
 }));
 
 // The handled-error door. The arrow forwards its arguments so the failure
@@ -111,7 +120,9 @@ describe('BoardScreen', () => {
     mockMoveTaskOptimistic.mockClear();
     mockCreateTask.mockClear();
     mockLaunchCommandTerminal.mockClear();
+    mockFetchProjectWorkflows.mockClear();
     mockReportHandledError.mockClear();
+    useWorkflowStore.getState().reset();
     // Without this, a prior test's selectProject('project-2') (or an
     // archived-page cursor, or a pending move) survives into the next test's
     // freshly-seeded board, which only overwrites the fields seedBoard names.
@@ -872,6 +883,167 @@ describe('BoardScreen', () => {
         pathname: '/command-terminal',
         params: { launchId: 'launch-from-header', projectId: 'project-2' },
       });
+    });
+  });
+
+  /**
+   * Protocol 0.21.0. A workflow task's board card is the only card with a top
+   * band on the Board (an ordinary task's page already says which project and
+   * column it is), and a workflow task waiting in To Do wears the desktop's
+   * waiting footer. The To Do column here carries `role: 'todo'`: the footer
+   * keys on the ROLE, and this file's local `column()` helper gives every
+   * column `role: null`, which would draw no footer whatever the task is.
+   */
+  describe('workflow tasks', () => {
+    function seedWorkflowBoard(): void {
+      useBoardStore.setState({
+        projects: [{ id: 'project-1', name: 'Alpha' }],
+        boardsByProjectId: {
+          'project-1': {
+            columns: [
+              boardColumnFixture({ id: 'lane-todo', name: 'To Do', role: 'todo', position: 0 }),
+              boardColumnFixture({ id: 'lane-doing', name: 'Doing', role: null, position: 1 }),
+            ],
+            tasksById: {
+              'task-blocked': boardTaskFixture({
+                id: 'task-blocked',
+                display_id: 15,
+                title: 'Wire the payments',
+                swimlane_id: 'lane-todo',
+                workflow: workflowWireFixture({ waiting_for: ['#14'] }),
+              }),
+              'task-paused': boardTaskFixture({
+                id: 'task-paused',
+                display_id: 16,
+                title: 'Draft the receipts',
+                swimlane_id: 'lane-todo',
+                position: 1,
+                workflow: workflowWireFixture({ state: 'paused' }),
+              }),
+              'task-plain': boardTaskFixture({
+                id: 'task-plain',
+                display_id: 17,
+                title: 'Fix the login bug',
+                swimlane_id: 'lane-todo',
+                position: 2,
+              }),
+              'task-working': boardTaskFixture({
+                id: 'task-working',
+                display_id: 18,
+                title: 'Build the cart',
+                swimlane_id: 'lane-doing',
+                workflow: workflowWireFixture({ waiting_for: ['#14'] }),
+              }),
+            },
+            snapshotAt: 0,
+            showTicketNumbers: true,
+            view: 'full',
+            taskCountsByColumnId: {},
+            commandTerminals: [],
+            commandTerminalsOffered: false,
+          },
+        },
+        pendingMoves: [],
+      });
+    }
+
+    async function renderBoard(): Promise<void> {
+      await render(
+        <ThemeProvider>
+          <BoardScreen />
+        </ThemeProvider>,
+      );
+    }
+
+    /**
+     * Mutation seen failing: handing the card's strip `workflow: null` in
+     * BoardTaskCard (the band then drew nothing for the workflow): the
+     * `-column-workflow-name` testID was not found.
+     */
+    it('names the workflow in the band of a workflow task\'s card', async () => {
+      seedWorkflowBoard();
+      await renderBoard();
+
+      expect(screen.getByTestId('board-card-task-blocked-column-workflow-name')).toHaveTextContent('Ship the checkout');
+      // The board is the page being viewed, so the project is not repeated in the band.
+      expect(screen.queryByTestId('board-card-task-blocked-column-project')).toBeNull();
+    });
+
+    /**
+     * Mutation seen failing: dropping the `variant === 'board' && workflow ===
+     * null` early return in BoardTaskCard, which gave every ordinary card a
+     * band: `board-card-task-plain-column` was found where null was expected.
+     */
+    it('gives an ordinary task\'s card no band at all', async () => {
+      seedWorkflowBoard();
+      await renderBoard();
+
+      expect(screen.getByTestId('board-card-task-plain')).toBeTruthy();
+      expect(screen.queryByTestId('board-card-task-plain-column')).toBeNull();
+      expect(screen.queryByTestId('board-card-task-plain-status-bar')).toBeNull();
+    });
+
+    /**
+     * Mutation seen failing: passing `waiting={null}` from BoardTaskCard (the
+     * card drew no footer): `board-card-task-blocked-status-bar-label` was not
+     * found.
+     */
+    it('shows "Blocked by #14..." in the footer of a workflow task waiting in To Do', async () => {
+      seedWorkflowBoard();
+      await renderBoard();
+
+      expect(screen.getByTestId('board-card-task-blocked-status-bar-label')).toHaveTextContent('Blocked by #14...');
+      expect(screen.getByTestId('board-card-task-blocked-status-bar-waiting')).toBeTruthy();
+    });
+
+    it('shows "Paused" with the pause circle for a paused workflow\'s task that waits on nothing', async () => {
+      seedWorkflowBoard();
+      await renderBoard();
+
+      expect(screen.getByTestId('board-card-task-paused-status-bar-label')).toHaveTextContent('Paused');
+      expect(screen.getByTestId('board-card-task-paused-status-bar-paused')).toBeTruthy();
+    });
+
+    /** The wait is a To Do thing: the same blocker list on a card in Doing draws the band but no footer. */
+    it('draws the band but no waiting footer for a workflow task outside To Do', async () => {
+      seedWorkflowBoard();
+      await renderBoard();
+
+      expect(screen.getByTestId('board-card-task-working-column-workflow-name')).toHaveTextContent('Ship the checkout');
+      expect(screen.queryByTestId('board-card-task-working-status-bar')).toBeNull();
+    });
+  });
+
+  /**
+   * Protocol 0.21.0. The header carries the Workflows button for the ACTIVE
+   * project, beside Terminals, and it hides itself until the project has
+   * workflows listed. WorkflowsButton.test.tsx owns the button's own states;
+   * this pins that the header mounts it.
+   *
+   * Mutation seen failing: removing `<WorkflowsButton />` from the header
+   * actions: `header-workflows-button` was not found.
+   */
+  describe('the header Workflows button', () => {
+    it('draws the button in the header when the project has workflows listed', async () => {
+      useWorkflowStore.getState().setList('project-1', [{ id: 'workflow-1', title: 'Ship the checkout', state: 'running' }]);
+      await render(
+        <ThemeProvider>
+          <BoardScreen />
+        </ThemeProvider>,
+      );
+
+      expect(within(screen.getByTestId('board-header')).getByTestId('header-workflows-button')).toBeTruthy();
+      expect(mockFetchProjectWorkflows).toHaveBeenCalledWith('project-1');
+    });
+
+    it('draws no button for a project with no workflows', async () => {
+      await render(
+        <ThemeProvider>
+          <BoardScreen />
+        </ThemeProvider>,
+      );
+
+      expect(screen.queryByTestId('header-workflows-button')).toBeNull();
     });
   });
 

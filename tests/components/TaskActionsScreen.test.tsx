@@ -1,7 +1,7 @@
 import React from 'react';
 import { StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
-import type { BoardTaskWire } from '@kangentic/protocol';
+import type { BoardTaskWire, BoardTaskWorkflowWire } from '@kangentic/protocol';
 import { ThemeProvider } from '@/components';
 import { darkTerminalTheme } from '@/components/theme/tokens';
 import { PAUSE_FAILED_MESSAGE, PAUSE_UNCONFIRMED_MESSAGE, TaskActionsScreen } from '@/screens/TaskActionsScreen';
@@ -9,6 +9,7 @@ import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useResumeStore, type ResumeAttempt } from '@/state/resumeStore';
 import { boardColumnFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
+import { WORKFLOW_LOCK_REASON, workflowWireFixture } from '../helpers/workflows';
 
 jest.mock('react-native-safe-area-context', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
@@ -698,6 +699,158 @@ describe('TaskActionsScreen', () => {
 
       expect(screen.queryByTestId('task-action-view-pr')).toBeNull();
       expect(mockOpenURL).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * A workflow task (protocol 0.21.0, design screens 3 to 5). The workflow's
+   * HOME project is deliberately not the board's here ('project-home' against
+   * the route's 'project-1'), because a workflow can span boards and the view
+   * has to ask the project that holds it.
+   */
+  describe('Workflow tasks', () => {
+    const HOME_PROJECT_ID = 'project-home';
+
+    function seedWorkflowTask({
+      workflow = {},
+      withDoneColumn = true,
+      task = {},
+    }: {
+      workflow?: Partial<BoardTaskWorkflowWire>;
+      withDoneColumn?: boolean;
+      task?: Partial<BoardTaskWire>;
+    } = {}): void {
+      seedBoard({
+        withDoneColumn,
+        task: { workflow: workflowWireFixture({ id: 'workflow-9', project_id: HOME_PROJECT_ID, ...workflow }), ...task },
+      });
+    }
+
+    function disabledOf(testID: string): boolean {
+      return screen.getByTestId(testID).props.accessibilityState.disabled as boolean;
+    }
+
+    beforeEach(() => {
+      useActivityStore.getState().reset();
+      useResumeStore.setState({ byTaskId: {} });
+    });
+
+    it('offers View workflow for a workflow task and not for an ordinary one', async () => {
+      await renderTaskActions();
+      expect(screen.queryByTestId('task-action-view-workflow')).toBeNull();
+      await screen.unmount();
+
+      seedWorkflowTask();
+      await renderTaskActions();
+      expect(within(screen.getByTestId('task-action-view-workflow')).getByText('View workflow')).toBeTruthy();
+    });
+
+    /**
+     * Mutation seen failing: sending the route's `projectId` instead of the
+     * workflow's home project in `onViewWorkflow` (the board's project is the
+     * wrong one to ask for a workflow that sits on another board): the replace
+     * carried "project-1" where "project-home" was expected (toHaveBeenCalledWith
+     * diff on `params.projectId`).
+     */
+    it('replaces itself with the workflow view, asked of the workflow\'s home project', async () => {
+      seedWorkflowTask();
+      await renderTaskActions();
+
+      await fireEvent.press(screen.getByTestId('task-action-view-workflow'));
+
+      expect(mockReplace).toHaveBeenCalledWith({
+        pathname: '/workflow',
+        params: { workflowId: 'workflow-9', projectId: HOME_PROJECT_ID },
+      });
+    });
+
+    /**
+     * Mutations seen failing: dropping `!moveAvailable` from Move's disabled
+     * (the locked card's row stayed enabled: "Expected: true, Received: false");
+     * and disabling Move for every workflow task with `workflow !== null` in its
+     * place (the gated card lost its way out: "Expected: false, Received: true").
+     */
+    it('disables Move for a running card the workflow locks, and takes no tap on it', async () => {
+      seedWorkflowTask({ workflow: { state: 'running', lock_reason: WORKFLOW_LOCK_REASON, gate_target_id: null } });
+      await renderTaskActions();
+
+      expect(disabledOf('task-action-move')).toBe(true);
+      await fireEvent.press(screen.getByTestId('task-action-move'));
+      expect(mockReplace).not.toHaveBeenCalled();
+    });
+
+    it('keeps Move for a card waiting at a human gate, and for a paused workflow\'s card', async () => {
+      seedWorkflowTask({ workflow: { state: 'running', gate_target_id: 'lane-done' } });
+      await renderTaskActions();
+      expect(disabledOf('task-action-move')).toBe(false);
+      await fireEvent.press(screen.getByTestId('task-action-move'));
+      expect(mockReplace).toHaveBeenCalledWith({ pathname: '/move-task', params: { taskId: 'task-1', projectId: 'project-1' } });
+      await screen.unmount();
+
+      seedWorkflowTask({ workflow: { state: 'paused' } });
+      await renderTaskActions();
+      expect(disabledOf('task-action-move')).toBe(false);
+    });
+
+    /**
+     * Archive takes a task out of its workflow, which only the desktop can do,
+     * so it is off for every state. The Done column IS there, so the workflow
+     * is the only possible reason; a paused one is the case the desktop would
+     * itself accept as a plain move into Done.
+     *
+     * Mutation seen failing: dropping `archiveBlockedByWorkflow` from Archive's
+     * disabled, which left all four states' rows enabled ("Expected: true,
+     * Received: false").
+     */
+    it.each(['running', 'paused', 'draft', 'done'])('disables Archive for a %s workflow task even with a Done column', async (state) => {
+      seedWorkflowTask({ workflow: { state }, withDoneColumn: true });
+      await renderTaskActions();
+
+      expect(disabledOf('task-action-archive')).toBe(true);
+      expect(screen.queryByText('No Done column on this board')).toBeNull();
+      await fireEvent.press(screen.getByTestId('task-action-archive'));
+      expect(mockArchiveTask).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The "No Done column" caption blames the board, which is wrong for a
+     * workflow task that could not archive anywhere.
+     *
+     * Mutation seen failing: dropping `|| archiveBlockedByWorkflow` from the
+     * caption's condition: a workflow task on a board with no Done column was
+     * captioned "No Done column on this board" (the Text node came back from
+     * `queryByText` where null was expected).
+     */
+    it('does not blame the board for a workflow task\'s disabled Archive', async () => {
+      seedWorkflowTask({ withDoneColumn: false });
+      await renderTaskActions();
+
+      expect(disabledOf('task-action-archive')).toBe(true);
+      expect(screen.queryByText('No Done column on this board')).toBeNull();
+    });
+
+    /**
+     * A paused workflow refuses to resume one of its tasks, so the hub does not
+     * offer Resume (the session panel offers View workflow there instead).
+     *
+     * Mutation seen failing: `offered: resumeOffered` in `useResumeOffer`
+     * (without `&& pausedWorkflow === null`): the Resume row was offered for the
+     * paused workflow's task (`queryByTestId` returned the "Resume session" row
+     * where null was expected).
+     */
+    it('offers no Resume for a resumable paused task whose workflow is paused', async () => {
+      seedWorkflowTask({ workflow: { state: 'paused' }, task: { session_id: null, resumable: true, paused: true } });
+      await renderTaskActions();
+
+      expect(screen.queryByTestId('task-action-resume')).toBeNull();
+    });
+
+    // The control for the test above: the very same row, with only the workflow's state changed.
+    it('still offers Resume for the same paused task when its workflow runs', async () => {
+      seedWorkflowTask({ workflow: { state: 'running' }, task: { session_id: null, resumable: true, paused: true } });
+      await renderTaskActions();
+
+      expect(screen.getByTestId('task-action-resume')).toBeTruthy();
     });
   });
 

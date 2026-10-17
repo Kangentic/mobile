@@ -199,6 +199,12 @@ const PUSH_CATEGORY_OPTIONS: { category: PushCategory; label: string; descriptio
     description: 'A task is taking a while to start',
     testID: 'settings-category-spawn-stalled',
   },
+  {
+    category: 'workflow-complete',
+    label: 'Workflow complete',
+    description: 'When every task in a workflow reaches Done',
+    testID: 'settings-category-workflow-complete',
+  },
 ];
 
 export function SettingsScreen(): React.JSX.Element {

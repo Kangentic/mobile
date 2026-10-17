@@ -126,6 +126,12 @@ export const PICKER_SHEET_RESERVED_HEIGHT =
   SHEET_TOP_CLEARANCE + SHEET_CONTAINER_PADDING + SHEET_TITLE_LINE + SHEET_STACK_GAP;
 
 /**
+ * WorkflowsScreen, around its workflow list: the same title and one gap as
+ * the picker, plus the allowance for its failed-read line.
+ */
+export const WORKFLOWS_SHEET_RESERVED_HEIGHT = PICKER_SHEET_RESERVED_HEIGHT + SHEET_ERROR_ALLOWANCE + SHEET_STACK_GAP;
+
+/**
  * What the picker's filter field adds when it shows (above SEARCH_THRESHOLD
  * projects): the field and its extra Stack gap. The keyboard allowance joins
  * at the call site in this case only, because only the filter can summon one.

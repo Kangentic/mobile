@@ -209,6 +209,90 @@ describe('TaskCard', () => {
       expect(screen.queryByTestId(`${BASE_TEST_ID}-usage`)).toBeNull();
     });
 
+    /**
+     * A workflow task waiting in To Do (protocol 0.21.0, `workflowWaitingFooter`)
+     * has no session, so the footer's `none` and `exited` arms - which draw
+     * nothing - draw its wait instead, as the desktop card does. The glyph is
+     * Loader2's shape AT REST (a task waiting on another is not loading), or
+     * the pause circle while its workflow is paused. A session's own state always
+     * outranks it.
+     */
+    describe('a workflow task\'s wait in To Do', () => {
+      const BLOCKED = { label: 'Blocked by #14...', paused: false };
+      const PAUSED = { label: 'Paused', paused: true };
+
+      /**
+       * Mutation seen failing: the `none`/`exited` arm returning null whatever
+       * `waiting` holds (the pre-workflow footer): "Unable to find an element
+       * with testID: task-card-status-bar-label", for all three cases here.
+       */
+      it.each([['none' as const], ['exited' as const]])(
+        'draws the label over a still, non-spinning glyph for %s',
+        async (kind) => {
+          await renderTaskCard({ sessionDisplay: { kind }, waiting: BLOCKED });
+
+          expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Blocked by #14...');
+          expect(getLucideGlyph(screen.getByTestId(`${STATUS_BAR}-waiting`), LoaderCircle)).toBeTruthy();
+          expect(screen.queryByTestId(`${STATUS_BAR}-spinner`)).toBeNull();
+          expect(screen.queryByTestId(`${STATUS_BAR}-paused`)).toBeNull();
+        },
+      );
+
+      /**
+       * Mutations seen failing: drawing the animated spinner for the waiting
+       * footer (`task-card-status-bar-waiting` not found, with
+       * `task-card-status-bar-spinner` in the dump), and swapping the two glyph
+       * arms (`task-card-status-bar-paused` not found, with the still `-waiting`
+       * mark in the dump).
+       */
+      it('draws the pause circle, not the still loader, while the workflow is paused', async () => {
+        await renderTaskCard({ sessionDisplay: { kind: 'none' }, waiting: PAUSED });
+
+        expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Paused');
+        expect(getLucideGlyph(screen.getByTestId(`${STATUS_BAR}-paused`), CirclePause)).toBeTruthy();
+        expect(screen.queryByTestId(`${STATUS_BAR}-waiting`)).toBeNull();
+        expect(screen.queryByTestId(`${STATUS_BAR}-spinner`)).toBeNull();
+      });
+
+      it('draws no footer when the card waits on nothing', async () => {
+        await renderTaskCard({ sessionDisplay: { kind: 'none' }, waiting: null });
+
+        expect(screen.queryByTestId(STATUS_BAR)).toBeNull();
+      });
+
+      /**
+       * A running session ignores `waiting`. The assertions name the footer the
+       * SESSION draws (its label, its mark), not merely that some bar exists,
+       * because "Starting agent..." is a status bar too.
+       *
+       * Mutation seen failing: the `running` arm drawing `waiting` first: the
+       * label read "Blocked by #14..." where "Starting agent..." was expected.
+       */
+      it('lets a running session\'s own footer win over the wait', async () => {
+        await renderTaskCard({ sessionDisplay: { kind: 'running', resuming: false }, usage: null, waiting: BLOCKED });
+        expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Starting agent...');
+        expect(screen.getByTestId(`${STATUS_BAR}-spinner`)).toBeTruthy();
+        expect(screen.queryByTestId(`${STATUS_BAR}-waiting`)).toBeNull();
+        await screen.unmount();
+
+        await renderTaskCard({ sessionDisplay: { kind: 'running', resuming: false }, usage: usageFixture(), waiting: BLOCKED });
+        expect(screen.getByTestId(`${BASE_TEST_ID}-usage`)).toBeTruthy();
+        expect(screen.queryByTestId(STATUS_BAR)).toBeNull();
+      });
+
+      it.each([
+        ['queued', { kind: 'queued' as const }, 'Queued...'],
+        ['suspended', { kind: 'suspended' as const }, 'Paused'],
+        ['preparing', { kind: 'preparing' as const, label: 'Switching model...' }, 'Switching model...'],
+      ])('lets a %s session\'s own footer win over the wait', async (_name, sessionDisplay, expectedLabel) => {
+        await renderTaskCard({ sessionDisplay, waiting: BLOCKED });
+
+        expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent(expectedLabel);
+        expect(screen.queryByText('Blocked by #14...')).toBeNull();
+        expect(screen.queryByTestId(`${STATUS_BAR}-waiting`)).toBeNull();
+      });
+    });
+
     it('spins with the desktop\'s 1s linear turn, looping forever', async () => {
       const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
       const withRepeatSpy = jest.spyOn(Reanimated, 'withRepeat');

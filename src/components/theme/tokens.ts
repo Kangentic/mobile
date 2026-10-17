@@ -91,6 +91,18 @@ export interface TerminalPalette {
 }
 
 /**
+ * The six categorical colors a workflow's glyph wears, in slot order (slot 1 is
+ * index 0): the desktop's dark-theme `--kng-chart-1..6`, copied as they are so
+ * a workflow is the same color on both screens. The phone has no light theme,
+ * so the desktop's light values are not needed.
+ *
+ * Used on the workflow glyph and nowhere else. Slots 2 to 4 sit near the green
+ * and amber this file reserves for "working" and "needs you" (the two-hue rule
+ * above), which is safe only because they never color a status.
+ */
+export type WorkflowSlotPalette = readonly [string, string, string, string, string, string];
+
+/**
  * The fixed brand identity colors from @kangentic/branding ("Warm Craft"
  * generation). These are NEVER project-overridden: the per-project accent
  * overlay (projectAccent.ts) replaces only the accent family in ColorTokens
@@ -275,6 +287,7 @@ export interface RadiusTokens {
 export interface Theme {
   colors: ColorTokens;
   terminalPalette: TerminalPalette;
+  workflowSlots: WorkflowSlotPalette;
   brand: BrandTokens;
   motion: MotionTokens;
   typography: TypographyTokens;
@@ -412,6 +425,7 @@ export const darkTerminalTheme: Theme = {
     ansiBrightCyan: '#8adbe6',
     ansiBrightWhite: '#f0e9dd',
   },
+  workflowSlots: ['#3987e5', '#199e70', '#c98500', '#008300', '#9085e9', '#e66767'],
   brand: brandTokens,
   motion: motionTokens,
   typography: {

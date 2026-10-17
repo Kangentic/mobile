@@ -45,10 +45,11 @@ export {
   type Theme,
   type ColorTokens,
   type TerminalPalette,
+  type WorkflowSlotPalette,
   type BrandTokens,
   type MotionTokens,
   type MotionEasingBezier,
 } from './theme/tokens';
-export { parseHexColor, relativeLuminance, contrastRatio, mixHex, type RgbColor } from './theme/color';
+export { parseHexColor, relativeLuminance, contrastRatio, mixHex, hexWithAlpha, type RgbColor } from './theme/color';
 export { applyProjectAccent, deriveAccentFamily, type AccentFamily } from './theme/projectAccent';
 export { ProjectAccentBoundary, type ProjectAccentBoundaryProps } from './theme/ProjectAccentBoundary';

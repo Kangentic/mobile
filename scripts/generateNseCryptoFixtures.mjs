@@ -177,6 +177,29 @@ const cases = [
     expected: { ...basePlaintext, category: 'spawn-stalled' },
   },
   {
+    // A workflow-complete (protocol 0.21.0) names no task or session: the
+    // desktop sends EMPTY task and session ids, the workflow's name as the
+    // title and its HOME project. The extension must still open it and give
+    // it a title, never treat the empty ids as a malformed envelope.
+    name: 'workflow-complete-empty-ids',
+    blob: sealPushEnvelope(pushKey, identityPublicKey, {
+      ...basePlaintext,
+      category: 'workflow-complete',
+      taskId: '',
+      sessionId: '',
+      taskTitle: 'Checkout hardening',
+      detail: 'All 6 tasks are in Done.',
+    }),
+    expected: {
+      ...basePlaintext,
+      category: 'workflow-complete',
+      taskId: '',
+      sessionId: '',
+      taskTitle: 'Checkout hardening',
+      detail: 'All 6 tasks are in Done.',
+    },
+  },
+  {
     name: 'tampered-tag',
     blob: tamper(sealPushEnvelope(pushKey, identityPublicKey, basePlaintext)),
     expected: null,

@@ -5,6 +5,7 @@ import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useResumeStore } from '@/state/resumeStore';
 import { boardSnapshotFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
+import { workflowWireFixture } from '../helpers/workflows';
 
 /**
  * Every board snapshot replaces EVERY row object of its project, so a reader
@@ -103,5 +104,98 @@ describe('useResumeOffer and the 0.17.0 paused fact', () => {
     const { result } = await renderCountedOffer();
 
     expect(result.current.offered).toBe(false);
+  });
+});
+
+/**
+ * Protocol 0.21.0. The desktop refuses to resume ONE task of a paused workflow,
+ * so a resumable paused task whose workflow is paused is offered View workflow
+ * (`pausedWorkflow`) in place of Resume (`offered`), and never both. The
+ * workflow's home project is named because it can be another board's.
+ */
+describe('useResumeOffer and a task of a paused workflow', () => {
+  function workflowOf(state: string): BoardTaskWire['workflow'] {
+    return workflowWireFixture({ id: 'workflow-9', project_id: 'project-home', state });
+  }
+
+  beforeEach(() => {
+    useActivityStore.getState().reset();
+    useBoardStore.getState().reset();
+    useResumeStore.setState({ byTaskId: {} });
+  });
+
+  /**
+   * Mutation seen failing: `offered: resumeOffered` (without `&& pausedWorkflow
+   * === null`): both Resume and View workflow were offered ("Expected: false,
+   * Received: true" on `offered`, with `pausedWorkflow` already correct).
+   */
+  it('offers View workflow, asked of the workflow\'s home project, and no Resume', async () => {
+    publishRow({ workflow: workflowOf('paused') });
+
+    const { result } = await renderCountedOffer();
+
+    expect(result.current.pausedWorkflow).toEqual({ workflowId: 'workflow-9', homeProjectId: 'project-home' });
+    expect(result.current.offered).toBe(false);
+  });
+
+  it('offers Resume and names no workflow while the workflow runs', async () => {
+    publishRow({ workflow: workflowOf('running') });
+
+    const { result } = await renderCountedOffer();
+
+    expect(result.current.offered).toBe(true);
+    expect(result.current.pausedWorkflow).toBeNull();
+  });
+
+  it('names no workflow for a paused workflow\'s task that the desktop does not mark resumable', async () => {
+    publishRow({ resumable: false, workflow: workflowOf('paused') });
+
+    const { result } = await renderCountedOffer();
+
+    expect(result.current.offered).toBe(false);
+    expect(result.current.pausedWorkflow).toBeNull();
+  });
+
+  it('follows the workflow\'s state as the board rows change it', async () => {
+    publishRow({ workflow: workflowOf('running') });
+    const { result } = await renderCountedOffer();
+    expect(result.current.offered).toBe(true);
+
+    await act(async () => {
+      publishRow({ workflow: workflowOf('paused') });
+    });
+    expect(result.current.offered).toBe(false);
+    expect(result.current.pausedWorkflow).not.toBeNull();
+
+    await act(async () => {
+      publishRow({ workflow: workflowOf('running') });
+    });
+    expect(result.current.offered).toBe(true);
+    expect(result.current.pausedWorkflow).toBeNull();
+  });
+
+  /**
+   * The hook reads the workflow as primitives, because every snapshot replaces
+   * the row's `workflow` OBJECT. That is invisible in what the hook returns, so
+   * this counts renders, as the block above does.
+   *
+   * Mutation seen failing: a plain subscription to the row's `workflow` object
+   * (`useBoardStore((state) => selectTaskRow(state, taskId)?.workflow ?? null)`
+   * added to the hook): the snapshot re-rendered the hook with nothing changed
+   * ("Expected: 0, Received: 1" on the render count, after the control passed).
+   */
+  it('does not re-render when a snapshot replaces the workflow object with an equal one', async () => {
+    publishRow({ workflow: workflowOf('paused') });
+    const { renders } = await renderCountedOffer();
+    const workflowBefore = heldRow().workflow;
+    const rendersBefore = renders.count;
+
+    await act(async () => {
+      publishRow({ workflow: workflowOf('paused') });
+    });
+
+    // The control: the store really did receive a different workflow object.
+    expect(heldRow().workflow).not.toBe(workflowBefore);
+    expect(renders.count - rendersBefore).toBe(0);
   });
 });

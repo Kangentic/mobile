@@ -381,6 +381,55 @@ function stubArchivedSummaries() {
   };
 }
 
+/**
+ * One workflow (protocol 0.21.0), RUNNING, holding one sessionless card in
+ * Doing that only the workflow may move: the desktop sends the lock sentence,
+ * so the phone disables Move and Archive on it. Its own card, so the flows that
+ * move stub-task-1 and stub-task-2 still can.
+ */
+const STUB_WORKFLOW = { id: 'stub-workflow-1', title: 'Stub workflow', colorSlot: 3 };
+const STUB_WORKFLOW_TASK_ID = 'stub-task-workflow';
+const STUB_WORKFLOW_TASK_DISPLAY_ID = 6;
+
+function stubWorkflowTask() {
+  return {
+    ...stubTask(STUB_WORKFLOW_TASK_ID, STUB_WORKFLOW_TASK_DISPLAY_ID, 'A workflow-locked card', 'lane-doing', 2, null),
+    workflow: {
+      id: STUB_WORKFLOW.id,
+      title: STUB_WORKFLOW.title,
+      project_id: STUB_PROJECT.id,
+      state: 'running',
+      color_slot: STUB_WORKFLOW.colorSlot,
+      route: ['lane-doing'],
+      waiting_for: [],
+      lock_reason: `#${STUB_WORKFLOW_TASK_DISPLAY_ID} is locked while ${STUB_WORKFLOW.title} runs.`,
+      gate_target_id: null,
+    },
+  };
+}
+
+/** `get_workflow`'s answer for the stub workflow, in the desktop's shape (workflow-service.ts readWorkflow). */
+function stubWorkflowDetail() {
+  return {
+    workflow: { id: STUB_WORKFLOW.id, title: STUB_WORKFLOW.title, state: 'running', color_slot: STUB_WORKFLOW.colorSlot },
+    homeProjectId: STUB_PROJECT.id,
+    tasks: [
+      {
+        key: `#${STUB_WORKFLOW_TASK_DISPLAY_ID}`,
+        taskId: STUB_WORKFLOW_TASK_ID,
+        displayId: STUB_WORKFLOW_TASK_DISPLAY_ID,
+        projectId: STUB_PROJECT.id,
+        board: null,
+        title: 'A workflow-locked card',
+        column: 'Doing',
+        place: 'working',
+        route: ['Doing'],
+        waitsFor: [],
+      },
+    ],
+  };
+}
+
 function stubBoardSnapshot(activeSessionId) {
   const codexTask = { ...stubTask(STUB_CODEX_TASK_ID, 3, 'Codex refactor (no structured transcript)', 'lane-doing', 1, STUB_CODEX_SESSION_ID), agent: 'codex' };
   return {
@@ -390,6 +439,7 @@ function stubBoardSnapshot(activeSessionId) {
       stubTask(STUB_TASK_ID, 1, 'Streaming stub session', 'lane-doing', 0, activeSessionId),
       stubTask('stub-task-2', 2, 'A quiet backlog-ish card', 'lane-todo', 0, null),
       codexTask,
+      stubWorkflowTask(),
     ],
     backlog: [],
   };
@@ -1114,6 +1164,12 @@ function runSession(relayUrl, desktopStatic, phoneStaticPublicKey, scale) {
           sendEvent({ kind: 'terminal', sessionId: activeSessionId, taskId: STUB_TASK_ID, payload: { data: payload.data.replace(/\r/g, '\r\n') } });
           return ok({ written: true });
         case 'board-tool-read':
+          if (payload.tool === 'list_workflows') {
+            return ok({ result: payload.params?.project === STUB_PROJECT.id ? [{ id: STUB_WORKFLOW.id, title: STUB_WORKFLOW.title, state: 'running' }] : [] });
+          }
+          if (payload.tool === 'get_workflow') {
+            return payload.params?.workflow === STUB_WORKFLOW.id ? ok({ result: stubWorkflowDetail() }) : fail(`No workflow "${payload.params?.workflow ?? ''}".`);
+          }
           return ok({ result: { note: `stub answered ${payload.tool}` } });
         case 'board-tool-write': {
           console.log(`[board-tool] ${payload.tool}`, JSON.stringify(payload.params));

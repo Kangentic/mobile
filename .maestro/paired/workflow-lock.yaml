@@ -1,0 +1,49 @@
+appId: com.kangentic.mobile
+---
+# Precondition: paired to scripts/stubDesktopPeer.mjs (see open-task-from-triage.yaml).
+# A card only its workflow moves (protocol 0.21.0, task #116): the stub's
+# running workflow holds stub-task-workflow in Doing. Its board card names the
+# workflow in its strip; long-pressed, Move to column is disabled and View
+# workflow opens the workflow's own screen, which lists the card.
+- launchApp
+# 60s: the dev client cold-boots the bundle after launchApp's force-stop;
+# wait for the tab bar instead of tapping into a still-booting app.
+- extendedWaitUntil:
+    visible:
+      text: "Board"
+    timeout: 60000
+- tapOn:
+    text: "Board"
+# The Board header's Workflows button shows once the project's list is read.
+- extendedWaitUntil:
+    visible:
+      id: "header-workflows-button"
+    timeout: 20000
+- tapOn:
+    id: "board-column-chip-lane-doing"
+- extendedWaitUntil:
+    visible:
+      id: "board-card-stub-task-workflow"
+    timeout: 20000
+- assertVisible:
+    id: "board-card-stub-task-workflow-column-workflow-name"
+- longPressOn:
+    id: "board-card-stub-task-workflow"
+- assertVisible:
+    id: "task-actions-sheet"
+- assertVisible:
+    id: "task-action-move"
+    enabled: false
+- assertVisible:
+    id: "task-action-archive"
+    enabled: false
+- tapOn:
+    id: "task-action-view-workflow"
+- extendedWaitUntil:
+    visible:
+      id: "workflow-screen"
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: "workflow-card-stub-task-workflow"
+    timeout: 15000

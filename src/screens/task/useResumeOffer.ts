@@ -1,9 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { cardSessionDisplay, toCardSession, toCardTaskRow } from '@/components/board/cardSessionDisplay';
 import { selectTaskRespawn, useActivityStore } from '@/state/activityStore';
 import { selectTaskRow, useBoardStore } from '@/state/boardStore';
 import { selectResumeAttempt, useResumeStore, type ResumeAttempt } from '@/state/resumeStore';
+import { normalizeWorkflowState } from '@/workflow/workflowState';
 
 /**
  * The desktop's failure line (TaskDetailBody.tsx), for a failed resume that
@@ -15,6 +16,13 @@ export interface ResumeOffer {
   /** True while the task reads as Paused and the desktop offers Resume for it (see the gate below). */
   offered: boolean;
   attempt: ResumeAttempt | null;
+  /**
+   * Set instead of `offered` when the task's WORKFLOW is paused (protocol
+   * 0.21.0): the desktop refuses to resume one task of a paused workflow, so
+   * the session panel offers View workflow there, where Resume lives (design
+   * screen 5), and no surface offers Resume session.
+   */
+  pausedWorkflow: { workflowId: string; homeProjectId: string } | null;
 }
 
 /**
@@ -67,5 +75,20 @@ export function useResumeOffer(taskId: string | null, sessionId: string | null):
   // counts against an older one, whatever the entry holds.
   const streamCopyCounts =
     entry !== null && task !== null && typeof task.resumable === 'boolean' && task.session_id === entry.sessionId && entry.resumable;
-  return { offered: paused && (task?.resumable === true || streamCopyCounts), attempt };
+  const resumeOffered = paused && (task?.resumable === true || streamCopyCounts);
+  // Primitives, not the row's `workflow` object, which every snapshot replaces.
+  const workflowId = useBoardStore((state) => selectTaskRow(state, taskId)?.workflow?.id ?? null);
+  const workflowHomeProjectId = useBoardStore((state) => selectTaskRow(state, taskId)?.workflow?.project_id ?? null);
+  const workflowPaused = useBoardStore((state) => {
+    const workflow = selectTaskRow(state, taskId)?.workflow;
+    return workflow ? normalizeWorkflowState(workflow.state) === 'paused' : false;
+  });
+  const pausedWorkflow = useMemo(
+    () =>
+      resumeOffered && workflowPaused && workflowId !== null && workflowHomeProjectId !== null
+        ? { workflowId, homeProjectId: workflowHomeProjectId }
+        : null,
+    [resumeOffered, workflowPaused, workflowId, workflowHomeProjectId],
+  );
+  return { offered: resumeOffered && pausedWorkflow === null, attempt, pausedWorkflow };
 }

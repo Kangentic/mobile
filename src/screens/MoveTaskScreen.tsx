@@ -7,6 +7,8 @@ import { CapabilityError } from '@/channel';
 import { moveTaskOptimistic } from '@/connection/actions';
 import { findTaskById, selectColumnsOrdered, selectColumnTaskCount, useBoardStore } from '@/state/boardStore';
 import { triggerHaptic } from '@/lib/haptics';
+import { workflowMoveTargetIds } from '@/workflow/workflowMove';
+import { normalizeWorkflowState } from '@/workflow/workflowState';
 import {
   clampSheetContentHeight,
   LIST_FLOOR_HEIGHT,
@@ -15,6 +17,8 @@ import {
 
 /** The current column is not a target, so it recedes behind the choices. */
 const CURRENT_COLUMN_OPACITY = 0.55;
+/** A column a workflow refuses: the disabled strength every sheet row uses (SheetActionRow). */
+const REFUSED_COLUMN_OPACITY = 0.4;
 
 /**
  * Move a task to another column, as a native form sheet route.
@@ -55,7 +59,21 @@ export function MoveTaskScreen(): React.JSX.Element {
   const task = useBoardStore((state) => (taskId ? (findTaskById(state, taskId)?.task ?? null) : null));
   const columns = useMemo(() => (board ? selectColumnsOrdered(board) : []), [board]);
 
-  const [selectedColumnId, setSelectedColumnId] = useState<string | null>(null);
+  // The columns a hand may move this task to (protocol 0.21.0): every other
+  // column for an ordinary task; for a workflow task, the desktop's rule
+  // (workflowAllowsMove). A refused column stays listed and disabled, with no
+  // reason, as the desktop's menu keeps it (design sign-off, screens 3 to 5).
+  const allowedColumnIds = useMemo(() => (task ? workflowMoveTargetIds(task, columns) : new Set<string>()), [task, columns]);
+
+  const [chosenColumnId, setChosenColumnId] = useState<string | null>(null);
+  // A running workflow's human gate is chosen already (screen 4). Keyed on the
+  // gate itself, never on "one column open": a paused card on a three-column
+  // board has only Done open, and pre-choosing it would put the archive the
+  // hub refuses one tap away. A pick a newer row has since refused falls back
+  // to the gate, or to nothing.
+  const gateTargetId = task?.workflow && normalizeWorkflowState(task.workflow.state) === 'running' ? task.workflow.gate_target_id : null;
+  const gateColumnId = gateTargetId !== null && allowedColumnIds.has(gateTargetId) ? gateTargetId : null;
+  const selectedColumnId = chosenColumnId !== null && allowedColumnIds.has(chosenColumnId) ? chosenColumnId : gateColumnId;
   const [moveInFlight, setMoveInFlight] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -107,15 +125,16 @@ export function MoveTaskScreen(): React.JSX.Element {
           >
             {columns.map((column) => {
               const isCurrent = task?.swimlane_id === column.id;
+              const isRefused = !isCurrent && !allowedColumnIds.has(column.id);
               const isSelected = selectedColumnId === column.id;
               return (
                 <Pressable
                   key={column.id}
                   testID={`move-target-${column.id}`}
                   accessibilityRole="radio"
-                  accessibilityState={{ selected: isSelected, disabled: isCurrent }}
-                  disabled={isCurrent}
-                  onPress={() => setSelectedColumnId(column.id)}
+                  accessibilityState={{ selected: isSelected, disabled: isCurrent || isRefused }}
+                  disabled={isCurrent || isRefused}
+                  onPress={() => setChosenColumnId(column.id)}
                   // One highlight, for the user's pick: the current column is
                   // not a choice (you cannot move a task to where it is), so it
                   // fades with a quiet tag rather than wearing the accent too.
@@ -126,7 +145,7 @@ export function MoveTaskScreen(): React.JSX.Element {
                       minHeight: theme.minTouchSize,
                       paddingHorizontal: theme.spacing.md,
                       marginBottom: theme.spacing.xs,
-                      opacity: isCurrent ? CURRENT_COLUMN_OPACITY : 1,
+                      opacity: isCurrent ? CURRENT_COLUMN_OPACITY : isRefused ? REFUSED_COLUMN_OPACITY : 1,
                     },
                   ]}
                 >

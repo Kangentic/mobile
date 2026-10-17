@@ -16,10 +16,11 @@ import {
 } from '@/components';
 import { cardStatusFooter } from './CardStatusFooter';
 import type { CardSessionDisplay } from './cardSessionDisplay';
-import { ColumnStrip } from './ColumnStrip';
+import { ColumnStrip, type StripWorkflow } from './ColumnStrip';
 import type { ColumnTrackStep } from './columnTrack';
 import { computeVisibleLabelCount } from './labelFit';
 import { prChipAccessibilityLabel, prChipPresentation, type PrChipGlyph } from './prChipPresentation';
+import type { WorkflowWaitingFooter } from '@/workflow/workflowWaiting';
 
 /** Before the labels row's real width is measured (its first layout pass). */
 const FALLBACK_LABEL_LIMIT = 3;
@@ -94,13 +95,20 @@ export interface TaskCardProps {
    *
    * `waitingSinceMs` is `selectWaitingSince`: epoch ms the session first needed
    * the user, or null while it works. Shown at its `-wait` testID.
+   *
+   * A workflow task's board card draws the band too (protocol 0.21.0, design
+   * screen 1), naming its `workflow` where an Agents card names its project;
+   * see ColumnStrip.
    */
   columnStrip?: {
     column: BoardColumnWire | null;
     track: readonly ColumnTrackStep[];
     projectName: string | null;
+    workflow?: StripWorkflow | null;
     waitingSinceMs: number | null;
   };
+  /** A workflow task's wait in To Do, for the footer when its session has nothing to say (see cardStatusFooter). */
+  waiting?: WorkflowWaitingFooter | null;
   /**
    * Whether to render board/backlog reference chrome: the labels row and
    * the title row's PR chip (same category as the ticket number).
@@ -132,6 +140,7 @@ export function TaskCard({
   bodyNumberOfLines = 2,
   bodyMinHeight,
   columnStrip,
+  waiting = null,
   showMetaRow = true,
   onPress,
   onLongPress,
@@ -157,7 +166,7 @@ export function TaskCard({
   const hasPr = showMetaRow && task.pr_number !== null;
   const prChip = prChipPresentation(task.pr_state, task.pr_merge_readiness);
   const hasMetaRow = showMetaRow && task.labels.length > 0;
-  const footer = cardStatusFooter({ display: sessionDisplay, usage, testID });
+  const footer = cardStatusFooter({ display: sessionDisplay, usage, waiting, testID });
 
   return (
     <Card testID={testID} onPress={onPress} onLongPress={onLongPress}>
@@ -168,6 +177,7 @@ export function TaskCard({
           column={columnStrip.column}
           track={columnStrip.track}
           projectName={columnStrip.projectName}
+          workflow={columnStrip.workflow ?? null}
           waitingSinceMs={columnStrip.waitingSinceMs}
           waitTestID={`${testID}-wait`}
           testID={`${testID}-column`}

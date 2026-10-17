@@ -22,6 +22,7 @@ export function channelIdForCategory(category: PushCategory): string {
       return NEEDS_ATTENTION_CHANNEL_ID;
     case 'turn-complete':
     case 'plan-complete':
+    case 'workflow-complete':
       return COMPLETIONS_CHANNEL_ID;
     case 'session-failed':
       return FAILURES_CHANNEL_ID;
@@ -51,5 +52,9 @@ export function titleForCategory(category: PushCategory): string {
       return 'Plan complete';
     case 'spawn-stalled':
       return 'Still preparing';
+    // Every task of a workflow reached Done (protocol 0.21.0). The desktop's own
+    // wording; the body leads with the workflow's name.
+    case 'workflow-complete':
+      return 'Workflow complete';
   }
 }

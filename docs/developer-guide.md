@@ -535,24 +535,39 @@ patches/                     # patch-package patches, applied by the postinstall
 targets/nse/                 # iOS Notification Service Extension source (Swift), copied into the
                              #   generated Xcode project at prebuild, never committed under ios/
 app/                          # expo-router route wrappers (thin - render the src/screens/ implementation)
-  task/[taskId].tsx           # full-screen task view; file-diff.tsx hosts the per-file diff
+  task/[taskId]/              # the session view (index.tsx); file-diff.tsx hosts the per-file diff
+  create-task.tsx, edit-task.tsx, move-task.tsx, task-actions.tsx, project-picker.tsx,
+  section-filter.tsx          #   native form-sheet routes
+  command-terminal.tsx, command-terminals.tsx, command-terminal-actions.tsx
+                              #   an open Command Terminal, and its two form sheets
+  workflow.tsx, workflows.tsx # one workflow's view, and the Board header's Workflows sheet
 src/
-  screens/        # TriageHome, Board, task/ (TaskScreen + Conversation/Terminal/Changes tabs),
-                  #   FileDiff, Pairing (Scan/Confirm), Settings, Devices
+  screens/        # TriageHome, Board (+ board/: the board card, the header's Workflows button),
+                  #   task/ (TaskScreen + Conversation/Terminal/Changes tabs), workflow/ (the
+                  #   workflow view), Workflows sheet, FileDiff, Pairing (Scan/Confirm),
+                  #   Settings, Devices
   components/     # Design system + conversation/ cells and prompt cards, terminal/ xterm pane +
                   #   quick keys, board/ sheets, composer/, diff/ line cells
+  brand/          # Generated brand data (brandmark, Overseer frames, activity marks) -
+                  #   syncBranding.mjs owns it
   pairing/        # QR validation, device identity, the IKpsk0 pairing state machine, trust anchor storage
   channel/        # Relay WebSocket transport, KK session manager (responder), slot derivation,
                   #   capability client, typed verb client, feed router, subscription manager
   connection/     # Lifecycle composer: connect/dispose, bootstrap, store feed glue, actions API,
                   #   dev-only mockDesktop peer (EXPO_PUBLIC_KANGENTIC_MOCK)
+  navigation/     # The pending-navigation slot + PendingNavigationRunner: the only code that
+                  #   performs a navigation published from outside React
   conversation/   # Pure transcript-cell flattener, prompt keystrokes, pending-prompt summary
+  demo/           # The permanent reviewer/demo pairing (ships in release builds by design)
   devsupport/     # Loopback transport, protocol-faithful stub peer classes, wire fixtures -
                   #   shared by tests/unit and the mock desktop - plus claudeCapture.ts
                   #   (RECORDED Claude Code PTY output, generated) and recordedTerminal.ts
                   #   (its replay player)
   terminal/       # Pure liveTail cleaner, key sequences, WebView bridge, generated xterm.html
   diff/           # Pure unified-diff lines (jsdiff) + path display
+  workflow/       # Pure workflow rules ported from the desktop (protocol 0.21.0): state and
+                  #   color slot, who may move a card, the waiting footer, the list_workflows
+                  #   and get_workflow readers
   notifications/  # Push key + registration, E2E blob decrypt, notifee channels, background task,
                   #   local notifier, foreground service, tap routing, permission cache,
                   #   sharedKeychain (rich display on both platforms: Notifee's background

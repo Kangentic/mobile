@@ -858,7 +858,9 @@ export function SessionScreen(): React.JSX.Element {
   // quick keys go. A pause is not a swap (a respawn in flight carries a label,
   // which reads as preparing, never as paused), so the veil yields to it.
   const resumeOffer = useResumeOffer(taskId, displaySessionId);
-  const resumePanelShown = resumeOffer.offered && projectId !== null;
+  // A task of a paused workflow gets the same panel, holding View workflow in
+  // place of the Resume the desktop would refuse (design screen 5).
+  const resumePanelShown = (resumeOffer.offered || resumeOffer.pausedWorkflow !== null) && projectId !== null;
   // A failed Resume's line, wherever the user is looking: the terminal lens
   // has it in the Resume panel, so the footer carries it in the other two (a
   // Resume pressed from the header while on Chat otherwise failed in silence).
@@ -963,7 +965,12 @@ export function SessionScreen(): React.JSX.Element {
                 fitLayoutIsReference={!footerSwitcherOnly && !resumePanelShown}
               />
               {resumePanelShown && projectId !== null ? (
-                <ResumePanel taskId={taskId} projectId={projectId} attempt={resumeOffer.attempt} />
+                <ResumePanel
+                  taskId={taskId}
+                  projectId={projectId}
+                  attempt={resumeOffer.attempt}
+                  pausedWorkflow={resumeOffer.pausedWorkflow}
+                />
               ) : null}
             </View>
             <View

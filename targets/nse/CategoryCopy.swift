@@ -26,6 +26,9 @@ enum CategoryCopy {
       return "Plan complete"
     case "spawn-stalled":
       return "Still preparing"
+    // Every task of a workflow reached Done (protocol 0.21.0).
+    case "workflow-complete":
+      return "Workflow complete"
     default:
       return nil
     }

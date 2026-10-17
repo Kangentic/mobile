@@ -13,6 +13,7 @@ import type { AgentStatusKind } from '@/components/AgentStatusIcon';
 import { TaskCard } from '@/components/board/TaskCard';
 import { cardSessionDisplay, toCardSession } from '@/components/board/cardSessionDisplay';
 import { buildJourneyTrack } from '@/components/board/columnTrack';
+import { workflowStripLabel } from '@/workflow/workflowState';
 import {
   FEED_SECTION_ORDER,
   FEED_SECTION_TITLES,
@@ -687,9 +688,19 @@ const ActivityRow = React.memo(function ActivityRow({
   // the touch stand-in for the desktop card's "Idle for 4m" tooltip, so it
   // shows exactly where that tooltip exists: a running session waiting on you.
   const waitingSinceMs = isRunning ? selectWaitingSince(entry) : null;
+  // A workflow task's band names its workflow where the project would be
+  // (design screen 1, decision A1; the project is still spoken), and its track
+  // is the task's own route, so a column the route skips is not drawn.
+  const workflow = locatedTask?.workflow ?? null;
   const columnStrip = useMemo(
-    () => ({ column, track: buildJourneyTrack(boardColumns ?? [], column?.id ?? null), projectName, waitingSinceMs }),
-    [column, boardColumns, projectName, waitingSinceMs],
+    () => ({
+      column,
+      track: buildJourneyTrack(boardColumns ?? [], column?.id ?? null, workflow?.route ?? null),
+      projectName,
+      workflow: workflowStripLabel(workflow),
+      waitingSinceMs,
+    }),
+    [column, boardColumns, projectName, waitingSinceMs, workflow],
   );
 
   const section = sectionForEntry(entry);
@@ -930,9 +941,16 @@ const SessionlessTaskRow = React.memo(function SessionlessTaskRow({
   // Same reference-stable selectors as ActivityRow's band (see its note).
   const column = useBoardStore((state) => selectTaskColumn(state, task.id));
   const boardColumns = useBoardStore((state) => state.boardsByProjectId[projectId]?.columns ?? null);
+  const workflow = task.workflow ?? null;
   const columnStrip = useMemo(
-    () => ({ column, track: buildJourneyTrack(boardColumns ?? [], column?.id ?? null), projectName, waitingSinceMs: null }),
-    [column, boardColumns, projectName],
+    () => ({
+      column,
+      track: buildJourneyTrack(boardColumns ?? [], column?.id ?? null, workflow?.route ?? null),
+      projectName,
+      workflow: workflowStripLabel(workflow),
+      waitingSinceMs: null,
+    }),
+    [column, boardColumns, projectName, workflow],
   );
   const respawn = useActivityStore((state) => selectTaskRespawn(state, task.id));
   const sessionDisplay = cardSessionDisplay({ session: null, respawn, task });

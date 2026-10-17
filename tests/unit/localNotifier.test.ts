@@ -118,7 +118,14 @@ describe('startLocalNotifier', () => {
     useActivityStore.getState().reset();
     useBoardStore.getState().reset();
     useSettingsStore.setState({
-      pushCategoriesEnabled: { 'input-required': true, 'turn-complete': true, 'session-failed': true, 'plan-complete': true, 'spawn-stalled': true },
+      pushCategoriesEnabled: {
+        'input-required': true,
+        'turn-complete': true,
+        'session-failed': true,
+        'plan-complete': true,
+        'spawn-stalled': true,
+        'workflow-complete': true,
+      },
     });
     appStateMock.emit('active');
   });

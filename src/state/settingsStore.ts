@@ -167,6 +167,9 @@ const PUSH_CATEGORY_DEFAULTS: Record<PushCategory, boolean> = {
   'session-failed': true,
   'plan-complete': true,
   'spawn-stalled': false,
+  // Protocol 0.21.0. A stored map that predates it has no key for it, and an
+  // absent key keeps this default, so an upgrade switches it on.
+  'workflow-complete': true,
 };
 
 function defaultPushCategoriesEnabled(): Record<PushCategory, boolean> {

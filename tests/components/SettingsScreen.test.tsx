@@ -170,6 +170,7 @@ describe('SettingsScreen', () => {
         'session-failed': true,
         'plan-complete': true,
         'spawn-stalled': false,
+        'workflow-complete': true,
       },
       // The steady state for these tests: the app has already asked for
       // POST_NOTIFICATIONS at some point. The never-asked case is a distinct
@@ -428,6 +429,7 @@ describe('SettingsScreen', () => {
       'session-failed': true,
       'plan-complete': true,
       'spawn-stalled': false,
+      'workflow-complete': true,
     });
   });
 
@@ -435,6 +437,22 @@ describe('SettingsScreen', () => {
   it('shows the slow-starts category switched off by default', async () => {
     await renderSettings();
     expect(screen.getByTestId('settings-category-spawn-stalled').props.accessibilityState.checked).toBe(false);
+  });
+
+  /**
+   * Protocol 0.21.0's category gets its own row under "Alert me for", on by
+   * default, and its switch writes the store like every other row.
+   */
+  it('shows a Workflow complete row, on by default, that switches the category off', async () => {
+    await renderSettings();
+    const row = screen.getByTestId('settings-category-workflow-complete');
+    expect(row.props.accessibilityState.checked).toBe(true);
+    expect(screen.getByText('Workflow complete')).toBeTruthy();
+    expect(screen.getByText('When every task in a workflow reaches Done')).toBeTruthy();
+
+    await fireEvent.press(row);
+    expect(useSettingsStore.getState().pushCategoriesEnabled['workflow-complete']).toBe(false);
+    expect(screen.getByTestId('settings-category-workflow-complete').props.accessibilityState.checked).toBe(false);
   });
 
   it('resyncs the desktop registration when a category toggle changes', async () => {

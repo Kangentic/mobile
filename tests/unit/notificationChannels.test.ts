@@ -131,6 +131,8 @@ describe('notification channels', () => {
     expect(channels.channelIdForCategory('session-failed')).toBe('failures');
     expect(channels.channelIdForCategory('plan-complete')).toBe('completions');
     expect(channels.channelIdForCategory('spawn-stalled')).toBe('stalls');
+    // A completion like the other two, so no sixth channel.
+    expect(channels.channelIdForCategory('workflow-complete')).toBe('completions');
   });
 
   it('titleForCategory names each category, shared with the local notifier', async () => {
@@ -142,6 +144,7 @@ describe('notification channels', () => {
     expect(channels.titleForCategory('session-failed')).toBe('Session stopped');
     expect(channels.titleForCategory('plan-complete')).toBe('Plan complete');
     expect(channels.titleForCategory('spawn-stalled')).toBe('Still preparing');
+    expect(channels.titleForCategory('workflow-complete')).toBe('Workflow complete');
   });
 
   it('requestNotificationPermission maps the notifee authorization status to a boolean', async () => {
