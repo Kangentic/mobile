@@ -6,9 +6,11 @@ import { useCommandTerminalStore } from '@/state/commandTerminalStore';
 import { useDiffStore } from '@/state/diffStore';
 import { useReadingViewStore } from '@/state/readingViewStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
+import { useWorkflowStore } from '@/state/workflowStore';
 import { appendChunk, getBufferedData, retainTerminal } from '@/state/terminalFeed';
 import { useSettingsStore } from '@/state/settingsStore';
 import type { TranscriptEntryWire } from '@kangentic/protocol';
+import { workflowDetailFixture } from '../helpers/workflows';
 
 // vi.hoisted + vi.mock both hoist above the imports, so the actions module
 // always receives these fakes (same arrangement as snippetPeeks.test.ts).
@@ -68,6 +70,38 @@ describe('wipeDesktopContent', () => {
     expect(useCommandTerminalStore.getState().launchesById).toEqual({});
     expect(useCommandTerminalStore.getState().stopsBySessionId).toEqual({});
     expect(getBufferedData('s-1')).toBe('');
+  });
+
+  /**
+   * The workflow reads are keyed by the old desktop's workflow and project ids
+   * and carry its workflow titles and task names, and a refused Pause or Resume
+   * line outlives the screen that showed it, so an unpair or a desktop switch
+   * has to drop all four maps.
+   *
+   * Mutation seen failing: commenting out `useWorkflowStore.getState().reset()`
+   * in wipeDesktopContent ("expected { 'project-1': { entries, status } } to
+   * deeply equal {}" on listsByProjectId).
+   */
+  it('clears the workflow reads, the controls in flight and the refused-control lines', () => {
+    const workflowStore = useWorkflowStore.getState();
+    workflowStore.setList('project-1', [{ id: 'workflow-1', title: 'Secret rollout', state: 'running' }]);
+    workflowStore.setDetail('workflow-1', workflowDetailFixture({ title: 'Secret rollout' }));
+    // workflow-1 ends a Pause the desktop refused, so it holds a failure line;
+    // workflow-2 is still resuming, so it holds a control in flight.
+    workflowStore.beginControl('workflow-1', 'pausing');
+    workflowStore.endControl('workflow-1', 'The desktop refused the pause');
+    workflowStore.beginControl('workflow-2', 'resuming');
+    expect(Object.keys(useWorkflowStore.getState().listsByProjectId)).toEqual(['project-1']);
+    expect(Object.keys(useWorkflowStore.getState().detailsById)).toEqual(['workflow-1']);
+    expect(useWorkflowStore.getState().controlsById).toEqual({ 'workflow-2': 'resuming' });
+    expect(useWorkflowStore.getState().controlFailuresById).toEqual({ 'workflow-1': 'The desktop refused the pause' });
+
+    wipeDesktopContent();
+
+    expect(useWorkflowStore.getState().listsByProjectId).toEqual({});
+    expect(useWorkflowStore.getState().detailsById).toEqual({});
+    expect(useWorkflowStore.getState().controlsById).toEqual({});
+    expect(useWorkflowStore.getState().controlFailuresById).toEqual({});
   });
 
   it('clears the snippet peek caches, so a later pairing never serves the old desktop text', async () => {

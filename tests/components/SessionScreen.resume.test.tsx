@@ -1,5 +1,6 @@
 import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import type { BoardTaskWire } from '@kangentic/protocol';
 import { ThemeProvider } from '@/components';
 import { SessionScreen } from '@/screens/task/SessionScreen';
 import { useActivityStore } from '@/state/activityStore';
@@ -8,6 +9,7 @@ import { useResumeStore } from '@/state/resumeStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { boardColumnFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 import { resumeTaskSession } from '@/connection/actions';
+import { workflowWireFixture } from '../helpers/workflows';
 
 jest.mock('react-native-safe-area-context', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
@@ -86,13 +88,15 @@ const resumeTaskSessionMock = resumeTaskSession as jest.Mock;
 /**
  * `sessionId: null` is the board's report once the desktop has paused the
  * task: it clears the task's `session_id`. `resumable` is the board row's
- * Resume gate (protocol 0.16.0), `spawnProgress` its preparing label.
+ * Resume gate (protocol 0.16.0), `spawnProgress` its preparing label, and
+ * `workflow` the workflow the task belongs to (protocol 0.21.0).
  */
 function seedBoard({
   sessionId = 'sess-1',
   resumable = false,
   spawnProgress = null,
-}: { sessionId?: string | null; resumable?: boolean; spawnProgress?: string | null } = {}): void {
+  workflow = null,
+}: { sessionId?: string | null; resumable?: boolean; spawnProgress?: string | null; workflow?: BoardTaskWire['workflow'] } = {}): void {
   useBoardStore.setState({
     projects: [{ id: 'project-1', name: 'Alpha' }],
     boardsByProjectId: {
@@ -105,6 +109,7 @@ function seedBoard({
             swimlane_id: 'lane-review',
             resumable,
             spawn_progress: spawnProgress,
+            workflow,
           }),
         },
         snapshotAt: 0,
@@ -125,8 +130,8 @@ function seedBoard({
  * (the idle-timeout suspend's shape), and the subscribe snapshot carries the
  * stream's copy.
  */
-function seedPausedSession({ resumable }: { resumable: boolean }): void {
-  seedBoard({ resumable });
+function seedPausedSession({ resumable, workflow = null }: { resumable: boolean; workflow?: BoardTaskWire['workflow'] }): void {
+  seedBoard({ resumable, workflow });
   useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
   useActivityStore
     .getState()
@@ -184,6 +189,43 @@ describe('SessionScreen Resume (a paused session)', () => {
     expect(screen.queryByTestId('session-resume-panel')).toBeNull();
     expect(screen.queryByTestId('task-header-resume')).toBeNull();
     expect(screen.getByTestId('stub-session-input-bar').props.accessibilityValue).toEqual({ text: 'keys-shown' });
+  });
+
+  /**
+   * Protocol 0.21.0. The desktop refuses to resume ONE task of a paused
+   * workflow, so the panel the screen draws for such a task holds View workflow
+   * in place of Resume (design screen 5). The hook and the panel are pinned on
+   * their own (useResumeOffer, ResumePanel); this is the screen's wiring of the
+   * two: that the panel is shown at all when the hook offers no Resume, and that
+   * the hook's `pausedWorkflow` reaches it. The workflow's home project is
+   * deliberately not the screen's, so a push that carried the route's own
+   * project would not pass.
+   *
+   * Mutations seen failing: `resumePanelShown = resumeOffer.offered &&
+   * projectId !== null` (the gate without `|| resumeOffer.pausedWorkflow !==
+   * null`): the panel itself vanished ("Unable to find an element with testID:
+   * session-resume-panel", keys-shown in the dump). And `<ResumePanel>` without
+   * its `pausedWorkflow` prop: the Resume button drew in the panel ("expect(
+   * received).toBeNull()" on `session-resume-button`).
+   */
+  it('shows View workflow in the panel, not Resume, for a task of a paused workflow, and opens it on its home project', async () => {
+    seedPausedSession({
+      resumable: true,
+      workflow: workflowWireFixture({ id: 'workflow-9', project_id: 'project-home', state: 'paused' }),
+    });
+    await renderSessionScreen();
+
+    expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
+    expect(screen.queryByTestId('session-resume-button')).toBeNull();
+    expect(screen.getByTestId('session-view-workflow')).toBeTruthy();
+    expect(screen.getByTestId('stub-session-input-bar').props.accessibilityValue).toEqual({ text: 'keys-hidden' });
+
+    await fireEvent.press(screen.getByTestId('session-view-workflow'));
+    expect(mockRouter.push).toHaveBeenCalledWith({
+      pathname: '/workflow',
+      params: { workflowId: 'workflow-9', projectId: 'project-home' },
+    });
+    expect(resumeTaskSessionMock).not.toHaveBeenCalled();
   });
 
   it('reads "Resuming agent..." with a spinner, and takes no second tap, while the resume runs', async () => {

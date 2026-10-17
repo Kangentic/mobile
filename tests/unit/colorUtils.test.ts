@@ -4,7 +4,7 @@
  * accent guardrails, so their edge cases are locked here.
  */
 import { describe, expect, it } from 'vitest';
-import { contrastRatio, mixHex, parseHexColor, relativeLuminance } from '@/components/theme/color';
+import { contrastRatio, hexWithAlpha, mixHex, parseHexColor, relativeLuminance } from '@/components/theme/color';
 
 describe('parseHexColor', () => {
   it('parses six-digit hex into 0-255 channels', () => {
@@ -83,5 +83,42 @@ describe('mixHex', () => {
     expect(() => mixHex('#000000', '#ffffff', -0.1)).toThrow(/amount in \[0, 1\]/);
     expect(() => mixHex('#000000', '#ffffff', 1.1)).toThrow(/amount in \[0, 1\]/);
     expect(() => mixHex('#000000', '#ffffff', Number.NaN)).toThrow(/amount in \[0, 1\]/);
+  });
+});
+
+describe('hexWithAlpha', () => {
+  /**
+   * Mutation seen failing: swapping red and green in the template string
+   * (`rgba(${color.green}, ${color.red}, ...)`) turns the expected
+   * "rgba(57, 135, 229, 0.1)" into "rgba(135, 57, 229, 0.1)".
+   */
+  it('writes the channels in red, green, blue order with the alpha last', () => {
+    expect(hexWithAlpha('#3987e5', 0.1)).toBe('rgba(57, 135, 229, 0.1)');
+  });
+
+  it('reads shorthand and uppercase hex the way parseHexColor does', () => {
+    expect(hexWithAlpha('#a3c', 0.5)).toBe('rgba(170, 51, 204, 0.5)');
+    expect(hexWithAlpha('#E8A33D', 0.25)).toBe('rgba(232, 163, 61, 0.25)');
+  });
+
+  it('accepts the two ends of the alpha range', () => {
+    expect(hexWithAlpha('#000000', 0)).toBe('rgba(0, 0, 0, 0)');
+    expect(hexWithAlpha('#ffffff', 1)).toBe('rgba(255, 255, 255, 1)');
+  });
+
+  /**
+   * Mutation seen failing: dropping `!Number.isFinite(alpha) ||` from the guard.
+   * NaN passes both range comparisons, so the NaN line is the one that fails
+   * ("expected [Function] to throw an error").
+   */
+  it('throws on an alpha outside [0, 1] or not a number', () => {
+    expect(() => hexWithAlpha('#3987e5', 1.5)).toThrow(/alpha in \[0, 1\]/);
+    expect(() => hexWithAlpha('#3987e5', -0.1)).toThrow(/alpha in \[0, 1\]/);
+    expect(() => hexWithAlpha('#3987e5', Number.NaN)).toThrow(/alpha in \[0, 1\]/);
+  });
+
+  it('throws on a color that is not a plain hex color', () => {
+    expect(() => hexWithAlpha('#zzz', 0.5)).toThrow(/valid hex color/);
+    expect(() => hexWithAlpha('red', 0.5)).toThrow(/valid hex color/);
   });
 });
