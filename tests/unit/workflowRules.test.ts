@@ -16,9 +16,9 @@ import {
   workflowSlotNumber,
   workflowStateLabel,
   workflowStripLabel,
-} from '@/workflow/workflowState';
-import { workflowWaitingFooter } from '@/workflow/workflowWaiting';
+} from '@/workflow/workflowState';import { workflowWaitingFooter } from '@/workflow/workflowWaiting';
 import {
+  WORKFLOW_DONE_SECTION_KEY,
   groupWorkflowMembers,
   parseWorkflowDetail,
   parseWorkflowList,
@@ -361,6 +361,76 @@ describe('groupWorkflowMembers (design V6)', () => {
     });
     expect(sections.map((section) => section.name)).toEqual(['To Do']);
     expect(sections[0]?.members).toHaveLength(2);
+  });
+
+  it("files a task whose live row sits in a Done column under Done, whatever the workflow's older read said", () => {
+    const members = [
+      memberFixture({ key: '#15', taskId: 'task-15', columnName: 'Doing', place: 'working' }),
+      memberFixture({ key: '#16', taskId: 'task-16', columnName: 'Doing', place: 'working' }),
+    ];
+    const liveRow = boardTaskFixture({ id: 'task-15', swimlane_id: 'lane-done' });
+    const sections = groupWorkflowMembers({
+      detail: detailOf(members),
+      columnsByProjectId: { 'project-1': columns },
+      rowFor: (member) => (member.taskId === 'task-15' ? liveRow : null),
+    });
+    expect(sections.map((section) => section.name)).toEqual(['Doing', 'Done']);
+    expect(sections[1]?.key).toBe(WORKFLOW_DONE_SECTION_KEY);
+    expect(sections[1]?.members.map((member) => member.key)).toEqual(['#15']);
+  });
+
+  it('files an archived task under Done even though its live row still names a working column', () => {
+    const members = [memberFixture({ key: '#15', taskId: 'task-15', columnName: 'Doing', place: 'working' })];
+    const archivedRow = boardTaskFixture({ id: 'task-15', swimlane_id: 'lane-doing', archived_at: '2026-10-16T12:00:00.000Z' });
+    const sections = groupWorkflowMembers({ detail: detailOf(members), columnsByProjectId: { 'project-1': columns }, rowFor: () => archivedRow });
+    expect(sections.map((section) => section.key)).toEqual([WORKFLOW_DONE_SECTION_KEY]);
+  });
+
+  it("puts a column only another board has after the home board's columns, and Done last of all", () => {
+    const otherColumns = [
+      boardColumnFixture({ id: 'other-qa', name: 'QA', role: null, position: 0 }),
+      boardColumnFixture({ id: 'other-done', name: 'Shipped', role: 'done', position: 1 }),
+    ];
+    const members = [
+      memberFixture({ key: '#2', displayId: 2, taskId: 'task-2', projectId: 'project-other', board: 'storefront', columnName: 'QA' }),
+      memberFixture({ key: '#3', displayId: 3, taskId: 'task-3', projectId: 'project-other', board: 'storefront', columnName: 'Shipped', place: 'done' }),
+      memberFixture({ key: '#15', displayId: 15, taskId: 'task-15', columnName: 'Review' }),
+    ];
+    const sections = groupWorkflowMembers({
+      detail: detailOf(members),
+      columnsByProjectId: { 'project-1': columns, 'project-other': otherColumns },
+      rowFor: () => null,
+    });
+    // Home order puts Review first, the foreign QA column follows, and Done closes even
+    // though the home board's own Done column (index 3) would otherwise rank before QA.
+    expect(sections.map((section) => section.name)).toEqual(['Review', 'QA', 'Done']);
+    // The Done heading takes the HOME board's Done column, not the other board's name for it.
+    expect(sections[2]?.column?.id).toBe('lane-done');
+  });
+
+  it('merges a working column of the same name across boards into one section', () => {
+    const otherColumns = [boardColumnFixture({ id: 'other-doing', name: 'Doing', role: null, position: 0 })];
+    const members = [
+      memberFixture({ key: '#15', displayId: 15, taskId: 'task-15', columnName: 'Doing' }),
+      memberFixture({ key: '#2', displayId: 2, taskId: 'task-2', projectId: 'project-other', board: 'storefront', columnName: 'Doing' }),
+    ];
+    const sections = groupWorkflowMembers({
+      detail: detailOf(members),
+      columnsByProjectId: { 'project-1': columns, 'project-other': otherColumns },
+      rowFor: () => null,
+    });
+    expect(sections).toHaveLength(1);
+    expect(sections[0]?.members.map((member) => member.key)).toEqual(['#2', '#15']);
+  });
+
+  it('orders equal-depth tasks by number, an unnumbered task last, then by title', () => {
+    const members = [
+      memberFixture({ key: 'plan-b', taskId: null, displayId: null, place: 'planned', title: 'Bravo', columnName: 'To Do (created at Start)' }),
+      memberFixture({ key: 'plan-a', taskId: null, displayId: null, place: 'planned', title: 'Alpha', columnName: 'To Do (created at Start)' }),
+      memberFixture({ key: '#9', displayId: 9, taskId: 'task-9', place: 'todo', title: 'Zulu', columnName: 'To Do' }),
+    ];
+    const sections = groupWorkflowMembers({ detail: detailOf(members, 'draft'), columnsByProjectId: { 'project-1': columns }, rowFor: () => null });
+    expect(sections[0]?.members.map((member) => member.key)).toEqual(['#9', 'plan-a', 'plan-b']);
   });
 });
 
