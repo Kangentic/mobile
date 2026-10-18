@@ -218,6 +218,49 @@ describe('boardStore', () => {
     expect(useBoardStore.getState().boardsByProjectId['project-1'].tasksById['task-1'].title).toBe('Fix the login bug');
   });
 
+  it('optimistic automations flip applies at once, survives a racing snapshot, and rolls back to the previous boolean', () => {
+    useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
+    const editId = useBoardStore.getState().applyOptimisticTaskEdit({
+      projectId: 'project-1',
+      taskId: 'task-2',
+      automationsDisabled: true,
+    });
+    expect(editId).not.toBeNull();
+    expect(useBoardStore.getState().boardsByProjectId['project-1'].tasksById['task-2'].automations_disabled).toBe(true);
+
+    // A snapshot from before the write landed still reads false; the pending flip wins.
+    useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
+    expect(useBoardStore.getState().boardsByProjectId['project-1'].tasksById['task-2'].automations_disabled).toBe(true);
+
+    if (editId) useBoardStore.getState().rollbackTaskEdit(editId);
+    expect(useBoardStore.getState().boardsByProjectId['project-1'].tasksById['task-2'].automations_disabled).toBe(false);
+    expect(useBoardStore.getState().pendingEdits).toEqual([]);
+  });
+
+  /**
+   * A rollback restores only what the edit touched. It used to restore the
+   * title and description whatever the edit was, so a refused automations
+   * flip (or a refused title edit) put back a description, or here a title,
+   * that a snapshot had changed while the write was in flight.
+   */
+  it('rollback leaves a field the edit never touched as the latest snapshot has it', () => {
+    useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
+    const editId = useBoardStore.getState().applyOptimisticTaskEdit({
+      projectId: 'project-1',
+      taskId: 'task-2',
+      automationsDisabled: true,
+    });
+
+    const renamedSnapshot = snapshotWithTasks();
+    renamedSnapshot.tasks = renamedSnapshot.tasks.map((task) => (task.id === 'task-2' ? { ...task, title: 'Renamed on the desktop' } : task));
+    useBoardStore.getState().applyBoardSnapshot(renamedSnapshot);
+
+    if (editId) useBoardStore.getState().rollbackTaskEdit(editId);
+    const task = useBoardStore.getState().boardsByProjectId['project-1'].tasksById['task-2'];
+    expect(task.title).toBe('Renamed on the desktop');
+    expect(task.automations_disabled).toBe(false);
+  });
+
   it('optimistic removal hides immediately, commit finalizes, rollback restores the card', () => {
     useBoardStore.getState().applyBoardSnapshot(snapshotWithTasks());
     const removalId = useBoardStore.getState().applyOptimisticRemoval({ projectId: 'project-1', taskId: 'task-2' });

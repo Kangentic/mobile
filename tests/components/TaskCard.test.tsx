@@ -1,9 +1,10 @@
 import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
-import { View } from 'react-native';
+import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import type { TestInstance } from 'test-renderer';
 import * as Reanimated from 'react-native-reanimated';
 import {
+  Ban,
   CirclePause,
   GitMerge,
   GitMergeConflict,
@@ -17,6 +18,8 @@ import { ThemeProvider } from '@/components';
 import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
 import { darkTerminalTheme } from '@/components/theme/tokens';
 import { TaskCard, type TaskCardProps } from '@/components/board/TaskCard';
+import { AUTOMATIONS_DISABLED_DESCRIPTION } from '@/components/board/CardStrip';
+import { COLUMN_STRIP_HEIGHT } from '@/components/board/ColumnStrip';
 import { PR_READINESS_FRESHNESS_CAVEAT } from '@/components/board/prChipPresentation';
 import { boardColumnFixture, boardTaskFixture, usageFixture } from '@/devsupport/desktopFixtures';
 import { getLucideGlyph, lucideGlyphs } from '../helpers/lucideGlyphs';
@@ -786,6 +789,50 @@ describe('TaskCard', () => {
       const snippet = screen.getByTestId(`${BASE_TEST_ID}-snippet`);
       const slot = findAncestorWithHeight(snippet, BODY_HEIGHT);
       expect(slot).toBeTruthy();
+    });
+  });
+
+  /**
+   * The desktop's "Automations disabled" strip (protocol 0.22.0,
+   * task-card-view.tsx): the column strip's own shell, the Ban glyph in the
+   * muted text color with no hue of its own, and the desktop's tooltip as what
+   * a screen reader hears, since a phone has no hover.
+   */
+  describe('automations strip', () => {
+    const AUTOMATIONS_STRIP = `${BASE_TEST_ID}-automations-disabled`;
+
+    it('draws the desktop strip across a held card', async () => {
+      await renderTaskCard({ automationsDisabled: true });
+      const strip = screen.getByTestId(AUTOMATIONS_STRIP);
+      expect(strip).toHaveTextContent('Automations disabled');
+      expect(strip.props.accessibilityLabel).toBe(AUTOMATIONS_DISABLED_DESCRIPTION);
+      const glyph = getLucideGlyph(screen.getByTestId(`${AUTOMATIONS_STRIP}-icon`), Ban);
+      expect(glyph.props.stroke).toBe(darkTerminalTheme.colors.textMuted);
+      expect(glyph.props.strokeWidth).toBe(2);
+    });
+
+    it("wears the column strip's shell, so the two bands cannot drift", async () => {
+      await renderTaskCard({ automationsDisabled: true });
+      const strip = StyleSheet.flatten(screen.getByTestId(AUTOMATIONS_STRIP).props.style as StyleProp<ViewStyle>) as ViewStyle;
+      expect(strip.height).toBe(COLUMN_STRIP_HEIGHT);
+      expect(strip.backgroundColor).toBe(darkTerminalTheme.colors.surfaceInset);
+      expect(strip.marginTop).toBe(-darkTerminalTheme.spacing.md);
+      expect(strip.marginHorizontal).toBe(-darkTerminalTheme.spacing.md);
+    });
+
+    it('draws no strip for a task whose automations run', async () => {
+      await renderTaskCard();
+      expect(screen.queryByTestId(AUTOMATIONS_STRIP)).toBeNull();
+    });
+
+    /** One slot holds one band. A workflow task never carries the flag, but the slot rule must not depend on that. */
+    it('leaves the slot to the column strip when a card passes both', async () => {
+      await renderTaskCard({
+        automationsDisabled: true,
+        columnStrip: { column: null, track: [], projectName: 'storefront-web', waitingSinceMs: null },
+      });
+      expect(screen.getByTestId(`${BASE_TEST_ID}-column`)).toBeTruthy();
+      expect(screen.queryByTestId(AUTOMATIONS_STRIP)).toBeNull();
     });
   });
 });

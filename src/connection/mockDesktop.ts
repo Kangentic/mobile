@@ -2178,6 +2178,11 @@ export function initialTasks(): BoardTaskWire[] {
       // on this palette is the true yellow `warning` rather than the brand
       // amber (see the two-hue rule in theme/tokens.ts).
       pr_merge_readiness: 'blocked',
+      // The held card (protocol 0.22.0): its column automations are off, so
+      // `dev:mock` shows the "Automations disabled" strip and the menu's
+      // Enable automations. In Merge because the store screenshots photograph
+      // only Executing, and the Agents feed draws no sessionless task.
+      automations_disabled: true,
       created_at: nowIso,
       updated_at: nowIso,
     }),
@@ -4903,11 +4908,24 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
           return ok(request, { result: { created: created.id } });
         }
         if (payload.tool === 'update_task') {
-          const params = (payload.params ?? {}) as { taskId?: string; title?: string; description?: string };
+          const params = (payload.params ?? {}) as { taskId?: string; title?: string; description?: string; automationsDisabled?: unknown };
+          // The automations switch (protocol 0.22.0), checked the way the
+          // desktop's handleUpdateTask checks it, in its words, and before
+          // anything is written: a truthy string must not disable a task, and
+          // only `true` is refused for a workflow task, whose workflow's Pause
+          // holds it instead.
+          const automationsDisabled = params.automationsDisabled;
+          if (automationsDisabled !== undefined && automationsDisabled !== null && typeof automationsDisabled !== 'boolean') {
+            return failWith(request, 'automationsDisabled must be true or false.');
+          }
           const located = locateTask(params.taskId);
           if (!located) return failWith(request, `No such task: ${params.taskId}`);
+          if (automationsDisabled === true && mockWorkflowWire(located.task) !== null) {
+            return failWith(request, 'This task is in a workflow. Pause the workflow to hold it. The task was not updated.');
+          }
           if (typeof params.title === 'string') located.task.title = params.title;
           if (typeof params.description === 'string') located.task.description = params.description;
+          if (typeof automationsDisabled === 'boolean') located.task.automations_disabled = automationsDisabled;
           located.task.updated_at = new Date().toISOString();
           later(50, () => {
             emit({ kind: 'board', projectId: located.projectId, taskId: located.task.id, payload: { change: 'task-updated', ids: [located.task.id] } });

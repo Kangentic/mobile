@@ -11,15 +11,19 @@ import type { TestInstance } from 'test-renderer';
  * `lucide-git-pull-request` never matches `lucide-git-pull-request-closed`.
  * Lucide hands its `color` prop to that host root as `stroke`.
  *
- * The kebab-casing splits only before an uppercase letter, which is right for
- * every glyph the suites use today. A name with a letter-to-digit boundary
- * (lucide's `Layers2` is `lucide-layers-2`) would need that boundary split too;
- * a miss shows up as "found 0", never as a false pass.
+ * The kebab-casing splits before an uppercase letter and between a letter and
+ * a digit: lucide's `Columns3Cog` is `lucide-columns-3-cog`, and `Layers2` is
+ * `lucide-layers-2`. A digit followed by a lowercase letter stays joined, as
+ * in `Grid2x2` (`lucide-grid-2x2`). A miss shows up as "found 0", never as a
+ * false pass.
  */
 export function lucideGlyphs(root: TestInstance, glyph: LucideIcon): TestInstance[] {
   const iconName = glyph.displayName;
   if (iconName === undefined) throw new Error('A lucide icon always carries a displayName.');
-  const glyphClass = `lucide-${iconName.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()}`;
+  const glyphClass = `lucide-${iconName
+    .replace(/([a-zA-Z])([0-9])/g, '$1-$2')
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .toLowerCase()}`;
   return root.queryAll(
     (node) => typeof node.props.className === 'string' && node.props.className.split(' ').includes(glyphClass),
   );

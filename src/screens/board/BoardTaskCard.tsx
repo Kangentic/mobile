@@ -76,7 +76,9 @@ export function useOpenBoardTask(task: BoardTaskWire, projectId: string): () => 
  *   has waited on you. Its body is the agent's last line while a session runs,
  *   as on the Agents feed, and nothing otherwise.
  *
- * A workflow task waiting in To Do also gets the desktop's waiting footer.
+ * A workflow task waiting in To Do also gets the desktop's waiting footer, and
+ * a task whose column automations are disabled (protocol 0.22.0) gets the
+ * desktop's "Automations disabled" strip in the band's slot.
  */
 export const BoardTaskCard = React.memo(function BoardTaskCard({
   task,
@@ -157,6 +159,7 @@ export const BoardTaskCard = React.memo(function BoardTaskCard({
       bodyNumberOfLines={CARD_DESCRIPTION_LINES}
       columnStrip={columnStrip}
       waiting={waiting}
+      automationsDisabled={task.automations_disabled === true}
       onPress={openTask}
       onLongPress={onLongPress}
     />

@@ -72,14 +72,17 @@ export function boardTaskFixture(overrides: Partial<BoardTaskWire> = {}): BoardT
     created_at: '2026-07-13T00:00:00.000Z',
     updated_at: '2026-07-13T00:00:00.000Z',
     // Protocol 0.16.0 sends the first two on every row (no spawn in flight,
-    // nothing to resume), 0.17.0 the third (nothing paused) and 0.18.0 the
-    // fourth (no live session to pause). An older desktop's row parses them as
-    // null, which every reader treats exactly as these values; a test of that
-    // fallback overrides them.
+    // nothing to resume), 0.17.0 the third (nothing paused), 0.18.0 the
+    // fourth (no live session to pause) and 0.22.0 the fifth (column
+    // automations on). An older desktop's row parses them as null, which every
+    // reader but the last treats exactly as these values; the automations
+    // switch is offered only once the row says which way it is set. A test of
+    // that fallback overrides them.
     spawn_progress: null,
     resumable: false,
     paused: false,
     pausable: false,
+    automations_disabled: false,
     ...overrides,
   };
 }

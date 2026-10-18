@@ -610,6 +610,37 @@ resumes them. Planning, starting and deleting a workflow stay on the desktop.
   workflow's tasks by board column in board order (the desktop canvas's cards, read like the
   board), ordered inside a column by dependency depth, the canvas's own layering.
 
+## Automations switch
+
+The desktop can hold one task's column automations: no On task enter, On agent turn end or On
+task exit row runs for it, and a move types no column message (protocol 0.22.0, task #119; the
+design was signed off on 2026-10-18). The phone shows the switch and flips it. Editing a column's
+automations stays on the desktop (`set_automations` is not on the board-tool allowlist).
+
+- **What the board rows say.** `BoardTaskWire.automations_disabled` is a nullable boolean. Null
+  or absent means a desktop older than the field, which the phone treats as "cannot tell", not
+  as "on": the strip draws only on `true`, and the menu row is left out. Every change, from any hand (the desktop card or Agent Monitor menu, MCP, the phone,
+  or the desktop's own clears when a task leaves Done, is restored, or joins a workflow), reaches
+  the phone as a `task-updated` board event, so a subscribed board re-reads it with no extra
+  wiring.
+- **The strip.** A held task's Board card draws the desktop's "Automations disabled" strip
+  (`AutomationsDisabledStrip`) in the band's slot, in the same shell as the column strip
+  (`src/components/board/CardStrip.tsx`, the desktop's `CardStrip`). It has no hue. The Agents
+  feed draws none, as the desktop's Agent Monitor rows draw none: its cards always carry their
+  own band, and one slot holds one band. A workflow task never carries the flag.
+- **The menu row.** The long-press hub (`TaskActionsScreen`, reached from the Board, the Agents
+  feed and the session header) offers Disable automations (`Ban`) or Enable automations
+  (`Columns3Cog`), in View workflow's slot, since the two never show together. The row is LEFT
+  OUT, not disabled, for a workflow task (its workflow's Pause holds it, and the desktop refuses
+  `true` for one) and for a row whose field is not a boolean.
+- **The write.** There is no verb: it is the existing `board-tool-write` `update_task` with the
+  camelCase `automationsDisabled` param (the desktop ignores the row's snake_case spelling as an
+  unknown key). It never restarts the session. `updateTaskFields` applies it optimistically
+  through the board store's pending edits, which a racing snapshot re-applies and a refusal
+  rolls back, touching only the fields the edit named. The sheet closes once the desktop
+  accepts; a refusal stays in the sheet with the desktop's sentence, since the phone has no
+  toasts.
+
 ## Notification pipeline
 
 1. The desktop POSTs directly to Expo's push API (no maintainer server in the data path). FCM
