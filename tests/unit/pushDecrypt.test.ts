@@ -15,10 +15,22 @@ import {
   type PushEnvelopePlaintext,
 } from '@kangentic/protocol';
 
-const secureStoreState = vi.hoisted(() => ({ storedValues: new Map<string, string>() }));
+/**
+ * `rejectingReadKeys` makes a read of that key throw, as a Keychain item that is
+ * unreadable (a locked device) does. A set keyed on the item rather than a
+ * mockImplementationOnce on purpose: decryptPushBlob reads `push.decrypt.key`
+ * before it ever asks for the identity, so a once-stub would reject the wrong read.
+ */
+const secureStoreState = vi.hoisted(() => ({
+  storedValues: new Map<string, string>(),
+  rejectingReadKeys: new Set<string>(),
+}));
 
 vi.mock('expo-secure-store', () => ({
-  getItemAsync: vi.fn(async (key: string) => secureStoreState.storedValues.get(key) ?? null),
+  getItemAsync: vi.fn(async (key: string) => {
+    if (secureStoreState.rejectingReadKeys.has(key)) throw new Error('keychain item unreadable');
+    return secureStoreState.storedValues.get(key) ?? null;
+  }),
   setItemAsync: vi.fn(async (key: string, value: string) => {
     secureStoreState.storedValues.set(key, value);
   }),
@@ -443,15 +455,22 @@ describe('pushPayloadCarriesClear and extractClearFromTaskData', () => {
  * Mutation that reddens the first case: drop the shared-copy read from
  * getPushIdentityPublicKey. Seen red (null: the persisted secret is another
  * identity's, so the AAD no longer matches).
+ *
+ * Mutation that reddens the throwing-read case: remove the try/catch around
+ * that shared-copy read. Seen red (null: the rejection escapes to
+ * decryptPushBlob's own catch, so the push degrades to the placeholder instead
+ * of opening).
  */
 describe('getPushIdentityPublicKey with no active connection', () => {
   beforeEach(() => {
     vi.resetModules();
     secureStoreState.storedValues.clear();
+    secureStoreState.rejectingReadKeys.clear();
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    secureStoreState.rejectingReadKeys.clear();
   });
 
   it('reads the shared copy the extension uses before the identity secret, where there is a shared group', async () => {
@@ -466,6 +485,28 @@ describe('getPushIdentityPublicKey with no active connection', () => {
 
     const blob = sealPushEnvelope(pushKey, registered.publicKey, plaintextFixture());
     expect((await pushDecrypt.decryptPushBlob(blob))?.data.sessionId).toBe('sess-1');
+  });
+
+  it('falls back to the device identity when the shared copy cannot be read', async () => {
+    vi.stubEnv('EXPO_PUBLIC_KANGENTIC_IOS_KEYCHAIN_GROUP', 'TEAMID.com.kangentic.mobile.shared');
+    const pushKey = randomBytes(32);
+    const registered = generateX25519KeyPair();
+    const deviceIdentity = generateX25519KeyPair();
+    secureStoreState.storedValues.set('push.decrypt.key', bytesToHex(pushKey));
+    // A perfectly good shared copy for a DIFFERENT identity, so only the throw (not an
+    // absent item) explains the envelope sealed to the device identity opening.
+    secureStoreState.storedValues.set('push.identity.pk', bytesToHex(registered.publicKey));
+    secureStoreState.storedValues.set('device.identity.sk', bytesToHex(deviceIdentity.secretKey));
+    secureStoreState.rejectingReadKeys.add('push.identity.pk');
+    const secureStoreModule = await import('expo-secure-store');
+    const { pushDecrypt } = await loadModules();
+
+    const decrypted = await pushDecrypt.decryptPushBlob(sealPushEnvelope(pushKey, deviceIdentity.publicKey, plaintextFixture()));
+
+    // The shared read really was attempted and threw: a skipped read would pass for the wrong reason.
+    expect(vi.mocked(secureStoreModule.getItemAsync).mock.calls.map(([key]) => key)).toContain('push.identity.pk');
+    expect(decrypted).not.toBeNull();
+    expect(decrypted?.data.sessionId).toBe('sess-1');
   });
 
   it('never reads that copy without a shared group (every Android build)', async () => {

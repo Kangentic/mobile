@@ -818,8 +818,9 @@ describe('SettingsScreen', () => {
     });
 
     /**
-     * iOS never registers the task at all (it is Android-only by design), so
-     * 'pending' must read as "nothing to report", not as a failure.
+     * iOS registers the task for sealed clears only and never moves its status
+     * off 'pending', so 'pending' must read as "nothing to report", not as a
+     * failure.
      */
     it('leaves the registration status alone while the task status is pending', async () => {
       mockGetPushRegistrationStatus.mockReturnValue('capability-denied');
@@ -832,8 +833,8 @@ describe('SettingsScreen', () => {
     /**
      * THE STEADY STATE OF EVERY WORKING iOS INSTALL, and the case that pins the
      * override's PRECISION rather than its existence. Registration succeeds
-     * while the receive task stays 'pending' forever, because it is only ever
-     * registered on Android.
+     * while the receive task stays 'pending' forever, because its status only
+     * ever moves on Android.
      *
      * The case above cannot catch this: it pairs 'pending' with a registration
      * status that already fails the second half of the guard, so it passes even

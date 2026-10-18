@@ -1,5 +1,5 @@
 import * as SecureStore from 'expo-secure-store';
-import { bytesToHex, hexToBytes, randomBytes } from '@kangentic/protocol';
+import { bytesToHex, hexToBytes, randomBytes, X25519_KEY_LENGTH } from '@kangentic/protocol';
 // Imported rather than re-reading EXPO_PUBLIC_KANGENTIC_NSE_PROBE inline: two
 // copies of the flag name in two gates is how a rename silently disarms one of
 // them. nseProbeVectors.ts is kept free of notifee and SecureStore precisely so
@@ -35,6 +35,13 @@ const DEVICE_BOUND_STORAGE_OPTIONS: SecureStore.SecureStoreOptions = {
 
 let cachedPushKey: Uint8Array | null = null;
 let inFlightPushKey: Promise<Uint8Array> | null = null;
+/**
+ * The shared identity copy getNsePushIdentityPublicKeyIfExists read or
+ * persistNsePushIdentityPublicKey wrote, so a pass that decrypts every
+ * presented alert does not re-read the Keychain once per alert. Dropped with
+ * the push key, by the same generation bump.
+ */
+let cachedNsePushIdentityPublicKey: Uint8Array | null = null;
 /**
  * Bumped by clearPushRegistration so a load that was already in flight when
  * the wipe landed cannot write its now-deleted key back into the cache.
@@ -194,11 +201,15 @@ async function readStoredPushKeyHex(): Promise<string | null> {
  */
 export async function persistNsePushIdentityPublicKey(identityPublicKey: Uint8Array): Promise<void> {
   if (!usesSharedKeychain()) return;
+  const generationAtWriteStart = pushKeyGeneration;
   await SecureStore.setItemAsync(
     PUSH_IDENTITY_PUBLIC_KEY_STORAGE_KEY,
     bytesToHex(identityPublicKey),
     sharedPushStorageOptions(),
   );
+  // Write-through, so a read that was in flight across this write returns the
+  // new copy rather than caching the one it replaced. Not after an unpair.
+  if (generationAtWriteStart === pushKeyGeneration) cachedNsePushIdentityPublicKey = identityPublicKey;
 }
 
 /**
@@ -214,15 +225,21 @@ export async function persistNsePushIdentityPublicKey(identityPublicKey: Uint8Ar
  * written there, so the read is skipped rather than attempted), when nothing is
  * stored, when the stored value is the wrong length, or when an unpair landed
  * while the read was in flight (the same unpair-wins rule as getPushKeyIfExists).
+ * Only a key is cached, never a null, so a read that found nothing (or threw,
+ * with the phone locked) is tried again on the next call.
  */
 export async function getNsePushIdentityPublicKeyIfExists(): Promise<Uint8Array | null> {
   if (!usesSharedKeychain()) return null;
+  if (cachedNsePushIdentityPublicKey) return cachedNsePushIdentityPublicKey;
   const generationAtLoadStart = pushKeyGeneration;
   const storedPublicKeyHex = await SecureStore.getItemAsync(PUSH_IDENTITY_PUBLIC_KEY_STORAGE_KEY, sharedPushStorageOptions());
+  if (generationAtLoadStart !== pushKeyGeneration) return null;
+  // A write that landed while this read was in flight is newer than what it read.
+  if (cachedNsePushIdentityPublicKey) return cachedNsePushIdentityPublicKey;
   if (!storedPublicKeyHex) return null;
   const identityPublicKey = hexToBytes(storedPublicKeyHex);
-  if (identityPublicKey.length !== PUSH_KEY_LENGTH) return null;
-  if (generationAtLoadStart !== pushKeyGeneration) return null;
+  if (identityPublicKey.length !== X25519_KEY_LENGTH) return null;
+  cachedNsePushIdentityPublicKey = identityPublicKey;
   return identityPublicKey;
 }
 
@@ -251,13 +268,14 @@ export async function seedSharedPushKeysForProbe(pushKey: Uint8Array, identityPu
   if (!usesSharedKeychain()) {
     throw new Error('No shared Keychain group is configured, so there is nowhere the extension could read a seeded key from');
   }
-  if (pushKey.length !== PUSH_KEY_LENGTH || identityPublicKey.length !== PUSH_KEY_LENGTH) {
+  if (pushKey.length !== PUSH_KEY_LENGTH || identityPublicKey.length !== X25519_KEY_LENGTH) {
     throw new Error(`Probe vectors must be ${PUSH_KEY_LENGTH} bytes each`);
   }
   // The decrypt path must read the seeded key, never a generated one cached
   // earlier in this process: same invalidation as clearPushRegistration.
   pushKeyGeneration += 1;
   cachedPushKey = null;
+  cachedNsePushIdentityPublicKey = null;
   // These two writes are NOT atomic, and that residual is accepted rather than
   // guarded: if the first lands and the second throws, the shared group holds a
   // seeded decrypt key beside a stale identity key. That degrades safely - the
@@ -294,6 +312,7 @@ export async function setLastRegisteredExpoToken(expoPushToken: string): Promise
 export async function clearPushRegistration(): Promise<void> {
   pushKeyGeneration += 1;
   cachedPushKey = null;
+  cachedNsePushIdentityPublicKey = null;
   await SecureStore.deleteItemAsync(PUSH_DECRYPT_KEY_STORAGE_KEY, sharedPushStorageOptions());
   // Also the pre-NSE location: a migration that never ran, or was interrupted
   // between its write and its delete, would otherwise leave a readable key

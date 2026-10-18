@@ -294,18 +294,22 @@ per-device key expiry, so a lost phone is not trusted forever even if revocation
   the backup-portability property above is unchanged, and the identity SECRET key is deliberately
   NOT among them.
 
-- **The app itself can now run while the phone is locked, on iOS, and reads only those two
+- **The app itself can now run while the phone is locked, on iOS, and needs only those two
   items there.** Sealed clears (protocol 0.23.0) arrive as a background push, which needs the
   `remote-notification` background mode, and that lets iOS launch the whole app in the background,
   very often locked. Every `WHEN_UNLOCKED` item throws on read then. Two consequences, both
   handled. The receive task's decrypt reads the AAD from the shared `push.identity.pk` copy
-  before the identity secret (`src/notifications/pushIdentity.ts`), so it uses only the two
-  `AFTER_FIRST_UNLOCK` items the extension already reads; nothing new became readable while
-  locked. And boot work that reads a `WHEN_UNLOCKED` item waits for the app to first come to the
-  front (`src/lib/whenFirstActive.ts`, used by `app/_layout.tsx` for the settings hydrate), because
+  before the identity secret (`src/notifications/pushIdentity.ts`), so with that copy present it
+  uses only the two `AFTER_FIRST_UNLOCK` items the extension already reads; nothing new became
+  readable while locked. Only when the copy is absent does it fall back to the identity secret,
+  whose read throws while locked: the clear then does nothing, and no identity is generated over
+  it (`src/pairing/deviceIdentity.ts` generates only on an EMPTY read, never a failed one). And
+  boot work that reads a `WHEN_UNLOCKED` item waits for the app to first come to the front
+  (`src/lib/whenFirstActive.ts`, used by `app/_layout.tsx` for the settings hydrate), because
   `settingsStore` turns each failed read into its default and the next connection would otherwise
   re-register DEFAULT push categories with the desktop. The connection opens only on 'active' in
-  any case, so the identity secret and the trust anchor are never read in a background launch.
+  any case, so the trust anchor is never read in a background launch, and the identity secret only
+  by that fallback.
 
 - **The extension reads through a shared Keychain access group, never a copy of the key.**
   The app declares `keychain-access-groups` with its own application-identifier group **first**
