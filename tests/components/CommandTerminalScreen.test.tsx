@@ -18,6 +18,7 @@ import { useCommandTerminalStore } from '@/state/commandTerminalStore';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { closeSessionScreen, openSessionScreen } from '@/connection/actions';
 import { streamSnapshotFixture } from '@/devsupport/desktopFixtures';
+import { getOpenNotificationSurfaces } from '@/notifications/notificationSignals';
 import { commandTerminalWireFixture, seedCommandTerminalBoard, setBoardCommandTerminals } from '../helpers/commandTerminals';
 
 jest.mock('react-native-safe-area-context', () =>
@@ -302,6 +303,30 @@ describe('CommandTerminalScreen', () => {
 
       expect(mockBack).not.toHaveBeenCalled();
       expect(mockReplace).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The terminal on screen is what clears its own alerts (the reconciler's
+     * clear on open). Nothing is claimed before a session is bound; the claim
+     * is the terminal's session, held while focused, released under a pushed
+     * route, and back on the pop.
+     */
+    it('claims its bound terminal as an open notification surface only while focused', async () => {
+      const { unmount } = await renderScreen();
+      expect(getOpenNotificationSurfaces()).toEqual([]);
+
+      await act(() => {
+        useCommandTerminalStore.getState().markLaunchStarted(launchId, { sessionId: 'terminal-9', slot: 2, name: 'Command Terminal 2' });
+      });
+      expect(getOpenNotificationSurfaces()).toEqual([{ kind: 'command-terminal', sessionId: 'terminal-9' }]);
+
+      await act(() => mockSetFocused(false));
+      expect(getOpenNotificationSurfaces()).toEqual([]);
+      await act(() => mockSetFocused(true));
+      expect(getOpenNotificationSurfaces()).toEqual([{ kind: 'command-terminal', sessionId: 'terminal-9' }]);
+
+      await unmount();
+      expect(getOpenNotificationSurfaces()).toEqual([]);
     });
 
     it('releases the session screen it opened when it unmounts', async () => {

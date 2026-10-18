@@ -21,6 +21,7 @@ import { useSettingsStore } from '@/state/settingsStore';
 import { selectChatLens, useTranscriptStore } from '@/state/transcriptStore';
 import { selectTerminalPainted, useTerminalUiStore } from '@/state/terminalUiStore';
 import { closeSessionScreen, loadArchivedTasks, openSessionScreen } from '@/connection/actions';
+import { openNotificationSurface } from '@/notifications/notificationSignals';
 import { TaskHeader } from './TaskHeader';
 import { ChatPane } from './ChatPane';
 import { ChangesTab } from './ChangesTab';
@@ -213,6 +214,11 @@ export function SessionScreen(): React.JSX.Element {
     openSessionScreen(sessionId);
     return () => closeSessionScreen(sessionId);
   }, [sessionId]);
+  // While this task is on screen its alerts are redundant: they are cleared now
+  // and on every return to the app (the reconciler's clear on open). Keyed on
+  // the TASK, not the session, so a respawn's rebind keeps the claim. Focus,
+  // not mount, so a route pushed over it (a file diff) releases it.
+  useFocusEffect(useCallback(() => openNotificationSurface({ kind: 'task', taskId }), [taskId]));
 
   // SESSION-DEATH DETECTION. Three signals, all scoped to the CURRENT binding:
   // 1. The board located the task but reports no session, after this screen

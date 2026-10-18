@@ -9,6 +9,7 @@ import { useResumeStore } from '@/state/resumeStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { boardColumnFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 import { resumeTaskSession } from '@/connection/actions';
+import { getOpenNotificationSurfaces } from '@/notifications/notificationSignals';
 import { workflowWireFixture } from '../helpers/workflows';
 
 jest.mock('react-native-safe-area-context', () =>
@@ -684,5 +685,28 @@ describe('SessionScreen Resume (a paused session)', () => {
 
     expect(screen.queryByTestId('session-resume-panel')).toBeNull();
     expect(screen.getByTestId('stub-session-input-bar').props.accessibilityValue).toEqual({ text: 'keys-shown' });
+  });
+});
+
+/**
+ * The task on screen is what clears its own alerts (the reconciler's clear on
+ * open). Keyed on the TASK, so a respawn's rebind to a new session keeps the
+ * claim; released when the screen goes. Lives beside the Resume suite only for
+ * its harness: the claim is independent of what the lens shows.
+ */
+describe('SessionScreen notification surface', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    useBoardStore.getState().reset();
+    useActivityStore.getState().reset();
+    seedBoard();
+  });
+
+  it('claims its task as an open notification surface while shown, and releases it when gone', async () => {
+    await renderSessionScreen();
+    expect(getOpenNotificationSurfaces()).toEqual([{ kind: 'task', taskId: 'task-1' }]);
+
+    await screen.unmount();
+    expect(getOpenNotificationSurfaces()).toEqual([]);
   });
 });

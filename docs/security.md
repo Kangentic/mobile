@@ -384,6 +384,19 @@ that returns nothing because the device is locked or the entitlement is absent, 
 failure, an unknown category, or simply running out of execution time - delivers the placeholder
 exactly as it arrived.
 
+**Notification lifetime adds no new exposure** (the stale-notification reconciler; see Notification
+lifetime in [architecture.md](architecture.md)). On Android an alert now posts under a stable id
+derived from its category and session (`kangentic:<category>:session:<id>`), so a repeat replaces
+it. That id is on-device only, never transmitted, and holds nothing the notification's own `data`
+does not already carry in plaintext after the on-device decrypt; the alert also carries its posting
+time, which is not content. iOS gets no such id: an `apns-collapse-id` (or Expo `collapseId`) was
+rejected because it would put a stable per-session identifier in the APNs header, visible to the
+push network, and would also break the tap router's identifier latch. To judge an iOS alert the
+app decrypts its sealed blob in memory, exactly as a tap does, and dismisses it by request
+identifier; nothing decrypted is written back to the OS-visible notification or logged, and a
+reconciler failure is swallowed silently. An alert the app cannot open is dismissed only once it is
+older than the 24h envelope window, after which no key could ever open it.
+
 One dependency worth naming: **APNs invokes a service extension only for a push that carries
 `mutable-content: 1` AND an alert.** The desktop deliberately sends iOS a placeholder title and
 body for that reason, while sending Android a data-only message. Making iOS data-only to match

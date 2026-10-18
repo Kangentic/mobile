@@ -6,6 +6,8 @@ import { COMMAND_TERMINAL_FALLBACK_NAME, selectCommandTerminal, useBoardStore } 
 import { useSettingsStore } from '@/state/settingsStore';
 import { channelIdForCategory, titleForCategory } from './categoryCopy';
 import { ANDROID_NOTIFICATION_PRESENTATION } from './channels';
+import { POSTED_AT_DATA_KEY, notificationIdForRouting, routingFromNotificationData } from './notificationRouting';
+import { noteNotificationDisplayed, subscribeToNotificationDismissals } from './notificationSignals';
 
 /**
  * The foreground-service mode's local alerting: while the app is
@@ -27,6 +29,10 @@ import { ANDROID_NOTIFICATION_PRESENTATION } from './channels';
 
 /** Matches the desktop's own per-(session, category) push cooldown. */
 const LOCAL_NOTIFICATION_COOLDOWN_MS = 30_000;
+
+function cooldownKeyFor(sessionId: string, category: PushCategory): string {
+  return `${sessionId}:${category}`;
+}
 
 /**
  * How long a session must stay idle before 'turn-complete' fires.
@@ -101,10 +107,12 @@ function resolveTaskTitle(entry: SessionActivityEntry): string {
 /**
  * What a tap on this alert routes by (see tapRouter). A Command Terminal's
  * carries `sessionKind` so the tap opens the terminal by its session rather
- * than an empty task id as a task.
+ * than an empty task id as a task. The category rides along as a decrypted
+ * push's does, so the stale-notification reconciler can tell what this alert
+ * claims and when that stops being true.
  */
-function routingDataFor(entry: SessionActivityEntry): Record<string, string> {
-  const routing = { taskId: entry.taskId, projectId: entry.projectId, sessionId: entry.sessionId };
+function routingDataFor(category: PushCategory, entry: SessionActivityEntry): Record<string, string> {
+  const routing = { category, taskId: entry.taskId, projectId: entry.projectId, sessionId: entry.sessionId };
   return entry.kind === 'command-terminal' ? { ...routing, sessionKind: 'command-terminal' satisfies PushSessionKind } : routing;
 }
 
@@ -146,27 +154,51 @@ export function startLocalNotifier(): () => void {
     // the local alert - otherwise disabling a category in Settings still
     // fires it locally in foreground-service mode.
     if (useSettingsStore.getState().pushCategoriesEnabled[category] === false) return;
-    const cooldownKey = `${entry.sessionId}:${category}`;
+    const cooldownKey = cooldownKeyFor(entry.sessionId, category);
     const now = Date.now();
     const lastFiredAt = lastFiredAtByKey.get(cooldownKey);
     if (lastFiredAt !== undefined && now - lastFiredAt < LOCAL_NOTIFICATION_COOLDOWN_MS) return;
     lastFiredAtByKey.set(cooldownKey, now);
+    const data = { ...routingDataFor(category, entry), [POSTED_AT_DATA_KEY]: String(now) };
+    const routing = routingFromNotificationData(data);
+    // The same stable id a remote push for this session and category gets, so
+    // a repeat (local or remote) REPLACES this alert instead of stacking.
+    const stableId = routing === null ? null : notificationIdForRouting(routing);
+    // The prompt this alert is about. The reconciler cancels the alert once the
+    // session awaits a different one (or none): the question was answered.
+    const promptIdAtPost = category === 'input-required' ? entry.awaitedPromptId : null;
     void notifee
       .displayNotification({
+        ...(stableId === null ? {} : { id: stableId }),
         title: titleForCategory(category),
         body: resolveTaskTitle(entry),
-        data: routingDataFor(entry),
+        data,
         android: {
           ...ANDROID_NOTIFICATION_PRESENTATION,
           channelId: channelIdForCategory(category),
           pressAction: { id: 'default', launchActivity: 'default' },
         },
       })
+      .then((platformId) => {
+        noteNotificationDisplayed({ platformId, routing, postedAt: now, promptIdAtPost });
+      })
       .catch(() => {
         // Display failures (channel blocked, permission revoked) are the
         // user's choice; nothing to do.
       });
   };
+
+  // A DISMISSED ALERT RELEASES ITS COOLDOWN. The reconciler cancels an alert the
+  // moment it stops being true (an answer at the desk, the session working
+  // again), and without this the cooldown it left behind would then swallow the
+  // NEXT alert for the same session: a second prompt inside 30s of the first
+  // would leave the phone showing nothing at all, where before this change the
+  // stale first alert would at least have remained. The cooldown exists to stop
+  // alerts stacking, and an alert that is no longer on screen stacks nothing.
+  const unsubscribeDismissals = subscribeToNotificationDismissals((routing) => {
+    if (routing.category === null) return;
+    lastFiredAtByKey.delete(cooldownKeyFor(routing.sessionId, routing.category));
+  });
 
   const idleSettleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -239,6 +271,7 @@ export function startLocalNotifier(): () => void {
   return () => {
     appStateSubscription.remove();
     unsubscribeStore();
+    unsubscribeDismissals();
     for (const pendingTimer of idleSettleTimers.values()) clearTimeout(pendingTimer);
     idleSettleTimers.clear();
     lastFiredAtByKey.clear();

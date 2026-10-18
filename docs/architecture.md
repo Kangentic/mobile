@@ -1284,8 +1284,11 @@ OS had KILLED launches a fresh process, and notifee reports that press only thro
 feed and dropped the task, measured on a release build as no `session-open` at all after the tap,
 while the same tap worked whenever FCM had happened to start the process first. The router now
 reads it once at registration, beside the iOS cold-start read. A press reported by both a listener
-and the launch read routes once, latched on notifee's notification id (unique per displayed
-notification, since no task notification sets its own).
+and the launch read routes once, latched on notifee's notification id PLUS the alert's own
+`postedAt`. Not the id alone: every task alert now posts under a stable id (one per session and
+category, see Notification lifetime below), so an id-only latch would swallow a genuine tap on a
+reposted alert. Both reports of one press carry the same posting, so the pair still collapses; an
+alert from before this build has no `postedAt` and keys on its (random) id as it always did.
 
 The runtime notification permission - Android 13+'s `POST_NOTIFICATIONS` and iOS's
 `UNUserNotificationCenter` authorization, both via `notifee.requestPermission()` - is requested
@@ -1322,6 +1325,78 @@ the channel is still up and wipes the local push key (`pushKeys.clearPushRegistr
 previously paired desktop can no longer push anything this phone can decrypt - delivery through
 Expo/FCM still reaches the OS-level token, but every attempt now degrades to the generic
 placeholder, on the same failure path as a tampered or wrong-key blob.
+
+### Notification lifetime: replace, reconcile, clear on open
+
+An alert used to live until the user swiped it: every display took a random id, nothing replaced
+and nothing cancelled, so coming back to the phone meant a stack of alerts for prompts already
+answered and tasks already closed. This is the phone-only layer (no protocol or desktop change);
+sealed clears from the desktop, and all iOS Notification Service Extension work on lifetime, are a
+later task.
+
+**Stable ids (Android).** Every task alert, local or decrypted, posts under
+`notificationIdForRouting` (`notificationRouting.ts`): `kangentic:<category>:session:<id>`,
+falling back to the task and then the project (a `workflow-complete` names only its home project).
+A repeat alert for the same session and category therefore REPLACES the one on screen, and a local
+alert and a remote push for the same event share an id. Each posting stamps its own `postedAt`
+(epoch ms) into `data`; the reconciler orders against it and the tap latch keys on it. The
+placeholder keeps a random id and carries `postedAt` and nothing else. The id is on-device only
+and holds nothing the notification's `data` does not already carry; iOS alerts keep the APNs
+request's own identifier (no collapse id, see `docs/security.md`).
+
+**The reconciler** (`notificationReconciler.ts`, started from `initializeNotifications()` on both
+platforms, for the life of the process) lists what is displayed, asks the pure
+`notificationStaleness.ts` which of it stopped being true, and cancels that. Android reads
+`notifee.getDisplayedNotifications()` and cancels with `cancelNotification`; the keepalive's
+connection notification is skipped by its fixed id and channel. iOS reads
+`getPresentedNotificationsAsync()`, decrypts each presented alert's sealed blob in memory (the tap
+router's path), and dismisses by request identifier; nothing decrypted is written anywhere
+OS-visible or logged. Every failure is swallowed silently, which leaves the alerts as they were.
+
+**Never dismiss on unknown.** The stores are empty on a cold start, hold the `'sessions'`
+projection where a missing task may still exist, and SURVIVE every disconnect (only unpair resets
+them), so `feedStatus: 'live'` and "every project has a board" both hold on stale data after a
+reconnect. A rule therefore reads only state observed after the alert was posted, gated on the
+source it reads: a board-row rule needs the project's board `snapshotAt` newer than the alert; a
+session-state rule needs the session's entry FRESH (`feedStatus` `'live'` or `'ended'` and
+`lastEventAt` newer than the alert; a `'pending'` entry never counts, since registration stamps
+the clock over a default idle state). A session end counts whenever it was seen, since
+`endedSessionIds` only records ends observed this run. Not a board gate for session rules: an
+answer at the desk is a stream event and re-snapshots no board.
+
+| Alert | Dismissed when |
+|-------|----------------|
+| any task alert | its task is archived, in a done-role column, or missing from a fresh `'full'` board |
+| `input-required` | the session ended, a newer session runs, a fresh board drops it with no live entry left, its fresh entry leaves `permission`, or the awaited prompt differs from the one first seen |
+| `turn-complete`, `plan-complete` | a newer session runs (this desktop resumes into a new id on every column move), the task is gone from a fresh board with no live entry left, the session is thinking again, or the task left the column it was first seen in. NOT a bare end: an idle-timeout pause ends the session but keeps a resumable row |
+| `session-failed` | a newer session runs for the task |
+| `spawn-stalled` | a session now exists for the task |
+| `workflow-complete` | only its home project's Board on screen |
+| Command Terminal alert | by the session alone (its task id is made up): ended, gone from a fresh board's terminal list, or out of the state the alert claimed |
+| Android placeholder | EVERY paired project's board and every live session it names were re-read after it |
+| iOS alert the app cannot open | it is older than `PUSH_ENVELOPE_MAX_AGE_MS` (24h), past which it can never be opened |
+
+"First seen" (column, awaited prompt) is recorded only from state newer than the alert, since the
+push envelope carries neither; a local alert seeds its prompt at posting. "Live entry" is what
+protects the successor race: a session subscribed from `successorSessionId` before any board names
+it keeps its entry, so a board computed before the resume cannot dismiss its fresh prompt alert.
+
+**When it runs.** The native list is read on a foreground, on the first board snapshot after start
+(a cold start fires no `'active'` event), and when a surface opens; the local notifier and the
+headless push task also tell it what they just posted. Every other store change re-judges the list
+already held, with no bridge call, coalesced one microtask later (a zustand subscriber runs inside
+the store write, before `storeFeed`'s prune). Because the activity subscription is always on, the
+same rules cancel during the Android background keepalive: an answer at the desk clears the
+phone's alert while the app is still in the background. A dismissal also releases the local
+notifier's 30s cooldown for that session and category, or the cooldown left by an answered prompt
+would swallow the next prompt's alert.
+
+**Clear on open.** `SessionScreen`, `CommandTerminalScreen` and `BoardScreen` claim a surface while
+focused (`openNotificationSurface` in the pure `notificationSignals.ts`, so the screens import no
+native module): a task's alerts, a terminal's (by session), a project's `workflow-complete`. A
+matching alert is dismissed on every pass while the app is in front, so opening the screen clears
+it and so does returning to the app on a screen already open. Not while backgrounded: a screen
+stays mounted then, and the keepalive's alert for that very task must not be eaten on posting.
 
 ## Later phases (future, not built yet)
 

@@ -8,6 +8,7 @@ import { CommandTerminalPill } from '@/components/board/CommandTerminalPill';
 import { useScreenMotionActive } from '@/components/motion/ScreenMotion';
 import { WaitCursor } from '@/components/motion/WaitCursor';
 import { closeSessionScreen, openSessionScreen, stopCommandTerminal } from '@/connection/actions';
+import { openNotificationSurface } from '@/notifications/notificationSignals';
 import { selectSessionEnded, useActivityStore } from '@/state/activityStore';
 import { COMMAND_TERMINAL_FALLBACK_NAME, selectCommandTerminal, useBoardStore } from '@/state/boardStore';
 import { selectLaunch, useCommandTerminalStore } from '@/state/commandTerminalStore';
@@ -106,6 +107,15 @@ export function CommandTerminalScreen(): React.JSX.Element {
     openSessionScreen(boundSessionId);
     return () => closeSessionScreen(boundSessionId);
   }, [boundSessionId]);
+  // While this terminal is on screen its alerts are redundant: they are cleared
+  // now and on every return to the app (the reconciler's clear on open). Focus,
+  // not mount, so a route pushed over it releases the claim.
+  useFocusEffect(
+    useCallback(() => {
+      if (boundSessionId === null) return;
+      return openNotificationSurface({ kind: 'command-terminal', sessionId: boundSessionId });
+    }, [boundSessionId]),
+  );
 
   const terminal = useBoardStore((state) => selectCommandTerminal(state, boundSessionId));
   const listed = terminal !== null;

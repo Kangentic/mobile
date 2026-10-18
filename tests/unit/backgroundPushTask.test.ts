@@ -189,6 +189,72 @@ describe('backgroundPushTask', () => {
   });
 
   /**
+   * A repeat push for the same session and category must REPLACE the alert on
+   * screen, so the decrypted post carries the stable id; its posting time rides
+   * in `data` for the reconciler and the tap latch, and the reconciler is told
+   * at once rather than at its next native read.
+   */
+  it('posts a decrypted alert under its stable id, stamps its posting time, and tells the reconciler', async () => {
+    decryptPushBlobMock.mockResolvedValueOnce({
+      title: 'Agent went idle',
+      body: 'Ship the release',
+      category: 'turn-complete',
+      data: { category: 'turn-complete', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' },
+    });
+    const { registerBackgroundPushTask } = await loadModule();
+    const { subscribeToDisplayedNotifications } = await import('@/notifications/notificationSignals');
+    const notes: unknown[] = [];
+    subscribeToDisplayedNotifications((note) => notes.push(note));
+    registerBackgroundPushTask();
+
+    const executor = taskManagerState.defineTask.mock.calls[0][1] as TaskExecutor;
+    await executor({
+      data: { notification: null, data: { blob: 'a-real-envelope' } },
+      error: null,
+      executionInfo: { taskName: 'kangentic-background-push' },
+    });
+
+    const notification = taskManagerState.displayNotification.mock.calls[0][0] as { id?: string; data?: Record<string, string> };
+    expect(notification.id).toBe('kangentic:turn-complete:session:sess-1');
+    expect(notification.data).toEqual({
+      category: 'turn-complete',
+      taskId: 'task-1',
+      projectId: 'project-1',
+      sessionId: 'sess-1',
+      postedAt: expect.stringMatching(/^\d+$/),
+    });
+    expect(notes).toEqual([
+      {
+        platformId: 'notification-id',
+        routing: { category: 'turn-complete', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null },
+        postedAt: Number(notification.data?.postedAt),
+        promptIdAtPost: null,
+      },
+    ]);
+  });
+
+  /**
+   * The placeholder names nothing, so it keeps a random id and carries no
+   * routing. Its posting time is the one thing it does carry: the reconciler
+   * dismisses it only once every project was re-read AFTER it.
+   */
+  it('stamps the placeholder with its posting time and nothing else', async () => {
+    const { registerBackgroundPushTask } = await loadModule();
+    registerBackgroundPushTask();
+
+    const executor = taskManagerState.defineTask.mock.calls[0][1] as TaskExecutor;
+    await executor({
+      data: { notification: null, data: { blob: 'not-a-real-envelope' } },
+      error: null,
+      executionInfo: { taskName: 'kangentic-background-push' },
+    });
+
+    const notification = taskManagerState.displayNotification.mock.calls[0][0] as { id?: string; data?: Record<string, string> };
+    expect(notification.id).toBeUndefined();
+    expect(notification.data).toStrictEqual({ postedAt: expect.stringMatching(/^\d+$/) });
+  });
+
+  /**
    * THE REGRESSION THIS FILE EXISTS FOR SECOND-MOST, after the decrypt-failure
    * placeholder above.
    *

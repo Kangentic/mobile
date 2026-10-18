@@ -217,7 +217,10 @@ src/
   notifications/  # Push key + registration, E2E envelope decrypt, notifee channels, background task,
                   #   local notifier, foreground service, sharedKeychain (permission, registration,
                   #   tap routing, Settings status and RICH display are all cross-platform; iOS
-                  #   decrypts in the targets/nse/ extension, Android in the Notifee handler)
+                  #   decrypts in the targets/nse/ extension, Android in the Notifee handler),
+                  #   and the stale-notification reconciler (cross-platform: stable Android ids,
+                  #   the pure staleness rules in notificationStaleness.ts, clear on open through
+                  #   the pure notificationSignals.ts the screens import)
   state/          # Zustand stores (activity/board/transcript/diff/channel/settings/readingView, all
                   #   channel-fed, in-memory; resume, the one Resume attempt per task that the
                   #   session screen, header and long-press hub share; commandTerminal, the

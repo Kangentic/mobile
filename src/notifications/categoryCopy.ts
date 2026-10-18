@@ -15,6 +15,14 @@ export const FAILURES_CHANNEL_ID = 'failures';
 export const STALLS_CHANNEL_ID = 'stalls';
 export const CONNECTION_CHANNEL_ID = 'connection';
 
+/**
+ * The keepalive's ongoing "Connected to your desktop" notification's fixed id.
+ * Lives here, beside its channel, so the stale-notification reconciler can
+ * recognise it without importing foregroundService.ts (and its native stop-alarm
+ * module): the reconciler must never touch that notification.
+ */
+export const CONNECTION_NOTIFICATION_ID = 'kangentic-connection';
+
 /** The channel a decrypted (or locally observed) event class lands on. */
 export function channelIdForCategory(category: PushCategory): string {
   switch (category) {
