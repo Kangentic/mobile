@@ -62,7 +62,8 @@ scrubber is therefore a second line of defence, never the control itself.
   the ORIGINAL message, and rate-limits per key (one a minute, ten a launch). `scrubEvent`
   re-redacts every exception value on any event tagged `site`, as the second line. Adding a site
   means adding the literal and asserting the call in that surface's component test, on failure
-  and not on success. Sites still owed: MoveTask, EditTask, TaskActions, the Devices unpair,
+  and not on success. Sites still owed: MoveTask, EditTask, TaskActions (all but its
+  automations switch, which reports as `task-automations`), the Devices unpair,
   FileDiff, and `settingsStore.readSetting` (its import graph reaches a dozen test files; do it
   once a shared vitest mock for the door exists). `usePromptAnswer` matches on message text today
   and needs a typed stale-prompt error at the verb layer, not a door call.
