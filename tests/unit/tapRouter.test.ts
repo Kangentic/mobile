@@ -582,13 +582,60 @@ describe('tapRouter - Android notifee presses', () => {
   });
 
   /**
+   * Task alerts now post under a STABLE id (one per session and category), so a
+   * repeat alert replaces the one on screen. A tap on the replacement is a
+   * genuine second tap and must route; an id-only latch swallowed it, leaving a
+   * tap that does nothing. Each posting carries its own `postedAt`.
+   *
+   * Mutation that reddens this: key the latch on the notification id alone
+   * (drop the `@postedAt` suffix in pressLatchKey). Seen red that way.
+   */
+  it('routes a tap on an alert reposted under the same stable id', async () => {
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+    tapRouter.registerNotificationTapHandlers();
+
+    const onForegroundEvent = notifeeMock.onForegroundEvent.mock.calls[0][0] as (event: unknown) => void;
+    const stableId = 'kangentic:input-required:session:sess-9';
+    const routing = { category: 'input-required', taskId: 'task-9', projectId: 'project-9', sessionId: 'sess-9' };
+    onForegroundEvent({ type: 1, detail: { notification: { id: stableId, data: { ...routing, postedAt: '1000' } } } });
+    onForegroundEvent({ type: 1, detail: { notification: { id: stableId, data: { ...routing, postedAt: '2000' } } } });
+
+    expect(published).toHaveLength(2);
+  });
+
+  /**
+   * The other half of the same key: one press on a stable-id alert, reported by
+   * both the background listener and the launch read, is the SAME posting
+   * (same id, same postedAt) and still routes once.
+   *
+   * Mutation that reddens this: key the latch on something unique per report.
+   */
+  it('routes a stable-id press reported by both the listener and the launch read once', async () => {
+    const launchingNotification = {
+      id: 'kangentic:turn-complete:session:sess-9',
+      data: { category: 'turn-complete', taskId: 'task-9', projectId: 'project-9', sessionId: 'sess-9', postedAt: '1000' },
+    };
+    notifeeMock.getInitialNotification.mockResolvedValue({ notification: launchingNotification, pressAction: { id: 'default' } });
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+    tapRouter.registerNotificationTapHandlers();
+
+    const onBackgroundEvent = notifeeMock.onBackgroundEvent.mock.calls[0][0] as (event: unknown) => Promise<void>;
+    await onBackgroundEvent({ type: 1, detail: { notification: launchingNotification } });
+    await flushMicrotasks();
+
+    expect(published).toHaveLength(1);
+  });
+
+  /**
    * The id latch only engages on a non-empty string id: a press whose
    * notification carries none still routes every time, because dropping a real
    * tap is worse than a rare double. Two presses, since a single one routes
    * with or without the guard.
    *
-   * Mutation that reddens this: latch on the id unconditionally (drop the
-   * `typeof notificationId === 'string' && notificationId.length > 0` guard).
+   * Mutation that reddens this: latch unconditionally (make pressLatchKey
+   * return a key for a missing or empty id).
    */
   it('routes every press of a notification that has no id, rather than latching on its absence', async () => {
     const { tapRouter, pendingNavigation } = await loadModules();

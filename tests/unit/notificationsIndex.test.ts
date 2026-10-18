@@ -1,8 +1,8 @@
 /**
  * initializeNotifications' platform split.
  *
- * registerNotificationTapHandlers and refreshNotificationPermission run on
- * EVERY platform; registerForegroundServiceRunner, registerBackgroundPushTask
+ * registerNotificationTapHandlers, startNotificationReconciler and
+ * refreshNotificationPermission run on EVERY platform; registerForegroundServiceRunner, registerBackgroundPushTask
  * and createNotificationChannels stay behind `if (Platform.OS !== 'android')
  * return`. This branch moved the first two ABOVE that gate - the function used
  * to return early off Android entirely, which is how iOS ended up with no tap
@@ -76,6 +76,11 @@ vi.mock('@/notifications/backgroundPushTask', () => ({
   registerBackgroundPushTask: registerBackgroundPushTaskMock,
 }));
 
+const startNotificationReconcilerMock = vi.hoisted(() => vi.fn(() => () => undefined));
+vi.mock('@/notifications/notificationReconciler', () => ({
+  startNotificationReconciler: startNotificationReconcilerMock,
+}));
+
 async function loadInitializeNotifications(): Promise<() => void> {
   const { initializeNotifications } = await import('@/notifications');
   return initializeNotifications;
@@ -91,14 +96,16 @@ describe('initializeNotifications platform split', () => {
     registerForegroundServiceRunnerMock.mockClear();
     stopOrphanedForegroundServiceAtBootMock.mockClear();
     registerBackgroundPushTaskMock.mockClear();
+    startNotificationReconcilerMock.mockClear();
   });
 
-  it('runs all six on Android', async () => {
+  it('runs all seven on Android', async () => {
     const initializeNotifications = await loadInitializeNotifications();
 
     initializeNotifications();
 
     expect(registerNotificationTapHandlersMock).toHaveBeenCalledTimes(1);
+    expect(startNotificationReconcilerMock).toHaveBeenCalledTimes(1);
     expect(refreshNotificationPermissionMock).toHaveBeenCalledTimes(1);
     expect(registerForegroundServiceRunnerMock).toHaveBeenCalledTimes(1);
     // Process start, so nothing can have declared a keepalive yet: a dataSync
@@ -116,13 +123,16 @@ describe('initializeNotifications platform split', () => {
    * genuinely Android-only pieces (notifee channels, the FCM data-message task,
    * the foreground service) stay behind it.
    */
-  it('runs only the tap handlers and the permission refresh on iOS, never the three Android-only calls', async () => {
+  it('runs only the tap handlers, the reconciler and the permission refresh on iOS, never the three Android-only calls', async () => {
     platformMock.OS = 'ios';
     const initializeNotifications = await loadInitializeNotifications();
 
     initializeNotifications();
 
     expect(registerNotificationTapHandlersMock).toHaveBeenCalledTimes(1);
+    // The stale-notification reconciler is cross-platform: iOS dismisses
+    // presented alerts too, by decrypting them in-app.
+    expect(startNotificationReconcilerMock).toHaveBeenCalledTimes(1);
     expect(refreshNotificationPermissionMock).toHaveBeenCalledTimes(1);
     expect(registerForegroundServiceRunnerMock).not.toHaveBeenCalled();
     expect(stopOrphanedForegroundServiceAtBootMock).not.toHaveBeenCalled();
@@ -137,6 +147,7 @@ describe('initializeNotifications platform split', () => {
     initializeNotifications();
 
     expect(registerNotificationTapHandlersMock).toHaveBeenCalledTimes(1);
+    expect(startNotificationReconcilerMock).toHaveBeenCalledTimes(1);
     expect(refreshNotificationPermissionMock).toHaveBeenCalledTimes(1);
     expect(registerForegroundServiceRunnerMock).toHaveBeenCalledTimes(1);
     expect(stopOrphanedForegroundServiceAtBootMock).toHaveBeenCalledTimes(1);

@@ -2,6 +2,7 @@ import React from 'react';
 import { StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import { ThemeProvider, darkTerminalTheme } from '@/components';
+import { getOpenNotificationSurfaces } from '@/notifications/notificationSignals';
 import { BoardScreen } from '@/screens/BoardScreen';
 import { ENDED_ROW_GRACE_MS, useActivityStore } from '@/state/activityStore';
 import { useBoardStore, type ProjectBoard } from '@/state/boardStore';
@@ -175,6 +176,23 @@ describe('BoardScreen', () => {
     });
     expect(screen.queryByTestId('board-loading')).toBeNull();
     expect(screen.getByTestId('board-column-lane-todo')).toBeTruthy();
+  });
+
+  /**
+   * The Board on screen is what clears its project's "Workflow complete"
+   * alerts (the reconciler's clear on open): claimed on focus, released on
+   * blur. Read back from the pure registry the reconciler reads.
+   */
+  it('claims its project as an open notification surface while focused, and releases it on blur', async () => {
+    await render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+    expect(getOpenNotificationSurfaces()).toEqual([{ kind: 'project-board', projectId: 'project-1' }]);
+
+    await screen.unmount();
+    expect(getOpenNotificationSurfaces()).toEqual([]);
   });
 
   it('renders columns from the live store and navigates on card tap', async () => {

@@ -3,6 +3,7 @@ import { createNotificationChannels, refreshNotificationPermission } from './cha
 import { registerBackgroundPushTask } from './backgroundPushTask';
 import { registerForegroundServiceRunner, stopOrphanedForegroundServiceAtBoot } from './foregroundService';
 import { registerNotificationTapHandlers } from './tapRouter';
+import { startNotificationReconciler } from './notificationReconciler';
 
 export { openSystemNotificationSettings, refreshNotificationPermission, requestNotificationPermission } from './channels';
 export {
@@ -63,6 +64,12 @@ export function initializeNotifications(): void {
   if (initialized) return;
   initialized = true;
   registerNotificationTapHandlers();
+  // Cross-platform: clears alerts that stopped being true (an answered prompt,
+  // a closed task, a screen the user is now looking at). Started here, at
+  // bundle entry, so it runs for the life of the process, which is what lets
+  // it cancel during the Android background keepalive too. Inert in a headless
+  // launch until something it listens to changes.
+  startNotificationReconciler();
   // Seeds the permission cache. Read synchronously by the background-keepalive
   // gate (Android) and by the Settings blocked-notice (both platforms).
   // Refreshed again on every foreground.

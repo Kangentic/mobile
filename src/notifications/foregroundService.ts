@@ -1,6 +1,7 @@
 import notifee, { AndroidForegroundServiceType } from '@notifee/react-native';
 import { nativeStopAlarmEnabled } from '@/devsupport/connectionTrace';
 import { armForegroundServiceStopAlarm, disarmForegroundServiceStopAlarm } from '../../modules/foreground-service-guard';
+import { CONNECTION_NOTIFICATION_ID } from './categoryCopy';
 import { ANDROID_NOTIFICATION_PRESENTATION, CONNECTION_CHANNEL_ID } from './channels';
 
 /**
@@ -40,8 +41,6 @@ import { ANDROID_NOTIFICATION_PRESENTATION, CONNECTION_CHANNEL_ID } from './chan
  * fails if a second one appears anywhere in src/ or app/. The headless push task
  * posts without it, and the push-service plugin only edits the manifest.
  */
-
-const CONNECTION_NOTIFICATION_ID = 'kangentic-connection';
 
 /**
  * When the native stop alarm fires. That is connectionManager's five-minute JS

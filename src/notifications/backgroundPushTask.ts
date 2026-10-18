@@ -10,6 +10,8 @@ import {
   createNotificationChannels,
 } from './channels';
 import { PUSH_PLACEHOLDER_BODY, PUSH_PLACEHOLDER_TITLE, decryptPushBlob, extractBlobFromTaskData } from './pushDecrypt';
+import { POSTED_AT_DATA_KEY, notificationIdForRouting, routingFromNotificationData } from './notificationRouting';
+import { noteNotificationDisplayed } from './notificationSignals';
 
 // Re-exported from its new home in pushDecrypt.ts (the iOS tap router needs it
 // too, and that path must not import notifee). Kept here so this module's own
@@ -55,31 +57,45 @@ export function getBackgroundPushTaskStatus(): BackgroundPushTaskStatus {
 }
 
 async function displayPlaceholder(): Promise<void> {
-  await notifee.displayNotification({
+  // The posting time is the only data the placeholder carries: no routing, no
+  // content. It is what lets the reconciler dismiss it once every project has
+  // been re-read AFTER it (see notificationStaleness.ts). The id stays random,
+  // since a placeholder names nothing a repeat could replace.
+  const postedAt = Date.now();
+  const platformId = await notifee.displayNotification({
     title: PUSH_PLACEHOLDER_TITLE,
     body: PUSH_PLACEHOLDER_BODY,
+    data: { [POSTED_AT_DATA_KEY]: String(postedAt) },
     android: {
       ...ANDROID_NOTIFICATION_PRESENTATION,
       channelId: NEEDS_ATTENTION_CHANNEL_ID,
       pressAction: { id: 'default', launchActivity: 'default' },
     },
   });
+  noteNotificationDisplayed({ platformId, routing: null, postedAt, promptIdAtPost: null });
 }
 
 async function displayDecryptedOrPlaceholder(blob: string | null): Promise<void> {
   const decrypted = blob === null ? null : await decryptPushBlob(blob);
   if (decrypted) {
     try {
-      await notifee.displayNotification({
+      const routing = routingFromNotificationData(decrypted.data);
+      const postedAt = Date.now();
+      // A stable id, so a repeat alert for the same session and category
+      // REPLACES this one instead of stacking under it.
+      const stableId = routing === null ? null : notificationIdForRouting(routing);
+      const platformId = await notifee.displayNotification({
+        ...(stableId === null ? {} : { id: stableId }),
         title: decrypted.title,
         body: decrypted.body,
-        data: decrypted.data,
+        data: { ...decrypted.data, [POSTED_AT_DATA_KEY]: String(postedAt) },
         android: {
           ...ANDROID_NOTIFICATION_PRESENTATION,
           channelId: channelIdForCategory(decrypted.category),
           pressAction: { id: 'default', launchActivity: 'default' },
         },
       });
+      noteNotificationDisplayed({ platformId, routing, postedAt, promptIdAtPost: null });
       return;
     } catch {
       // FALLING THROUGH TO THE PLACEHOLDER IS THE POINT. This catch used to

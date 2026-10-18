@@ -16,6 +16,7 @@ import {
   type ProjectBoard,
 } from '@/state/boardStore';
 import { ARCHIVED_PAGE_SIZE, loadArchivedTasks, openProjectBoard, refreshSnapshots } from '@/connection/actions';
+import { openNotificationSurface } from '@/notifications/notificationSignals';
 import { reportHandledError } from '@/observability/crashReporting';
 import { BoardTaskCard } from './board/BoardTaskCard';
 import { WorkflowsButton } from './board/WorkflowsButton';
@@ -93,6 +94,15 @@ export function BoardScreen(): React.JSX.Element {
       if (heldArchive === undefined || heldArchive.nextOffset <= ARCHIVED_PAGE_SIZE) {
         void loadArchivedTasks({ projectId }).catch(reportArchivedFetchFailure);
       }
+    }, [projectId]),
+  );
+  // While this project's Board is on screen, its "Workflow complete" alerts are
+  // redundant (a tap on one opens exactly this): cleared now and on every
+  // return to the app. Nothing else clears them.
+  useFocusEffect(
+    useCallback(() => {
+      if (!projectId) return;
+      return openNotificationSurface({ kind: 'project-board', projectId });
     }, [projectId]),
   );
   // ...and it does not paint until that upgrade lands. Rendering a 'sessions'

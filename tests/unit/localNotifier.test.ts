@@ -10,6 +10,11 @@ import type { ActivityEvent } from '@kangentic/protocol';
 // time, so the mocked react-native / notifee are in place before they load.
 import notifee from '@notifee/react-native';
 import { startLocalNotifier } from '@/notifications/localNotifier';
+import {
+  publishNotificationDismissed,
+  subscribeToDisplayedNotifications,
+  type DisplayedNotificationNote,
+} from '@/notifications/notificationSignals';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useSettingsStore } from '@/state/settingsStore';
@@ -172,7 +177,13 @@ describe('startLocalNotifier', () => {
     expect(notification.title).toBe('Agent needs your input');
     expect(notification.body).toBe('Ship the release');
     expect(notification.android?.channelId).toBe('needs-attention');
-    expect(notification.data).toEqual({ taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' });
+    expect(notification.data).toEqual({
+      category: 'input-required',
+      taskId: 'task-1',
+      projectId: 'project-1',
+      sessionId: 'sess-1',
+      postedAt: String(nowMs),
+    });
     // Notifee defaults smallIcon to ic_launcher (a full-colour asset the OS
     // strips to a silhouette) unless set explicitly - see channels.ts.
     expect(notification.android?.smallIcon).toBe('notification_icon');
@@ -195,7 +206,13 @@ describe('startLocalNotifier', () => {
     expect(displayNotification).toHaveBeenCalledTimes(1);
     const notification = displayNotification.mock.calls[0][0];
     expect(notification.android?.channelId).toBe('failures');
-    expect(notification.data).toEqual({ taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' });
+    expect(notification.data).toEqual({
+      category: 'session-failed',
+      taskId: 'task-1',
+      projectId: 'project-1',
+      sessionId: 'sess-1',
+      postedAt: String(nowMs),
+    });
   });
 
   /**
@@ -555,7 +572,13 @@ describe('startLocalNotifier', () => {
     // sess-2's notification fires.
     vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS / 2);
     expect(displayNotification).toHaveBeenCalledTimes(1);
-    expect(displayNotification.mock.calls[0][0].data).toEqual({ taskId: 'task-2', projectId: 'project-1', sessionId: 'sess-2' });
+    expect(displayNotification.mock.calls[0][0].data).toEqual({
+      category: 'turn-complete',
+      taskId: 'task-2',
+      projectId: 'project-1',
+      sessionId: 'sess-2',
+      postedAt: String(nowMs),
+    });
 
     // sess-1 never fires at all, even well past where its cancelled timer
     // would have landed.
@@ -598,6 +621,81 @@ describe('startLocalNotifier', () => {
     expect(displayNotification).toHaveBeenCalledTimes(2);
   });
 
+  /**
+   * One stable id per session and category, so the repeat past the cooldown
+   * REPLACES the first alert instead of stacking under it (and a remote push
+   * for the same session and category replaces it too).
+   */
+  it('posts every alert for one session and category under one stable id', () => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-1'));
+    nowMs += 31_000;
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-1', false));
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-2'));
+
+    expect(displayNotification).toHaveBeenCalledTimes(2);
+    expect(displayNotification.mock.calls[0][0].id).toBe('kangentic:input-required:session:sess-1');
+    expect(displayNotification.mock.calls[1][0].id).toBe('kangentic:input-required:session:sess-1');
+    // Each posting stamps its own time, which the tap latch tells reposts apart by.
+    expect(displayNotification.mock.calls[0][0].data?.postedAt).not.toBe(displayNotification.mock.calls[1][0].data?.postedAt);
+  });
+
+  /**
+   * The reconciler cancels an alert the moment it stops being true. Its
+   * cooldown must go with it: otherwise the answer at the desk clears prompt-1's
+   * alert and the cooldown then swallows prompt-2's, so the phone shows NOTHING
+   * where before it at least kept the stale first alert.
+   *
+   * Mutation that reddens this: drop the dismissal subscription in
+   * startLocalNotifier. Seen red that way.
+   */
+  it('releases the cooldown of an alert the reconciler dismissed, so the next prompt still alerts', () => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-1'));
+    expect(displayNotification).toHaveBeenCalledTimes(1);
+    publishNotificationDismissed({
+      category: 'input-required',
+      taskId: 'task-1',
+      projectId: 'project-1',
+      sessionId: 'sess-1',
+      sessionKind: null,
+    });
+
+    nowMs += 5_000;
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-1', false));
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-2'));
+    expect(displayNotification).toHaveBeenCalledTimes(2);
+  });
+
+  it('tells the reconciler what it posted, with the prompt the alert is about', async () => {
+    const notes: DisplayedNotificationNote[] = [];
+    const unsubscribe = subscribeToDisplayedNotifications((note) => notes.push(note));
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-1'));
+    // The note follows the display's promise. Drained by hand: this file fakes
+    // setTimeout, so the shared macrotask flush would never resolve.
+    for (let turn = 0; turn < 5; turn += 1) await Promise.resolve();
+    unsubscribe();
+
+    expect(notes).toEqual([
+      {
+        platformId: 'notification-id',
+        routing: { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null },
+        postedAt: nowMs,
+        promptIdAtPost: 'prompt-1',
+      },
+    ]);
+  });
+
   it('falls back to a generic body when the board has no matching task', () => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
     stopNotifier = startLocalNotifier();
@@ -616,7 +714,7 @@ describe('startLocalNotifier', () => {
    * Mutation that reddens this: add `sessionKind: entry.kind` (or `undefined`)
    * to the base routing object in routingDataFor.
    */
-  it('keeps a task alert\'s data to exactly taskId, projectId and sessionId, with no sessionKind key', () => {
+  it('keeps a task alert\'s data to exactly its category, ids and posting time, with no sessionKind key', () => {
     seedSession();
     stopNotifier = startLocalNotifier();
     appStateMock.emit('background');
@@ -625,7 +723,13 @@ describe('startLocalNotifier', () => {
 
     expect(displayNotification).toHaveBeenCalledTimes(1);
     const { data } = displayNotification.mock.calls[0][0];
-    expect(data).toStrictEqual({ taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' });
+    expect(data).toStrictEqual({
+      category: 'input-required',
+      taskId: 'task-1',
+      projectId: 'project-1',
+      sessionId: 'sess-1',
+      postedAt: String(nowMs),
+    });
     expect(Object.keys(data ?? {})).not.toContain('sessionKind');
   });
 
@@ -680,11 +784,15 @@ describe('startLocalNotifier', () => {
       expect(notification.body).toBe('Fix The Flaky Test');
       expect(notification.android?.channelId).toBe('needs-attention');
       expect(notification.data).toStrictEqual({
+        category: 'input-required',
         taskId: '',
         projectId: 'project-1',
         sessionId: TERMINAL_SESSION_ID,
         sessionKind: 'command-terminal',
+        postedAt: String(nowMs),
       });
+      // Keyed on the session: a terminal has no task to fall back on.
+      expect(notification.id).toBe(`kangentic:input-required:session:${TERMINAL_SESSION_ID}`);
     });
 
     it('falls back to "Command Terminal" when no board lists the terminal, never the task fallback', () => {
