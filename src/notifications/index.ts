@@ -55,10 +55,10 @@ let initialized = false;
  * permission cache is what Settings reads to tell an iOS user their
  * notifications are blocked.
  *
- * Still Android-only, by nature: notifee channels (an Android concept), the
- * FCM data-message task, and the foreground service. Rich iOS notification
- * CONTENT still needs the Notification Service Extension, which is a separate
- * slice - until it ships, an iOS push renders as the generic placeholder.
+ * Still Android-only, by nature: notifee channels (an Android concept) and the
+ * foreground service. The receive task registers on both platforms, with a
+ * narrower job on iOS (sealed clears only); rich iOS notification CONTENT is
+ * the Notification Service Extension's (targets/nse/).
  */
 export function initializeNotifications(): void {
   if (initialized) return;
@@ -77,6 +77,12 @@ export function initializeNotifications(): void {
     // Leaves the cache at null, which the gate treats as "unknown", not
     // "denied" - a failed read must not disable the keepalive.
   });
+  // Both platforms: on Android it renders every push and applies sealed
+  // clears; on iOS it applies standalone sealed clears ONLY and displays
+  // nothing (see registerBackgroundPushTask). Registered here, at bundle
+  // entry, because an iOS background launch for a clear never mounts a screen
+  // that could do it later.
+  registerBackgroundPushTask();
   if (Platform.OS !== 'android') return;
   registerForegroundServiceRunner();
   // Process start, so nothing can have declared a keepalive yet: any dataSync
@@ -88,7 +94,6 @@ export function initializeNotifications(): void {
   // foregroundService.ts) is what bounds those. The sweep also cancels any stop
   // alarm a previous process left armed.
   stopOrphanedForegroundServiceAtBoot();
-  registerBackgroundPushTask();
   void createNotificationChannels().catch(() => {
     // Channel creation failing (no notification permission model applies
     // to channels, so this is exotic) must never block boot.

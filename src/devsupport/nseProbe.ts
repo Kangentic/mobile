@@ -44,9 +44,12 @@ export async function seedNseProbe(): Promise<NseProbeSeedOutcome> {
 /**
  * What the OS actually displayed for the most recent notification: the
  * extension's title and body if it decrypted, the placeholder if it did not,
- * nothing if the push never rendered. Nothing in the app clears delivered
- * notifications, so this reads the extension-modified content back
- * mechanically rather than from a screenshot. The probe's own content only;
+ * nothing if the push never rendered. Read back mechanically rather than from
+ * a screenshot. Note what CAN now remove it first: the stale-notification
+ * reconciler (src/notifications/notificationReconciler.ts) on a foreground
+ * read, and the extension's own pruning when a later push replaces it; the
+ * probe sends one push and reads it straight back, so neither should run in
+ * between. The probe's own content only;
  * a real user's notification never reaches this path because the probe is
  * inert in every shipped build.
  */

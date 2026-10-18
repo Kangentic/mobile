@@ -119,6 +119,7 @@ function createRecordingProject(options: { existingTargetNames?: string[] } = {}
 const SOURCE_FILES = [
   'CategoryCopy.swift',
   'HChaCha20.swift',
+  'NotificationPruning.swift',
   'NotificationService.swift',
   'PushEnvelope.swift',
   'SharedKeychain.swift',

@@ -108,6 +108,13 @@ export async function registerPushWithDesktop(verbs: PushRegistrarVerbs | null):
       pushKeyBase64: base64UrlEncode(pushKey),
       platform: Platform.OS === 'ios' ? 'ios' : 'android',
       categories,
+      // Sealed clears (protocol 0.23.0). Both platforms handle them in this
+      // build: Android's receive task removes what a clear names and displays
+      // nothing, iOS applies a standalone clear in the same task (background
+      // mode) and a piggybacked one in the Notification Service Extension. A
+      // build that did not would render a clear as the placeholder, which is
+      // why the desktop sends none to a registration without this flag.
+      acceptsClears: true,
     };
 
     try {

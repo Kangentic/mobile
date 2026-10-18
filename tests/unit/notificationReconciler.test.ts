@@ -1128,4 +1128,114 @@ describe('notificationReconciler', () => {
       expect(expoNotificationsMock.dismissNotificationAsync).toHaveBeenCalledTimes(expectedDismissals);
     });
   });
+
+  /**
+   * Sealed clears (protocol 0.23.0): the desktop saw a notified condition
+   * resolve, so the entry IS the verdict and no staleness rule is consulted.
+   * What must hold is the bound: an alert is removed only when its category and
+   * ids match AND its own envelope `sentAt` is at or before `notifiedAt`, and an
+   * alert carrying no `sentAt` (a local alert under the same stable id) is kept.
+   * A blind cancel by stable id, the obvious shortcut, breaks both.
+   */
+  describe('dismissNotificationsClearedBy', () => {
+    const sentAt = Date.now() - 60_000;
+
+    function clearEntry(category: 'input-required' | 'turn-complete', sessionId: string, taskId: string, notifiedAt: number) {
+      return { category, projectId: 'project-1', taskId, sessionId, notifiedAt };
+    }
+
+    function pushedData(category: 'input-required' | 'turn-complete', sessionId: string, taskId: string, alertSentAt: number) {
+      return { ...taskData(category, sessionId, taskId, Date.now()), sentAt: String(alertSentAt) };
+    }
+
+    /**
+     * Mutations that redden this, each seen red: drop the `sentAt <=
+     * notifiedAt` bound from clearEntryCovers (the newer turn-complete is
+     * cancelled too, and the iOS case below goes red the same way); drop its
+     * `sentAt === null` guard (the local alert under sess-2's id is cancelled,
+     * since `null <= notifiedAt` is true in JavaScript).
+     */
+    it('on Android cancels only the alerts an entry covers, by their own sentAt', async () => {
+      const modules = await loadModules();
+      notifeeMock.getDisplayedNotifications.mockResolvedValue([
+        { id: sessionAlertId('input-required', 'sess-1'), notification: { data: pushedData('input-required', 'sess-1', 'task-1', sentAt) } },
+        { id: sessionAlertId('turn-complete', 'sess-1'), notification: { data: pushedData('turn-complete', 'sess-1', 'task-1', sentAt) } },
+        // A local alert: the same stable id a push would use, but no desktop sentAt.
+        { id: sessionAlertId('input-required', 'sess-2'), notification: { data: taskData('input-required', 'sess-2', 'task-2', Date.now()) } },
+        { id: 'kangentic-connection', notification: { android: { channelId: 'connection' } } },
+      ]);
+
+      await modules.reconciler.dismissNotificationsClearedBy([
+        clearEntry('input-required', 'sess-1', 'task-1', sentAt + 1_000),
+        // Sealed before the alert on screen was: that alert is newer, and stays.
+        clearEntry('turn-complete', 'sess-1', 'task-1', sentAt - 1),
+        clearEntry('input-required', 'sess-2', 'task-2', Date.now()),
+      ]);
+
+      expect(notifeeMock.cancelNotification.mock.calls).toEqual([[sessionAlertId('input-required', 'sess-1')]]);
+    });
+
+    it('covers an alert sealed exactly at notifiedAt, and nothing for another task', async () => {
+      const modules = await loadModules();
+      notifeeMock.getDisplayedNotifications.mockResolvedValue([
+        { id: sessionAlertId('input-required', 'sess-1'), notification: { data: pushedData('input-required', 'sess-1', 'task-1', sentAt) } },
+      ]);
+
+      await modules.reconciler.dismissNotificationsClearedBy([clearEntry('input-required', 'sess-1', 'task-9', sentAt)]);
+      expect(notifeeMock.cancelNotification).not.toHaveBeenCalled();
+
+      await modules.reconciler.dismissNotificationsClearedBy([clearEntry('input-required', 'sess-1', 'task-1', sentAt)]);
+      expect(notifeeMock.cancelNotification.mock.calls).toEqual([[sessionAlertId('input-required', 'sess-1')]]);
+    });
+
+    /**
+     * The local notifier holds a cooldown per session and category that a
+     * dismissal releases; a cleared alert must release it like a stale one.
+     */
+    it('publishes each cleared alert as dismissed', async () => {
+      const modules = await loadModules();
+      const dismissed: unknown[] = [];
+      modules.signals.subscribeToNotificationDismissals((routing) => dismissed.push(routing));
+      notifeeMock.getDisplayedNotifications.mockResolvedValue([
+        { id: sessionAlertId('input-required', 'sess-1'), notification: { data: pushedData('input-required', 'sess-1', 'task-1', sentAt) } },
+      ]);
+
+      await modules.reconciler.dismissNotificationsClearedBy([clearEntry('input-required', 'sess-1', 'task-1', sentAt)]);
+
+      expect(dismissed).toEqual([{ category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null }]);
+    });
+
+    it('on iOS decrypts what is presented and dismisses the covered alert by its request identifier', async () => {
+      platformMock.OS = 'ios';
+      const modules = await loadModules();
+      expoNotificationsMock.getPresentedNotificationsAsync.mockResolvedValue([
+        { date: sentAt / 1000, request: { identifier: 'ios-covered', content: { data: { blob: 'blob-covered' } } } },
+        { date: sentAt / 1000, request: { identifier: 'ios-newer', content: { data: { blob: 'blob-newer' } } } },
+      ]);
+      decryptPushBlobMock.mockImplementation(async (blob: string) => ({
+        ...(decryptedInputRequired(blob === 'blob-covered' ? 'sess-1' : 'sess-2', blob === 'blob-covered' ? 'task-1' : 'task-2') as object),
+        sentAt: blob === 'blob-covered' ? sentAt : Date.now(),
+      }));
+
+      await modules.reconciler.dismissNotificationsClearedBy([
+        clearEntry('input-required', 'sess-1', 'task-1', sentAt + 1_000),
+        clearEntry('input-required', 'sess-2', 'task-2', sentAt + 1_000),
+      ]);
+
+      expect(expoNotificationsMock.dismissNotificationAsync.mock.calls).toEqual([['ios-covered']]);
+      expect(notifeeMock.cancelNotification).not.toHaveBeenCalled();
+    });
+
+    it('makes no native read for an empty clear, and swallows a read that fails', async () => {
+      const modules = await loadModules();
+      await modules.reconciler.dismissNotificationsClearedBy([]);
+      expect(notifeeMock.getDisplayedNotifications).not.toHaveBeenCalled();
+
+      notifeeMock.getDisplayedNotifications.mockRejectedValueOnce(new Error('notifee unavailable'));
+      await expect(
+        modules.reconciler.dismissNotificationsClearedBy([clearEntry('input-required', 'sess-1', 'task-1', sentAt)]),
+      ).resolves.toBeUndefined();
+      expect(notifeeMock.cancelNotification).not.toHaveBeenCalled();
+    });
+  });
 });

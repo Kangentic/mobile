@@ -32,6 +32,7 @@ interface SentryPluginOptions {
 interface NotificationPluginOptions {
   icon?: string;
   color?: string;
+  enableBackgroundRemoteNotifications?: boolean;
 }
 
 interface SplashScreenPluginOptions {
@@ -118,6 +119,19 @@ describe('app.config.ts brand parity', () => {
     const options = pluginOptions<NotificationPluginOptions>(appConfig, 'expo-notifications');
     expect(options.icon).toBe('./assets/brand/notification-icon.png');
     expect(options.color).toBe(brandTokens.rust);
+  });
+
+  /**
+   * The desktop's sealed clears (protocol 0.23.0) reach iOS as a background
+   * push with no alert, which only an app declaring the `remote-notification`
+   * background mode receives, and without which expo-notifications refuses to
+   * register the receive task on iOS at all. Nothing fails if it goes missing:
+   * stale alerts just stay. The generated Info.plist is checked again by ci.yml's
+   * Native config (prebuild) job.
+   */
+  it('enables background remote notifications, so iOS delivers sealed clears to the app', () => {
+    const options = pluginOptions<NotificationPluginOptions>(appConfig, 'expo-notifications');
+    expect(options.enableBackgroundRemoteNotifications).toBe(true);
   });
 
   // Asserted through the evaluated config, not a source string match: the

@@ -299,7 +299,7 @@ jobs:
             exit 1
           fi
 
-          for source_file in NotificationService.swift HChaCha20.swift PushEnvelope.swift SharedKeychain.swift CategoryCopy.swift; do
+          for source_file in NotificationService.swift HChaCha20.swift PushEnvelope.swift SharedKeychain.swift CategoryCopy.swift NotificationPruning.swift; do
             if [ ! -f "ios/KangenticNSE/$source_file" ]; then
               echo "::error::targets/nse/$source_file was not copied into the generated project."
               exit 1
@@ -349,6 +349,27 @@ jobs:
             exit 1
           fi
           echo "App entitlements carry the shared Keychain group, application-identifier group first."
+
+      # Sealed clears (protocol 0.23.0) reach iOS as a background push with no
+      # alert, and only an app declaring the remote-notification background mode
+      # receives one. Without it expo-notifications also refuses to register the
+      # receive task on iOS, so every standalone clear is dropped with no error
+      # anywhere: stale alerts simply stay. Set by the expo-notifications plugin's
+      # enableBackgroundRemoteNotifications option in app.config.ts.
+      - name: Confirm the app declares the remote-notification background mode
+        run: |
+          set -euo pipefail
+          info_plist="$(find ios -maxdepth 2 -name 'Info.plist' -not -path '*/KangenticNSE/*' -not -path '*/Pods/*' | head -n 1)"
+          if [ -z "$info_plist" ]; then
+            echo "::error::No app Info.plist after prebuild."
+            exit 1
+          fi
+          if ! sed -n '/<key>UIBackgroundModes<\/key>/,/<\/array>/p' "$info_plist" | grep -q '<string>remote-notification</string>'; then
+            echo "::error::$info_plist does not list remote-notification under UIBackgroundModes."
+            echo "::error::iOS would never deliver the desktop's sealed clears to the app."
+            exit 1
+          fi
+          echo "App Info.plist declares the remote-notification background mode."
 
       # The two prebuilds above exercise only the INERT Sentry path. app.config.ts
       # omits the Sentry plugin entirely when SENTRY_AUTH_TOKEN is absent, and this
@@ -665,15 +686,19 @@ jobs:
   #
   # This job opens envelopes sealed by the protocol package's own
   # sealPushEnvelope, and checks the tamper, wrong-key, wrong-AAD and staleness
-  # paths reject. It runs on ci.yml rather than build-ios.yml deliberately:
-  # build-ios.yml is dispatch-only, so a broken crypto change would merge green.
+  # paths reject. Since protocol 0.23.0 it also checks the extension's
+  # notification pruning (NotificationPruning.swift): the piggybacked clears
+  # parse, the which-alerts-a-push-removes truth table, and the keyed thread
+  # identifier against @noble/hashes. It runs on ci.yml rather than
+  # build-ios.yml deliberately: build-ios.yml is dispatch-only, so a broken
+  # crypto change would merge green.
   #
   # THIS IS A REQUIRED STATUS CHECK on main, so its `name:` is a protection
   # context and cannot be renamed without updating protection in the same
   # change. See the job-name note at the top of this file.
   #
   # macOS minutes are billable on private repositories; this one is public, so
-  # they are free. It compiles three small files with swiftc and needs no Xcode
+  # they are free. It compiles four small files with swiftc and needs no Xcode
   # project, no simulator, and no signing.
   nse-crypto:
     name: NSE crypto (swiftc)
@@ -694,6 +719,7 @@ jobs:
             targets/nse/HChaCha20.swift \
             targets/nse/PushEnvelope.swift \
             targets/nse/CategoryCopy.swift \
+            targets/nse/NotificationPruning.swift \
             tests/swift/nseCryptoHarness.swift
 
       - name: Open envelopes sealed by @kangentic/protocol

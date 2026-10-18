@@ -485,6 +485,15 @@ const config: ExpoConfig = {
         // explicitly at every displayNotification call site.
         icon: './assets/brand/notification-icon.png',
         color: BRAND_NOTIFICATION_COLOR,
+        // iOS only: adds `remote-notification` to UIBackgroundModes, which is
+        // what lets the desktop's sealed clears (protocol 0.23.0, a
+        // `content-available` push with no alert) reach the receive task in
+        // src/notifications/backgroundPushTask.ts, and without which
+        // expo-notifications refuses to register that task on iOS at all. It
+        // also means iOS can now LAUNCH the app in the background, possibly
+        // with the phone locked, so app/_layout.tsx defers everything that
+        // reads a WHEN_UNLOCKED Keychain item until the app is first active.
+        enableBackgroundRemoteNotifications: true,
       },
     ],
     [

@@ -17,13 +17,34 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { PUSH_CATEGORIES } from '@kangentic/protocol';
-import { hchacha20, selfCheckHChaCha20 } from '../../scripts/generateNseCryptoFixtures.mjs';
+import { PUSH_CATEGORIES, type PushClearEntry } from '@kangentic/protocol';
+import { clearEntryCovers, notificationIdForRouting, routingFromNotificationData } from '@/notifications/notificationRouting';
+import { hchacha20, selfCheckHChaCha20, threadIdentifier } from '../../scripts/generateNseCryptoFixtures.mjs';
 
 interface FixtureCase {
   name: string;
   blob: string;
   expected: Record<string, unknown> | null;
+}
+
+/** A delivered or incoming alert in a match case: only what pruning reads. */
+interface MatchAlert {
+  category: string;
+  projectId: string;
+  taskId: string;
+  sessionId: string;
+  sentAt: number;
+}
+
+type MatchCase =
+  | { name: string; kind: 'covers'; entry: PushClearEntry; delivered: MatchAlert; expected: boolean }
+  | { name: string; kind: 'supersedes'; incoming: MatchAlert; delivered: MatchAlert; incomingIdentityKey: string; expected: boolean };
+
+interface ThreadIdentifierVector {
+  name: string;
+  taskId: string;
+  projectId: string;
+  expected: string | null;
 }
 
 interface FixtureFile {
@@ -32,6 +53,8 @@ interface FixtureFile {
   nowMilliseconds: number;
   hchacha20Vector: { keyHex: string; nonceHeadHex: string; subkeyHex: string };
   cases: FixtureCase[];
+  matchCases: MatchCase[];
+  threadIdentifierVectors: ThreadIdentifierVector[];
 }
 
 const fixtures = JSON.parse(
@@ -110,6 +133,72 @@ describe('NSE crypto fixture', () => {
     for (const testCase of fixtures.cases) {
       if (testCase.name === 'not-a-blob-at-all') continue;
       expect(testCase.blob).toMatch(/^[A-Za-z0-9_-]+$/);
+    }
+  });
+
+  /**
+   * Protocol 0.23.0's piggybacked clears: a case whose expected parse keeps some
+   * entries and drops others, and a malformed list that must not cost the
+   * notification. Reduced to one clean list, the Swift tolerance would go
+   * unchecked.
+   */
+  it('covers the tolerant clears parse the extension must match', () => {
+    const tolerant = fixtures.cases.find((testCase) => testCase.name === 'piggybacked-clears-parse-tolerantly');
+    expect((tolerant?.expected?.clears as unknown[] | undefined)?.length).toBe(2);
+    const malformed = fixtures.cases.find((testCase) => testCase.name === 'malformed-clears-list-still-opens');
+    expect(malformed?.expected?.clears).toEqual([]);
+  });
+});
+
+/**
+ * ONE truth table for which delivered alerts a push removes, held against both
+ * platforms. The Swift harness runs it through NotificationPruning; this runs
+ * the same rows through the app's own TypeScript, so the extension and the
+ * Android path cannot drift apart without one of the two going red.
+ */
+describe('NSE pruning truth table against the app matcher', () => {
+  function routingOf(alert: MatchAlert) {
+    const routing = routingFromNotificationData(alert);
+    if (routing === null) throw new Error('a match alert did not read as routing');
+    return routing;
+  }
+
+  it('carries both kinds of row', () => {
+    expect(fixtures.matchCases.some((matchCase) => matchCase.kind === 'covers')).toBe(true);
+    expect(fixtures.matchCases.some((matchCase) => matchCase.kind === 'supersedes')).toBe(true);
+  });
+
+  it.each(fixtures.matchCases.map((matchCase) => [matchCase.name, matchCase] as const))('%s', (_name, matchCase) => {
+    if (matchCase.kind === 'covers') {
+      expect(clearEntryCovers(matchCase.entry, routingOf(matchCase.delivered), matchCase.delivered.sentAt)).toBe(matchCase.expected);
+      return;
+    }
+    // The iOS identity IS the Android stable id: a repeat that replaces an
+    // alert on Android supersedes the same alert on iOS.
+    const incomingKey = notificationIdForRouting(routingOf(matchCase.incoming));
+    expect(incomingKey).toBe(matchCase.incomingIdentityKey);
+    const deliveredKey = notificationIdForRouting(routingOf(matchCase.delivered));
+    const supersedes = incomingKey !== null && incomingKey === deliveredKey && matchCase.delivered.sentAt <= matchCase.incoming.sentAt;
+    expect(supersedes).toBe(matchCase.expected);
+  });
+});
+
+describe('NSE thread identifier vectors', () => {
+  it('still recompute from the generator, so the committed vectors are the ones it derives', () => {
+    expect(fixtures.threadIdentifierVectors.length).toBeGreaterThan(0);
+    for (const vector of fixtures.threadIdentifierVectors) {
+      expect(threadIdentifier(hexToBytes(fixtures.pushKeyHex), vector.taskId, vector.projectId)).toBe(vector.expected);
+    }
+  });
+
+  it('are opaque: 32 hex characters, never the id itself, and absent for an alert naming nothing', () => {
+    for (const vector of fixtures.threadIdentifierVectors) {
+      if (vector.taskId.length === 0 && vector.projectId.length === 0) {
+        expect(vector.expected).toBeNull();
+        continue;
+      }
+      expect(vector.expected).toMatch(/^[0-9a-f]{32}$/);
+      expect(vector.expected).not.toContain(vector.taskId || vector.projectId);
     }
   });
 });

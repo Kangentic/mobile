@@ -1,9 +1,9 @@
 import Foundation
 
 /// The sealed push payload, mirroring `PushEnvelopePlaintext` in
-/// `@kangentic/protocol`. Every field is required; a missing or wrong-typed one
-/// means the blob is not something this build understands, and the caller shows
-/// the placeholder.
+/// `@kangentic/protocol`. Every field is required except `clears`; a missing or
+/// wrong-typed one means the blob is not something this build understands, and
+/// the caller shows the placeholder.
 struct PushEnvelopePlaintext {
   let category: String
   let projectId: String
@@ -13,6 +13,10 @@ struct PushEnvelopePlaintext {
   let detail: String
   /// Wall-clock milliseconds, as sealed by the desktop.
   let sentAt: Double
+  /// Older alerts this push resolves (protocol 0.23.0), removed before it is
+  /// presented. Parsed tolerantly (NotificationPruning.parseClearEntries): a
+  /// malformed list is empty, never a reason to lose the notification.
+  let clears: [PushClearEntry]
 }
 
 /// Opens the envelope the desktop seals, byte-compatible with
@@ -91,7 +95,8 @@ enum PushEnvelope {
       sessionId: sessionId,
       taskTitle: taskTitle,
       detail: detail,
-      sentAt: sentAt
+      sentAt: sentAt,
+      clears: NotificationPruning.parseClearEntries(fields["clears"])
     )
   }
 }

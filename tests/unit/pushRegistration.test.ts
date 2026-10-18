@@ -123,6 +123,10 @@ describe('registerPushWithDesktop', () => {
     expect(payload.action).toBe('register');
     expect(payload.expoPushToken).toBe('ExponentPushToken[alpha]');
     expect(payload.platform).toBe('android');
+    // Sealed clears (protocol 0.23.0): the desktop sends none to a
+    // registration without this, because a build that cannot handle one would
+    // render it as the placeholder. Seen red with the field removed.
+    expect(payload.acceptsClears).toBe(true);
     const sentKey = Buffer.from(payload.pushKeyBase64 ?? '', 'base64url');
     expect(sentKey).toHaveLength(32);
     expect(sentKey.toString('hex')).toBe(secureStoreState.storedValues.get('push.decrypt.key'));
