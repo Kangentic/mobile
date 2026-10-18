@@ -14,6 +14,7 @@ import {
   colorForTextRole,
   type AgentStatusKind,
 } from '@/components';
+import { AutomationsDisabledStrip } from './CardStrip';
 import { cardStatusFooter } from './CardStatusFooter';
 import type { CardSessionDisplay } from './cardSessionDisplay';
 import { ColumnStrip, type StripWorkflow } from './ColumnStrip';
@@ -48,7 +49,7 @@ function prGlyph(glyph: PrChipGlyph, color: string): React.JSX.Element {
 }
 
 export interface TaskCardProps {
-  /** Base testID; sub-parts key off it as `${testID}-status`, `-display-id`, `-pr`, `-snippet`, `-wait`, `-usage`, `-status-bar`, `-column` (whose own parts include `-column-project`). */
+  /** Base testID; sub-parts key off it as `${testID}-status`, `-display-id`, `-pr`, `-snippet`, `-wait`, `-usage`, `-status-bar`, `-column` (whose own parts include `-column-project`), `-automations-disabled` (whose own part is `-automations-disabled-icon`). */
   testID: string;
   task: BoardTaskWire;
   /** The title row's status icon. The desktop draws one only for a running session, so callers pass null for every other `sessionDisplay`. */
@@ -110,6 +111,15 @@ export interface TaskCardProps {
   /** A workflow task's wait in To Do, for the footer when its session has nothing to say (see cardStatusFooter). */
   waiting?: WorkflowWaitingFooter | null;
   /**
+   * The task's column automations are disabled (protocol 0.22.0): the
+   * desktop's "Automations disabled" strip, in the band's slot. Drawn only when
+   * no `columnStrip` is passed, as one slot holds one band. The board is where
+   * it can show: a workflow task never carries the switch, and the Agents feed
+   * always draws its own band, where the desktop's Agent Monitor shows no
+   * strip either.
+   */
+  automationsDisabled?: boolean;
+  /**
    * Whether to render board/backlog reference chrome: the labels row and
    * the title row's PR chip (same category as the ticket number).
    * Defaults true (the board).
@@ -141,6 +151,7 @@ export function TaskCard({
   bodyMinHeight,
   columnStrip,
   waiting = null,
+  automationsDisabled = false,
   showMetaRow = true,
   onPress,
   onLongPress,
@@ -182,6 +193,8 @@ export function TaskCard({
           waitTestID={`${testID}-wait`}
           testID={`${testID}-column`}
         />
+      ) : automationsDisabled ? (
+        <AutomationsDisabledStrip testID={`${testID}-automations-disabled`} />
       ) : null}
       {/* AFTER the strip: later siblings paint on top, and the strip's fill is
           opaque, so an overlay ahead of it would tint every part of the card

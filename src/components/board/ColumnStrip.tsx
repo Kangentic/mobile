@@ -3,6 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import { Folder, Pause } from 'lucide-react-native';
 import type { BoardColumnWire } from '@kangentic/protocol';
 import { Text, useTheme } from '@/components';
+import { CARD_STRIP_GROUP_GAP, CARD_STRIP_HEIGHT, CardStrip } from './CardStrip';
 import { getColumnIcon } from './columnIcons';
 import type { ColumnTrackStep } from './columnTrack';
 import { WaitLabel } from './WaitLabel';
@@ -10,11 +11,12 @@ import type { WorkflowStripLabel } from '@/workflow/workflowState';
 import { WorkflowGlyph } from './WorkflowGlyph';
 
 /*
- * The band's frame and track are the desktop's own measurements, copied 1:1
+ * The band's contents and track are the desktop's own measurements, copied 1:1
  * from the workflow card strip (kangentic #732, WorkflowStrip.tsx /
- * WorkflowCanvasCard.tsx), and the project half is #732's project row. They are
- * deliberately literal rather than spacing tokens: the token scale has no 5 or
- * 10, and rounding to it is exactly the drift this component exists to avoid.
+ * WorkflowCanvasCard.tsx), and the project half is #732's project row. Its
+ * frame is the shared CardStrip's. They are deliberately literal rather than
+ * spacing tokens: the token scale has no 5 or 10, and rounding to it is
+ * exactly the drift this component exists to avoid.
  *
  * The track is the one the desktop approved on 2026-10-07 (#732's design
  * canvas, sign-off row T2): the task's whole journey from To Do to Done, one
@@ -23,10 +25,7 @@ import { WorkflowGlyph } from './WorkflowGlyph';
  * Passed stops are neutral, and stops ahead carry their own column's color,
  * faded, so a card that has not started already says where it will go.
  */
-export const COLUMN_STRIP_HEIGHT = 29;
-const STRIP_INSET = 10;
-const STRIP_GAP_BELOW = 8;
-const STRIP_GROUP_GAP = 8;
+export const COLUMN_STRIP_HEIGHT = CARD_STRIP_HEIGHT;
 const PROJECT_ICON_SIZE = 12;
 const PROJECT_ICON_GAP = 6;
 /** The desktop board strip's workflow label (WorkflowTaskCardBody.tsx): a 12 glyph, a 5 gap, and an 11 pause glyph when paused. */
@@ -134,24 +133,7 @@ export const ColumnStrip = React.memo(function ColumnStrip({
   const theme = useTheme();
   const visibleSteps = track.filter((step) => step.state !== 'skipped');
   return (
-    <View
-      testID={testID}
-      accessibilityLabel={stripAccessibilityLabel(projectName, workflow, column, visibleSteps)}
-      style={[
-        styles.strip,
-        {
-          // Flush to the card's edges: the card pads its content by md, so the
-          // band cancels it on three sides and the top corners follow the
-          // card's own (inner) radius.
-          marginTop: -theme.spacing.md,
-          marginHorizontal: -theme.spacing.md,
-          borderTopLeftRadius: theme.radii.md - StyleSheet.hairlineWidth,
-          borderTopRightRadius: theme.radii.md - StyleSheet.hairlineWidth,
-          backgroundColor: theme.colors.surfaceInset,
-          borderBottomColor: theme.colors.border,
-        },
-      ]}
-    >
+    <CardStrip testID={testID} accessibilityLabel={stripAccessibilityLabel(projectName, workflow, column, visibleSteps)}>
       {workflow !== null ? (
         <View style={styles.workflow} testID={`${testID}-workflow`}>
           <WorkflowGlyph colorSlot={workflow.colorSlot} size={WORKFLOW_ICON_SIZE} testID={`${testID}-workflow-glyph`} />
@@ -205,7 +187,7 @@ export const ColumnStrip = React.memo(function ColumnStrip({
         ) : null}
         {trailing}
       </View>
-    </View>
+    </CardStrip>
   );
 });
 
@@ -273,17 +255,6 @@ function colorOrFaint(columnColor: string, faintColor: string): string {
 }
 
 const styles = StyleSheet.create({
-  strip: {
-    height: COLUMN_STRIP_HEIGHT,
-    marginBottom: STRIP_GAP_BELOW,
-    paddingHorizontal: STRIP_INSET,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: STRIP_GROUP_GAP,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    overflow: 'hidden',
-  },
   project: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -304,7 +275,7 @@ const styles = StyleSheet.create({
   trailing: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: STRIP_GROUP_GAP,
+    gap: CARD_STRIP_GROUP_GAP,
     flexShrink: 0,
     // Pinned right even when there is no project to push it there.
     marginLeft: 'auto',

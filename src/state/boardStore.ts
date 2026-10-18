@@ -86,14 +86,20 @@ export interface PendingMove {
   toPosition: number;
 }
 
+/**
+ * The task fields an `update_task` edit can patch optimistically. A key is
+ * present only when the edit touches it, so an absent key means "untouched"
+ * on a field whose own value can be null (`automations_disabled`).
+ */
+export type TaskEditFields = Partial<Pick<BoardTaskWire, 'title' | 'description' | 'automations_disabled'>>;
+
 export interface PendingTaskEdit {
   editId: string;
   projectId: string;
   taskId: string;
-  previousTitle: string;
-  previousDescription: string;
-  nextTitle: string | null;
-  nextDescription: string | null;
+  /** The touched fields' values before the edit, and only those, so a rollback leaves the rest as the latest snapshot has them. */
+  previous: TaskEditFields;
+  next: TaskEditFields;
 }
 
 export interface PendingTaskRemoval {
@@ -141,7 +147,13 @@ interface BoardStoreState {
   applyOptimisticMove: (move: { projectId: string; taskId: string; toSwimlaneId: string; toPosition: number }) => string | null;
   commitMove: (moveId: string) => void;
   rollbackMove: (moveId: string) => void;
-  applyOptimisticTaskEdit: (edit: { projectId: string; taskId: string; title?: string; description?: string }) => string | null;
+  applyOptimisticTaskEdit: (edit: {
+    projectId: string;
+    taskId: string;
+    title?: string;
+    description?: string;
+    automationsDisabled?: boolean;
+  }) => string | null;
   commitTaskEdit: (editId: string) => void;
   rollbackTaskEdit: (editId: string) => void;
   applyOptimisticRemoval: (removal: { projectId: string; taskId: string }) => string | null;
@@ -182,15 +194,29 @@ function moveTaskInBoard(board: ProjectBoard, taskId: string, toSwimlaneId: stri
   return { ...board, tasksById };
 }
 
-function editTaskInBoard(board: ProjectBoard, taskId: string, fields: { title: string | null; description: string | null }): ProjectBoard {
+function editTaskInBoard(board: ProjectBoard, taskId: string, fields: TaskEditFields): ProjectBoard {
   const task = board.tasksById[taskId];
   if (!task) return board;
-  const editedTask: BoardTaskWire = {
-    ...task,
-    ...(fields.title !== null ? { title: fields.title } : {}),
-    ...(fields.description !== null ? { description: fields.description } : {}),
-  };
+  const editedTask: BoardTaskWire = { ...task, ...fields };
   return { ...board, tasksById: { ...board.tasksById, [taskId]: editedTask } };
+}
+
+/** The fields an edit input touches, keyed as the wire names them. */
+function touchedTaskFields(edit: { title?: string; description?: string; automationsDisabled?: boolean }): TaskEditFields {
+  return {
+    ...(edit.title !== undefined ? { title: edit.title } : {}),
+    ...(edit.description !== undefined ? { description: edit.description } : {}),
+    ...(edit.automationsDisabled !== undefined ? { automations_disabled: edit.automationsDisabled } : {}),
+  };
+}
+
+/** `task`'s current values for exactly the keys `fields` touches. */
+function currentTaskFields(task: BoardTaskWire, fields: TaskEditFields): TaskEditFields {
+  return {
+    ...('title' in fields ? { title: task.title } : {}),
+    ...('description' in fields ? { description: task.description } : {}),
+    ...('automations_disabled' in fields ? { automations_disabled: task.automations_disabled } : {}),
+  };
 }
 
 function removeTaskFromBoard(board: ProjectBoard, taskId: string): ProjectBoard {
@@ -353,7 +379,7 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
       }
       for (const pendingEdit of state.pendingEdits) {
         if (pendingEdit.projectId === snapshot.projectId) {
-          board = editTaskInBoard(board, pendingEdit.taskId, { title: pendingEdit.nextTitle, description: pendingEdit.nextDescription });
+          board = editTaskInBoard(board, pendingEdit.taskId, pendingEdit.next);
         }
       }
       for (const pendingRemoval of state.pendingRemovals) {
@@ -415,20 +441,19 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
     const task = board?.tasksById[edit.taskId];
     if (!board || !task) return null;
     nextEditSequence += 1;
+    const next = touchedTaskFields(edit);
     const pendingEdit: PendingTaskEdit = {
       editId: `edit-${nextEditSequence}`,
       projectId: edit.projectId,
       taskId: edit.taskId,
-      previousTitle: task.title,
-      previousDescription: task.description,
-      nextTitle: edit.title ?? null,
-      nextDescription: edit.description ?? null,
+      previous: currentTaskFields(task, next),
+      next,
     };
     set({
       pendingEdits: [...state.pendingEdits, pendingEdit],
       boardsByProjectId: {
         ...state.boardsByProjectId,
-        [edit.projectId]: editTaskInBoard(board, edit.taskId, { title: pendingEdit.nextTitle, description: pendingEdit.nextDescription }),
+        [edit.projectId]: editTaskInBoard(board, edit.taskId, next),
       },
     });
     return pendingEdit.editId;
@@ -442,9 +467,9 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
       const pendingEdit = state.pendingEdits.find((candidate) => candidate.editId === editId);
       if (!pendingEdit) return state;
       const board = state.boardsByProjectId[pendingEdit.projectId];
-      const restoredBoard = board
-        ? editTaskInBoard(board, pendingEdit.taskId, { title: pendingEdit.previousTitle, description: pendingEdit.previousDescription })
-        : board;
+      // Only the fields this edit touched: a snapshot that changed another one
+      // while the write was in flight already holds the newer value.
+      const restoredBoard = board ? editTaskInBoard(board, pendingEdit.taskId, pendingEdit.previous) : board;
       return {
         pendingEdits: state.pendingEdits.filter((candidate) => candidate.editId !== editId),
         ...(restoredBoard ? { boardsByProjectId: { ...state.boardsByProjectId, [pendingEdit.projectId]: restoredBoard } } : {}),

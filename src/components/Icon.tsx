@@ -3,6 +3,7 @@ import {
   Archive,
   ArrowDownToLine,
   ArrowLeftRight,
+  Ban,
   Bot,
   ChevronDown,
   ChevronLeft,
@@ -11,6 +12,7 @@ import {
   CircleDot,
   CirclePause,
   CirclePlay,
+  Columns3Cog,
   GitPullRequest,
   ListFilter,
   Mic,
@@ -53,7 +55,9 @@ export type IconName =
   | 'filter'
   | 'resume'
   | 'pause'
-  | 'terminal';
+  | 'terminal'
+  | 'disable-automations'
+  | 'enable-automations';
 
 const ICON_REGISTRY: Record<IconName, LucideIcon> = {
   'chevron-forward': ChevronRight,
@@ -84,6 +88,10 @@ const ICON_REGISTRY: Record<IconName, LucideIcon> = {
   // The session switcher's Terminal glyph (SquareTerminal), so "Open terminal"
   // on a terminal's long-press sheet names the lens it opens.
   terminal: SquareTerminal,
+  // The desktop card menu's automations switch (TaskContextMenu.tsx): Ban to
+  // hold a task, Columns3Cog to release it.
+  'disable-automations': Ban,
+  'enable-automations': Columns3Cog,
 };
 
 export interface IconProps {

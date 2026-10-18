@@ -588,6 +588,39 @@ describe('BoardScreen', () => {
    * hub then does - Move/Edit replacing it, the archive gate, the two-step
    * delete - is in tests/components/TaskActionsScreen.test.tsx.
    */
+  /** Protocol 0.22.0: the board card reads the row's own switch, and only `true` draws the desktop's strip. */
+  it.each([
+    { automationsDisabled: true, drawn: true },
+    { automationsDisabled: false, drawn: false },
+    { automationsDisabled: null, drawn: false },
+  ])('draws the automations strip for a row whose switch reads $automationsDisabled: $drawn', async ({ automationsDisabled, drawn }) => {
+    await act(() => {
+      useBoardStore.setState((state) => {
+        const board = state.boardsByProjectId['project-1'];
+        return {
+          boardsByProjectId: {
+            ...state.boardsByProjectId,
+            'project-1': {
+              ...board,
+              tasksById: { 'task-1': { ...board.tasksById['task-1'], automations_disabled: automationsDisabled } },
+            },
+          },
+        };
+      });
+    });
+    await render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+
+    if (drawn) {
+      expect(screen.getByTestId('board-card-task-1-automations-disabled')).toHaveTextContent('Automations disabled');
+    } else {
+      expect(screen.queryByTestId('board-card-task-1-automations-disabled')).toBeNull();
+    }
+  });
+
   it('long-press navigates to the actions hub for that card', async () => {
     await render(
       <ThemeProvider>

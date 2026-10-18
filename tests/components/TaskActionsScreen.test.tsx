@@ -4,12 +4,20 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react-n
 import type { BoardTaskWire, BoardTaskWorkflowWire } from '@kangentic/protocol';
 import { ThemeProvider } from '@/components';
 import { darkTerminalTheme } from '@/components/theme/tokens';
-import { PAUSE_FAILED_MESSAGE, PAUSE_UNCONFIRMED_MESSAGE, TaskActionsScreen } from '@/screens/TaskActionsScreen';
+import { Ban, Columns3Cog } from 'lucide-react-native';
+import { CapabilityError } from '@/channel';
+import {
+  AUTOMATIONS_FAILED_MESSAGE,
+  PAUSE_FAILED_MESSAGE,
+  PAUSE_UNCONFIRMED_MESSAGE,
+  TaskActionsScreen,
+} from '@/screens/TaskActionsScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useResumeStore, type ResumeAttempt } from '@/state/resumeStore';
 import { boardColumnFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 import { WORKFLOW_LOCK_REASON, workflowWireFixture } from '../helpers/workflows';
+import { getLucideGlyph } from '../helpers/lucideGlyphs';
 
 jest.mock('react-native-safe-area-context', () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
@@ -33,17 +41,26 @@ const mockArchiveTask = jest.fn().mockResolvedValue(undefined);
 const mockDeleteTaskFromBoard = jest.fn().mockResolvedValue(undefined);
 const mockResumeTaskSession = jest.fn();
 const mockPauseTaskSession = jest.fn();
+const mockUpdateTaskFields = jest.fn().mockResolvedValue(undefined);
 /** Mirrors PAUSE_WAIT_MS; the module is mocked whole, so the real constant is not there to import. */
 const MOCK_PAUSE_WAIT_MS = 20_000;
 jest.mock('@/connection/actions', () => ({
   archiveTask: (input: unknown) => mockArchiveTask(input),
   deleteTaskFromBoard: (input: unknown) => mockDeleteTaskFromBoard(input),
+  updateTaskFields: (input: unknown) => mockUpdateTaskFields(input),
   resumeTaskSession: (taskId: string, projectId: string) => mockResumeTaskSession(taskId, projectId),
   pauseTaskSession: (taskId: string, projectId: string) => mockPauseTaskSession(taskId, projectId),
   // A getter: the factory is hoisted above the constant's initialization.
   get PAUSE_WAIT_MS() {
     return MOCK_PAUSE_WAIT_MS;
   },
+}));
+
+// The handled-error door: asserted with the rejected instance on failure and
+// absent on success. The arrow forwards its arguments on purpose.
+const mockReportHandledError = jest.fn();
+jest.mock('@/observability/crashReporting', () => ({
+  reportHandledError: (site: string, error: unknown) => mockReportHandledError(site, error),
 }));
 
 /** `withDoneColumn` decides whether Archive is even possible - it is a move into a done-role column. */
@@ -851,6 +868,157 @@ describe('TaskActionsScreen', () => {
       await renderTaskActions();
 
       expect(screen.getByTestId('task-action-resume')).toBeTruthy();
+    });
+  });
+
+  /**
+   * The column automations switch (protocol 0.22.0), the desktop card menu's
+   * Disable/Enable automations, written through `update_task`. Left out rather
+   * than disabled where the desktop leaves it out: a workflow task, and a
+   * desktop older than the switch, whose row cannot say which way it is set.
+   */
+  describe('Automations switch', () => {
+    const AUTOMATIONS_ROW = 'task-action-automations';
+    const WORKFLOW_REFUSAL = 'This task is in a workflow. Pause the workflow to hold it. The task was not updated.';
+
+    /** What the store's optimistic edit does to the row while the write is in flight. */
+    function patchTaskRow(patch: Partial<BoardTaskWire>): void {
+      useBoardStore.setState((state) => {
+        const board = state.boardsByProjectId['project-1'];
+        const task = board?.tasksById['task-1'];
+        if (!board || !task) return state;
+        return {
+          boardsByProjectId: {
+            ...state.boardsByProjectId,
+            'project-1': { ...board, tasksById: { ...board.tasksById, 'task-1': { ...task, ...patch } } },
+          },
+        };
+      });
+    }
+
+    it('offers "Disable automations" with the desktop\'s Ban glyph while automations run', async () => {
+      seedBoard({ withDoneColumn: true, task: { automations_disabled: false } });
+      await renderTaskActions();
+
+      const row = screen.getByTestId(AUTOMATIONS_ROW);
+      expect(row).toHaveTextContent('Disable automations');
+      expect(getLucideGlyph(row, Ban)).toBeTruthy();
+    });
+
+    it('offers "Enable automations" with the desktop\'s Columns3Cog glyph on a held task', async () => {
+      seedBoard({ withDoneColumn: true, task: { automations_disabled: true } });
+      await renderTaskActions();
+
+      const row = screen.getByTestId(AUTOMATIONS_ROW);
+      expect(row).toHaveTextContent('Enable automations');
+      expect(getLucideGlyph(row, Columns3Cog)).toBeTruthy();
+    });
+
+    it('leaves the row out against a desktop older than the switch, whose row reads null', async () => {
+      seedBoard({ withDoneColumn: true, task: { automations_disabled: null } });
+      await renderTaskActions();
+
+      expect(screen.queryByTestId(AUTOMATIONS_ROW)).toBeNull();
+    });
+
+    it('leaves the row out when the row carries no automations key at all', async () => {
+      const taskWithoutKey = boardTaskFixture({ id: 'task-1', title: 'Fix the login bug', swimlane_id: 'lane-todo' });
+      delete taskWithoutKey.automations_disabled;
+      seedBoard({ withDoneColumn: true, taskOverride: taskWithoutKey });
+      await renderTaskActions();
+
+      expect(screen.queryByTestId(AUTOMATIONS_ROW)).toBeNull();
+    });
+
+    /** Its workflow's Pause holds it instead, and the desktop refuses `true` for one. */
+    it('leaves the row out for a workflow task', async () => {
+      seedBoard({ withDoneColumn: true, task: { automations_disabled: false, workflow: workflowWireFixture() } });
+      await renderTaskActions();
+
+      expect(screen.queryByTestId(AUTOMATIONS_ROW)).toBeNull();
+      expect(screen.getByTestId('task-action-view-workflow')).toBeTruthy();
+    });
+
+    it('holds a task through update_task and closes once the desktop accepts', async () => {
+      seedBoard({ withDoneColumn: true, task: { automations_disabled: false } });
+      await renderTaskActions();
+
+      await act(async () => {
+        await fireEvent.press(screen.getByTestId(AUTOMATIONS_ROW));
+      });
+
+      expect(mockUpdateTaskFields).toHaveBeenCalledWith({ projectId: 'project-1', taskId: 'task-1', automationsDisabled: true });
+      expect(mockBack).toHaveBeenCalled();
+      expect(mockReportHandledError).not.toHaveBeenCalled();
+    });
+
+    it('releases a held task with automationsDisabled false', async () => {
+      seedBoard({ withDoneColumn: true, task: { automations_disabled: true } });
+      await renderTaskActions();
+
+      await act(async () => {
+        await fireEvent.press(screen.getByTestId(AUTOMATIONS_ROW));
+      });
+
+      expect(mockUpdateTaskFields).toHaveBeenCalledWith({ projectId: 'project-1', taskId: 'task-1', automationsDisabled: false });
+      expect(mockBack).toHaveBeenCalled();
+    });
+
+    /**
+     * The store flips the row at once, so without the held target the label
+     * would turn into "Enable automations" under the finger that just tapped
+     * "Disable automations", while the sheet waits on the desktop.
+     */
+    it('keeps the tapped label, with every row disabled, while the write is in flight', async () => {
+      seedBoard({ withDoneColumn: true, task: { automations_disabled: false } });
+      mockUpdateTaskFields.mockImplementationOnce(() => {
+        patchTaskRow({ automations_disabled: true });
+        return new Promise<void>(() => undefined);
+      });
+      await renderTaskActions();
+
+      await act(async () => {
+        await fireEvent.press(screen.getByTestId(AUTOMATIONS_ROW));
+      });
+
+      const row = screen.getByTestId(AUTOMATIONS_ROW);
+      expect(row).toHaveTextContent('Disable automations');
+      expect(getLucideGlyph(row, Ban)).toBeTruthy();
+      expect(row.props.accessibilityState.disabled).toBe(true);
+      expect(screen.getByTestId('task-action-move').props.accessibilityState.disabled).toBe(true);
+      expect(mockBack).not.toHaveBeenCalled();
+    });
+
+    it("stays open with the desktop's own sentence when it refuses, and offers the row again", async () => {
+      seedBoard({ withDoneColumn: true, task: { automations_disabled: false } });
+      const refusal = new CapabilityError('board-tool-write', WORKFLOW_REFUSAL);
+      mockUpdateTaskFields.mockRejectedValueOnce(refusal);
+      await renderTaskActions();
+
+      await act(async () => {
+        await fireEvent.press(screen.getByTestId(AUTOMATIONS_ROW));
+      });
+
+      expect(mockReportHandledError).toHaveBeenCalledWith('task-automations', refusal);
+      expect(screen.getByTestId('task-action-error')).toHaveTextContent(WORKFLOW_REFUSAL);
+      expect(mockBack).not.toHaveBeenCalled();
+      const row = screen.getByTestId(AUTOMATIONS_ROW);
+      expect(row).toHaveTextContent('Disable automations');
+      expect(row.props.accessibilityState.disabled).toBe(false);
+    });
+
+    it('says to check the connection when the write fails with no reason', async () => {
+      seedBoard({ withDoneColumn: true, task: { automations_disabled: false } });
+      mockUpdateTaskFields.mockRejectedValueOnce('no reason');
+      await renderTaskActions();
+
+      await act(async () => {
+        await fireEvent.press(screen.getByTestId(AUTOMATIONS_ROW));
+      });
+
+      expect(screen.getByTestId('task-action-error')).toHaveTextContent(AUTOMATIONS_FAILED_MESSAGE);
+      expect(mockBack).not.toHaveBeenCalled();
+      expect(mockReportHandledError).toHaveBeenCalledWith('task-automations', 'no reason');
     });
   });
 

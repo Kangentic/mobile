@@ -397,12 +397,22 @@ export async function createTask(input: { projectId: string; title: string; desc
   await requireVerbClient().boardToolWrite('create_task', params);
 }
 
-/** Edits a task's title and/or description (board-tool-write update_task), optimistically applied. */
+/**
+ * Edits a task's title, description and/or column automations switch
+ * (board-tool-write update_task), optimistically applied.
+ *
+ * The switch (protocol 0.22.0) has no verb of its own: it is this call's
+ * camelCase `automationsDisabled` param, never the row's `automations_disabled`
+ * spelling, which the desktop would ignore as an unknown key. Flipping it never
+ * restarts the session. The desktop refuses `true` for a workflow task with
+ * its own sentence, which arrives as the CapabilityError's message.
+ */
 export async function updateTaskFields(input: {
   projectId: string;
   taskId: string;
   title?: string;
   description?: string;
+  automationsDisabled?: boolean;
 }): Promise<void> {
   const editId = useBoardStore.getState().applyOptimisticTaskEdit(input);
   try {
@@ -411,6 +421,7 @@ export async function updateTaskFields(input: {
       taskId: input.taskId,
       ...(input.title !== undefined ? { title: input.title } : {}),
       ...(input.description !== undefined ? { description: input.description } : {}),
+      ...(input.automationsDisabled !== undefined ? { automationsDisabled: input.automationsDisabled } : {}),
     };
     await requireVerbClient().boardToolWrite('update_task', params);
     if (editId) useBoardStore.getState().commitTaskEdit(editId);
