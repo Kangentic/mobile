@@ -10,6 +10,7 @@ import type { ActivityEvent } from '@kangentic/protocol';
 // time, so the mocked react-native / notifee are in place before they load.
 import notifee from '@notifee/react-native';
 import { startLocalNotifier } from '@/notifications/localNotifier';
+import * as notificationSignals from '@/notifications/notificationSignals';
 import {
   publishNotificationDismissed,
   subscribeToDisplayedNotifications,
@@ -97,6 +98,15 @@ function activityStateEventForSession(sessionId: string, taskId: string, state: 
  * which is precisely the regression they exist to catch.
  */
 const EXPECTED_IDLE_SETTLE_MS = 45_000;
+
+/**
+ * The reconciler's note follows the display's promise. Drained by hand: this
+ * file fakes setTimeout, so the shared macrotask flush (flushMicrotasks) would
+ * never resolve.
+ */
+async function drainDisplayPromises(): Promise<void> {
+  for (let turn = 0; turn < 5; turn += 1) await Promise.resolve();
+}
 
 function seedSession(): void {
   useBoardStore
@@ -694,6 +704,178 @@ describe('startLocalNotifier', () => {
         promptIdAtPost: 'prompt-1',
       },
     ]);
+  });
+
+  /**
+   * The prompt id is how the reconciler knows WHICH question an alert asked, so
+   * it belongs to input-required alone. A session-failed alert is posted for a
+   * session that died mid-prompt: `session-ended` sets feedStatus and leaves
+   * awaitedPromptId on the entry (activityStore.ts), so the entry the notifier
+   * reads at fire time still holds 'prompt-1'. Noting that against the failure
+   * alert would tie it to a question that can never be answered, and the
+   * reconciler would then judge a crash notice by a prompt it was never about.
+   *
+   * Mutation that reddens this: drop the category gate in fire(), so
+   * promptIdAtPost is `entry.awaitedPromptId` for every category. Seen red that
+   * way (session-failed noted 'prompt-1' instead of null).
+   */
+  it('notes a session-failed alert with no prompt even though the dead session still holds the one it was awaiting', async () => {
+    const notes: DisplayedNotificationNote[] = [];
+    const unsubscribe = subscribeToDisplayedNotifications((note) => notes.push(note));
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-1'));
+    useActivityStore.getState().applyActivityEvent(sessionEndedEvent(false));
+    await drainDisplayPromises();
+    unsubscribe();
+
+    // The precondition that makes this discriminating: the stale prompt is there.
+    expect(useActivityStore.getState().bySessionId['sess-1'].awaitedPromptId).toBe('prompt-1');
+    expect(displayNotification).toHaveBeenCalledTimes(2);
+    expect(notes.map((note) => ({ category: note.routing?.category, promptIdAtPost: note.promptIdAtPost }))).toEqual([
+      { category: 'input-required', promptIdAtPost: 'prompt-1' },
+      { category: 'session-failed', promptIdAtPost: null },
+    ]);
+  });
+
+  /**
+   * The same rule for a settled turn-complete. Through activity events alone a
+   * settled-idle entry always has a null prompt (leaving 'permission' clears
+   * it), so a snapshot is the only way to put a non-null id on one: a
+   * re-subscribe landing while the engine reclassifies. That is a SYNTHETIC
+   * entry, labelled so nobody reads it as real traffic; what it pins is that
+   * the notifier takes the id from the category, not from whatever the entry
+   * happens to hold.
+   *
+   * Mutation that reddens this: the same one as above, dropping the category
+   * gate in fire(). Seen red that way (turn-complete noted 'prompt-stale').
+   */
+  it('notes a settled turn-complete with no prompt even when the entry carries a stale prompt id', async () => {
+    const notes: DisplayedNotificationNote[] = [];
+    const unsubscribe = subscribeToDisplayedNotifications((note) => notes.push(note));
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('thinking'));
+    useActivityStore.getState().applyActivityEvent(activityStateEvent('idle'));
+    useActivityStore
+      .getState()
+      .applySnapshot(
+        'sess-1',
+        'task-1',
+        'project-1',
+        streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'running', awaitedPromptId: 'prompt-stale' }),
+      );
+    vi.advanceTimersByTime(EXPECTED_IDLE_SETTLE_MS);
+    await drainDisplayPromises();
+    unsubscribe();
+
+    expect(useActivityStore.getState().bySessionId['sess-1'].awaitedPromptId).toBe('prompt-stale');
+    expect(displayNotification).toHaveBeenCalledTimes(1);
+    expect(notes).toEqual([
+      {
+        platformId: 'notification-id',
+        routing: { category: 'turn-complete', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null },
+        postedAt: nowMs,
+        promptIdAtPost: null,
+      },
+    ]);
+  });
+
+  /**
+   * An alert posted before the category rode along has no category, and
+   * without one there is no cooldown key to release: it must release nothing
+   * rather than guess one. If it released the session's input-required key, a
+   * legacy dismissal would reopen the window for a different, still-live alert
+   * and the alerts would stack, which is what the cooldown exists to prevent.
+   *
+   * Note what this does NOT pin: deleting the `category === null` early return
+   * alone stays green, because the key it would then build ('sess-1:null')
+   * matches nothing. The guard is what the type checker needs, and this test is
+   * the contract that no mapping of null to a category ever sneaks in behind it.
+   *
+   * Mutation that reddens this: make the dismissal handler clear the whole
+   * cooldown map when `routing.category === null` instead of returning. Seen
+   * red that way (the second prompt posted, 2 calls where 1 was expected).
+   */
+  it('keeps the cooldown when the dismissed alert carried no category', () => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-1'));
+    expect(displayNotification).toHaveBeenCalledTimes(1);
+    publishNotificationDismissed({ category: null, taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null });
+
+    nowMs += 5_000;
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-1', false));
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-2'));
+    expect(displayNotification).toHaveBeenCalledTimes(1);
+
+    // The swallow was the cooldown, and it lapses on schedule.
+    nowMs += 31_000;
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-2', false));
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-3'));
+    expect(displayNotification).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * A stopped notifier must not stay subscribed to dismissals. A leaked
+   * listener cannot be seen from outside by its effect (it would delete from
+   * the cleared, orphaned cooldown map) and cannot throw (the signals module
+   * swallows a throwing listener), so the subscription itself is what this
+   * counts: it wraps the real subscribe and tallies the ones still live.
+   *
+   * Mutation that reddens this: drop `unsubscribeDismissals()` from the stop
+   * function in startLocalNotifier. Seen red that way (1 live subscription
+   * after the stop, 0 expected).
+   */
+  it('removes its dismissal subscription when stopped, so a dismissal after the stop reaches nothing', () => {
+    const realSubscribe = notificationSignals.subscribeToNotificationDismissals;
+    let liveDismissalSubscriptions = 0;
+    const subscribeSpy = vi.spyOn(notificationSignals, 'subscribeToNotificationDismissals').mockImplementation((listener) => {
+      const removeSubscription = realSubscribe(listener);
+      liveDismissalSubscriptions += 1;
+      let removed = false;
+      return () => {
+        if (!removed) liveDismissalSubscriptions -= 1;
+        removed = true;
+        removeSubscription();
+      };
+    });
+    try {
+      seedSession();
+      stopNotifier = startLocalNotifier();
+      appStateMock.emit('background');
+      expect(liveDismissalSubscriptions).toBe(1);
+      useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-1'));
+      expect(displayNotification).toHaveBeenCalledTimes(1);
+
+      stopNotifier();
+      stopNotifier = null;
+      expect(liveDismissalSubscriptions).toBe(0);
+      expect(() =>
+        publishNotificationDismissed({
+          category: 'input-required',
+          taskId: 'task-1',
+          projectId: 'project-1',
+          sessionId: 'sess-1',
+          sessionKind: null,
+        }),
+      ).not.toThrow();
+
+      // A fresh start owns its own subscription and cooldown, and fires normally.
+      stopNotifier = startLocalNotifier();
+      expect(liveDismissalSubscriptions).toBe(1);
+      useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-1', false));
+      useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-2'));
+      expect(displayNotification).toHaveBeenCalledTimes(2);
+    } finally {
+      subscribeSpy.mockRestore();
+    }
   });
 
   it('falls back to a generic body when the board has no matching task', () => {

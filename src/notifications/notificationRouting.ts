@@ -82,6 +82,32 @@ export function notificationIdForRouting(routing: NotificationRouting): string |
   return null;
 }
 
+/** One posting of an alert, as both Android display paths post it. */
+export interface StampedPosting<Data extends object> {
+  /** What the alert is about, read back off its data the way every reader reads it. */
+  routing: NotificationRouting | null;
+  /** Spread into `displayNotification`: the stable id, or nothing, so notifee picks a random one. */
+  idField: { id?: string };
+  /** The alert's data with this posting's own time stamped in. */
+  data: Data & Record<typeof POSTED_AT_DATA_KEY, string>;
+}
+
+/**
+ * Stamps one posting: its data with the posting time, the routing that data
+ * names, and the stable id it posts under. The local notifier and the headless
+ * push task both post through this, so a local alert and a remote push for the
+ * same event cannot disagree on the id or on where the time rides.
+ */
+export function stampPosting<Data extends object>(data: Data, postedAt: number): StampedPosting<Data> {
+  const routing = routingFromNotificationData(data);
+  const stableId = routing === null ? null : notificationIdForRouting(routing);
+  return {
+    routing,
+    idField: stableId === null ? {} : { id: stableId },
+    data: { ...data, [POSTED_AT_DATA_KEY]: String(postedAt) },
+  };
+}
+
 function parseEpochMs(value: unknown): number | null {
   if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : null;
   if (typeof value !== 'string' || value.length === 0) return null;

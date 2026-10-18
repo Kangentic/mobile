@@ -10,6 +10,7 @@ import {
   readPostedAt,
   routingFromNotificationData,
   routingNamesAnything,
+  stampPosting,
   type NotificationRouting,
 } from '@/notifications/notificationRouting';
 
@@ -71,6 +72,88 @@ describe('notificationIdForRouting', () => {
 
   it('never collides with the keepalive connection notification', () => {
     expect(notificationIdForRouting(routing({ sessionId: 'kangentic-connection' }))).not.toBe('kangentic-connection');
+  });
+});
+
+/**
+ * stampPosting is the one place both Android display paths (the local notifier
+ * and the headless push task) get an alert's id, routing and posting time from,
+ * so a local alert and a remote push for one event cannot disagree. Expected
+ * values below are written out as literals rather than derived through
+ * routingFromNotificationData or notificationIdForRouting, which would only
+ * prove stampPosting agrees with them.
+ */
+describe('stampPosting', () => {
+  const POSTED_AT = 1_700_000_000_123;
+
+  it('stamps the posting time as a string, keeps every other key, and names the routing and stable id of its data', () => {
+    const data = {
+      category: 'input-required',
+      taskId: 'task-1',
+      projectId: 'project-1',
+      sessionId: 'sess-1',
+      sessionKind: 'command-terminal',
+      extra: 'kept',
+    };
+
+    const posting = stampPosting(data, POSTED_AT);
+
+    expect(posting.data).toStrictEqual({ ...data, postedAt: '1700000000123' });
+    expect(posting.routing).toStrictEqual({
+      category: 'input-required',
+      taskId: 'task-1',
+      projectId: 'project-1',
+      sessionId: 'sess-1',
+      sessionKind: 'command-terminal',
+    });
+    expect(posting.idField).toStrictEqual({ id: 'kangentic:input-required:session:sess-1' });
+  });
+
+  it('keys the id on the narrowest thing the data names, the same way notificationIdForRouting does', () => {
+    const posting = stampPosting({ category: 'spawn-stalled', taskId: 'task-1', projectId: 'project-1', sessionId: '' }, POSTED_AT);
+
+    expect(posting.idField).toStrictEqual({ id: 'kangentic:spawn-stalled:task:task-1' });
+  });
+
+  /**
+   * A repeat posting must carry ITS OWN time, which the tap latch tells reposts
+   * apart by. Data that arrives already stamped (a payload built from an earlier
+   * posting) must not win over the new stamp.
+   */
+  it('replaces a posting time the data already carried', () => {
+    const posting = stampPosting({ category: 'turn-complete', sessionId: 'sess-1', postedAt: '1' }, POSTED_AT);
+
+    expect(posting.data).toStrictEqual({ category: 'turn-complete', sessionId: 'sess-1', postedAt: '1700000000123' });
+  });
+
+  /**
+   * The idField is spread into notifee's `displayNotification`. An absent key
+   * lets notifee pick a random id; a present `id: undefined` is not the same
+   * thing, and toEqual cannot tell the two apart, so this asserts the key is
+   * missing outright.
+   */
+  it.each([
+    ['carries no category', { taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' }, null],
+    ['carries a category this build does not know', { category: 'not-a-category', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' }, null],
+    ['has a category but names nothing to key on', { category: 'input-required', taskId: '', projectId: '', sessionId: '' }, 'input-required'],
+  ])('gives an alert whose data %s no id key at all', (_label, data, expectedCategory) => {
+    const posting = stampPosting(data, POSTED_AT);
+
+    expect(posting.idField).toStrictEqual({});
+    expect('id' in posting.idField).toBe(false);
+    expect(posting.routing?.category).toBe(expectedCategory);
+    expect(posting.data.postedAt).toBe('1700000000123');
+  });
+
+  it('does not mutate the data it is handed, and returns a new object', () => {
+    const data = Object.freeze({ category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' });
+    const before = { ...data };
+
+    const posting = stampPosting(data, POSTED_AT);
+
+    expect(data).toStrictEqual(before);
+    expect('postedAt' in data).toBe(false);
+    expect(posting.data).not.toBe(data);
   });
 });
 

@@ -1,11 +1,11 @@
 import { AppState, Platform } from 'react-native';
 import notifee from '@notifee/react-native';
 import * as Notifications from 'expo-notifications';
-import { useActivityStore } from '@/state/activityStore';
+import { useActivityStore, type SessionActivityEntry } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { CONNECTION_CHANNEL_ID, CONNECTION_NOTIFICATION_ID } from './categoryCopy';
 import { decryptPushBlob, extractBlobFromTaskData } from './pushDecrypt';
-import { readPostedAt, routingFromNotificationData, routingNamesAnything } from './notificationRouting';
+import { readPostedAt, routingFromNotificationData, routingNamesAnything, type NotificationRouting } from './notificationRouting';
 import {
   getOpenNotificationSurfaces,
   publishNotificationDismissed,
@@ -40,7 +40,19 @@ import { judgeNotification, observeAtFirstSight, type JudgedNotification, type S
  * (crash-reporting-scope.md bans this directory).
  */
 
-type TrackedNotification = JudgedNotification & { platformId: string };
+type TrackedNotification = JudgedNotification & {
+  platformId: string;
+  /** When an `ios-undecryptable` alert's blob was last tried, so a refresh does not retry it every time. */
+  decryptAttemptedAt?: number;
+};
+
+/**
+ * How long an iOS alert that could not be opened waits before a refresh tries
+ * its blob again. It is retried at all because the key may simply not have been
+ * readable the last time; it is not retried on every refresh because a refresh
+ * runs on every foreground and every screen focus.
+ */
+const UNDECRYPTABLE_RETRY_MS = 60_000;
 
 let tracked: TrackedNotification[] = [];
 /** Alerts noted while a native read was in flight, which that read may predate. */
@@ -51,6 +63,8 @@ let refreshRequested = false;
 let rejudgeRequested = false;
 let passScheduled = false;
 let passRunning = false;
+/** Bumped by every stop, so a read still in flight when it stopped cannot write into what starts next. */
+let generation = 0;
 
 /**
  * The surfaces the user is looking at, only while the app is in front. A screen
@@ -76,6 +90,31 @@ function readContext(): StalenessContext {
   };
 }
 
+function routedRecord(
+  platformId: string,
+  routing: NotificationRouting,
+  postedAt: number | null,
+  firstSeenPromptId: string | null,
+): TrackedNotification {
+  return { platformId, kind: 'routed', routing, postedAt, firstSeenSwimlaneId: null, firstSeenPromptId };
+}
+
+/**
+ * An alert this app posted through notifee: routed when its routing names
+ * anything, else the placeholder, which names nothing and is judged against
+ * everything.
+ */
+function notifeeRecord(
+  platformId: string,
+  routing: NotificationRouting | null,
+  postedAt: number | null,
+  firstSeenPromptId: string | null,
+): TrackedNotification {
+  return routing === null || !routingNamesAnything(routing)
+    ? { platformId, kind: 'android-placeholder', postedAt }
+    : routedRecord(platformId, routing, postedAt, firstSeenPromptId);
+}
+
 /**
  * Keeps what an earlier pass learned about an alert (its first sight), unless
  * the alert was posted again under the same id: a fixed id now means a repost
@@ -92,6 +131,18 @@ function mergeTracked(previous: TrackedNotification | undefined, next: TrackedNo
   };
 }
 
+/**
+ * A read record against a note taken while that read was in flight. A note
+ * POSTED LATER than what the read returned is the repost that replaced it
+ * under the same id, so the note is what is on screen; the read only predated
+ * it. The same posting merges as any two sightings do.
+ */
+function mergeReadWithNote(noted: TrackedNotification | undefined, read: TrackedNotification): TrackedNotification {
+  if (noted === undefined) return read;
+  if (noted.postedAt !== null && (read.postedAt === null || noted.postedAt > read.postedAt)) return noted;
+  return mergeTracked(noted, read);
+}
+
 async function readAndroidDisplayed(previousById: ReadonlyMap<string, TrackedNotification>): Promise<TrackedNotification[]> {
   const displayed = await notifee.getDisplayedNotifications();
   const result: TrackedNotification[] = [];
@@ -106,11 +157,7 @@ async function readAndroidDisplayed(previousById: ReadonlyMap<string, TrackedNot
     // service notifications); this keeps it out of judging altogether.
     if (platformId === CONNECTION_NOTIFICATION_ID || notification.android?.channelId === CONNECTION_CHANNEL_ID) continue;
     const postedAt = readPostedAt(notification.data, item.date);
-    const routing = routingFromNotificationData(notification.data);
-    const next: TrackedNotification =
-      routing === null || !routingNamesAnything(routing)
-        ? { platformId, kind: 'android-placeholder', postedAt }
-        : { platformId, kind: 'routed', routing, postedAt, firstSeenSwimlaneId: null, firstSeenPromptId: null };
+    const next = notifeeRecord(platformId, routingFromNotificationData(notification.data), postedAt, null);
     result.push(mergeTracked(previousById.get(platformId), next));
   }
   return result;
@@ -135,10 +182,19 @@ async function readIosPresented(previousById: ReadonlyMap<string, TrackedNotific
     const platformId: unknown = notification.request.identifier;
     if (typeof platformId !== 'string' || platformId.length === 0) continue;
     // An iOS identifier names one delivered push for its whole life, so a
-    // decrypt already done is reused. One that could not be opened is retried:
-    // the key may simply not have been readable the last time.
+    // decrypt already done is reused. One that could not be opened is retried,
+    // once UNDECRYPTABLE_RETRY_MS has passed since the last try.
     const previous = previousById.get(platformId);
     if (previous !== undefined && previous.kind === 'routed') {
+      result.push(previous);
+      continue;
+    }
+    if (
+      previous !== undefined &&
+      previous.kind === 'ios-undecryptable' &&
+      previous.decryptAttemptedAt !== undefined &&
+      Date.now() - previous.decryptAttemptedAt < UNDECRYPTABLE_RETRY_MS
+    ) {
       result.push(previous);
       continue;
     }
@@ -146,12 +202,13 @@ async function readIosPresented(previousById: ReadonlyMap<string, TrackedNotific
     // Not ours, or not sealed: nothing to judge it by.
     if (blob === null) continue;
     const postedAt = epochMsFromPresentedDate(notification.date);
+    const decryptAttemptedAt = Date.now();
     const decrypted = await decryptPushBlob(blob);
     const routing = decrypted === null ? null : routingFromNotificationData(decrypted.data);
     result.push(
       routing === null
-        ? { platformId, kind: 'ios-undecryptable', postedAt }
-        : { platformId, kind: 'routed', routing, postedAt, firstSeenSwimlaneId: null, firstSeenPromptId: null },
+        ? { platformId, kind: 'ios-undecryptable', postedAt, decryptAttemptedAt }
+        : routedRecord(platformId, routing, postedAt, null),
     );
   }
   return result;
@@ -159,18 +216,19 @@ async function readIosPresented(previousById: ReadonlyMap<string, TrackedNotific
 
 /** The only native read: replaces the tracked list with what is actually on screen. */
 async function refreshTracked(): Promise<void> {
+  const startedIn = generation;
   readInFlight = true;
   notedDuringRead = new Map();
   try {
     const previousById = new Map(tracked.map((record) => [record.platformId, record]));
     const read = Platform.OS === 'android' ? await readAndroidDisplayed(previousById) : await readIosPresented(previousById);
+    // Stopped while the read was in flight: it belongs to a reconciler that is gone.
+    if (generation !== startedIn) return;
     const readIds = new Set(read.map((record) => record.platformId));
-    // An alert posted while the read was in flight may be missing from it, and
-    // one the read did catch keeps what its note knew (the prompt at post).
-    const merged = read.map((record) => {
-      const noted = notedDuringRead.get(record.platformId);
-      return noted === undefined ? record : mergeTracked(noted, record);
-    });
+    // An alert posted while the read was in flight may be missing from it, or
+    // caught in the posting it replaced; one the read did catch keeps what its
+    // note knew (the prompt at post).
+    const merged = read.map((record) => mergeReadWithNote(notedDuringRead.get(record.platformId), record));
     const notedLate = [...notedDuringRead.values()].filter((record) => !readIds.has(record.platformId));
     tracked = [...merged, ...notedLate];
   } catch {
@@ -213,10 +271,15 @@ async function rejudgeTracked(): Promise<void> {
   }
   tracked = kept;
   if (dismissed.length === 0) return;
-  await Promise.allSettled(dismissed.map((record) => cancelPlatformNotification(record)));
+  // Published BEFORE the cancels settle. The local notifier releases its
+  // cooldown on this, and a next prompt landing inside the bridge round trip
+  // would otherwise still meet the old cooldown and post nothing. Releasing it
+  // while the old alert is still on screen stacks nothing: a repost reuses the
+  // stable id and replaces it.
   for (const record of dismissed) {
     if (record.kind === 'routed') publishNotificationDismissed(record.routing);
   }
+  await Promise.allSettled(dismissed.map((record) => cancelPlatformNotification(record)));
 }
 
 async function runPasses(): Promise<void> {
@@ -257,21 +320,31 @@ function requestPass(options: { refresh: boolean }): void {
   });
 }
 
+/**
+ * Whether a change to the activity entries can alter any verdict. A routed
+ * alert reads only its own session's entry, so only a change to that entry
+ * can; the Android placeholder is judged against every session, so any change
+ * can. The stream rewrites an entry on every event, so without this every
+ * streamed token would re-judge the whole list for a session no alert is about.
+ */
+function entryChangeReachesTracked(
+  current: Readonly<Record<string, SessionActivityEntry>>,
+  previous: Readonly<Record<string, SessionActivityEntry>>,
+): boolean {
+  for (const record of tracked) {
+    if (record.kind === 'android-placeholder') return true;
+    if (record.kind !== 'routed') continue;
+    const sessionId = record.routing.sessionId;
+    if (sessionId.length > 0 && current[sessionId] !== previous[sessionId]) return true;
+  }
+  return false;
+}
+
 function onNotificationDisplayed(note: DisplayedNotificationNote): void {
   // notifee resolves the id it posted under; a bridge that resolved nothing
   // leaves the next native read to find the alert instead.
   if (typeof note.platformId !== 'string' || note.platformId.length === 0) return;
-  const record: TrackedNotification =
-    note.routing === null || !routingNamesAnything(note.routing)
-      ? { platformId: note.platformId, kind: 'android-placeholder', postedAt: note.postedAt }
-      : {
-          platformId: note.platformId,
-          kind: 'routed',
-          routing: note.routing,
-          postedAt: note.postedAt,
-          firstSeenSwimlaneId: null,
-          firstSeenPromptId: note.promptIdAtPost,
-        };
+  const record = notifeeRecord(note.platformId, note.routing, note.postedAt, note.promptIdAtPost);
   tracked = [...tracked.filter((existing) => existing.platformId !== note.platformId), record];
   if (readInFlight) notedDuringRead.set(note.platformId, record);
   requestPass({ refresh: false });
@@ -289,7 +362,8 @@ let stopActiveReconciler: (() => void) | null = null;
  * The native list is read only when something may have appeared that this
  * process did not post: a foreground, the first board after start (a cold start
  * fires no 'active' event), and a surface opening. Everything else re-judges the
- * list already held, which costs a few lookups and no bridge call.
+ * list already held and makes no bridge call; an activity change does so only
+ * when it reaches a tracked alert (entryChangeReachesTracked) or records an end.
  */
 export function startNotificationReconciler(): () => void {
   if (stopActiveReconciler !== null) return stopActiveReconciler;
@@ -315,9 +389,14 @@ export function startNotificationReconciler(): () => void {
   let previousEndedSessionIds = useActivityStore.getState().endedSessionIds;
   const unsubscribeActivity = useActivityStore.subscribe((state) => {
     if (state.bySessionId === previousBySessionId && state.endedSessionIds === previousEndedSessionIds) return;
+    // An end is rare, and any alert's rules can read one (a board's newer
+    // session is checked against it too), so an end always re-judges.
+    const endRecorded = state.endedSessionIds !== previousEndedSessionIds;
+    const entriesBefore = previousBySessionId;
     previousBySessionId = state.bySessionId;
     previousEndedSessionIds = state.endedSessionIds;
     if (tracked.length === 0) return;
+    if (!endRecorded && !entryChangeReachesTracked(state.bySessionId, entriesBefore)) return;
     requestPass({ refresh: false });
   });
 
@@ -330,7 +409,14 @@ export function startNotificationReconciler(): () => void {
     unsubscribeActivity();
     unsubscribeSurfaces();
     unsubscribeDisplayed();
+    // A pass still in flight finishes against the reset state: its read is
+    // discarded (refreshTracked checks the generation), and nothing it had
+    // requested runs again.
+    generation += 1;
     tracked = [];
+    notedDuringRead = new Map();
+    refreshRequested = false;
+    rejudgeRequested = false;
     stopActiveReconciler = null;
   };
   stopActiveReconciler = stop;

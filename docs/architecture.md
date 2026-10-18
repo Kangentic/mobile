@@ -1367,7 +1367,7 @@ answer at the desk is a stream event and re-snapshots no board.
 | Alert | Dismissed when |
 |-------|----------------|
 | any task alert | its task is archived, in a done-role column, or missing from a fresh `'full'` board |
-| `input-required` | the session ended, a newer session runs, a fresh board drops it with no live entry left, its fresh entry leaves `permission`, or the awaited prompt differs from the one first seen |
+| `input-required` | the session ended, a newer session runs, a fresh board drops it with no live entry left, its fresh entry leaves `permission`, or the prompt first seen resolves with no other awaited. NOT a move straight on to another prompt: the agent still needs input, and the local cooldown can have swallowed that prompt's own alert |
 | `turn-complete`, `plan-complete` | a newer session runs (this desktop resumes into a new id on every column move), the task is gone from a fresh board with no live entry left, the session is thinking again, or the task left the column it was first seen in. NOT a bare end: an idle-timeout pause ends the session but keeps a resumable row |
 | `session-failed` | a newer session runs for the task |
 | `spawn-stalled` | a session now exists for the task |
@@ -1380,16 +1380,21 @@ answer at the desk is a stream event and re-snapshots no board.
 push envelope carries neither; a local alert seeds its prompt at posting. "Live entry" is what
 protects the successor race: a session subscribed from `successorSessionId` before any board names
 it keeps its entry, so a board computed before the resume cannot dismiss its fresh prompt alert.
+"A newer session" guards the same race: a board session this phone saw END is the predecessor on
+such a board, never newer.
 
 **When it runs.** The native list is read on a foreground, on the first board snapshot after start
 (a cold start fires no `'active'` event), and when a surface opens; the local notifier and the
 headless push task also tell it what they just posted. Every other store change re-judges the list
 already held, with no bridge call, coalesced one microtask later (a zustand subscriber runs inside
-the store write, before `storeFeed`'s prune). Because the activity subscription is always on, the
+the store write, before `storeFeed`'s prune). An activity change re-judges only when it touches a
+tracked alert's own session (any session, for a placeholder) or records an end, since the stream
+rewrites an entry on every event. Because the activity subscription is always on, the
 same rules cancel during the Android background keepalive: an answer at the desk clears the
 phone's alert while the app is still in the background. A dismissal also releases the local
 notifier's 30s cooldown for that session and category, or the cooldown left by an answered prompt
-would swallow the next prompt's alert.
+would swallow the next prompt's alert; it is published before the native cancel settles, so a
+next prompt landing inside that round trip still alerts.
 
 **Clear on open.** `SessionScreen`, `CommandTerminalScreen` and `BoardScreen` claim a surface while
 focused (`openNotificationSurface` in the pure `notificationSignals.ts`, so the screens import no

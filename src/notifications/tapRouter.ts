@@ -18,11 +18,12 @@ import { POSTED_AT_DATA_KEY, routingFromNotificationData, type NotificationRouti
  * The two platforms get there differently, because they carry the task
  * identity differently:
  *
- * - ANDROID reads it straight off the notification. Every notification this app
- *   DISPLAYS (local notifier, foreground service, decrypted push) is posted by
- *   notifee with { taskId, projectId, sessionId } already in its data, because
- *   the blob was decrypted before display. A decrypted push adds its
- *   `category`, which is how a workflow-complete press is told from a task's.
+ * - ANDROID reads it straight off the notification. Every alert this app
+ *   DISPLAYS (local notifier, decrypted push) is posted by notifee with
+ *   { category, taskId, projectId, sessionId, postedAt } already in its data
+ *   (plus `sessionKind` for a Command Terminal), because the blob was decrypted
+ *   before display. The `category` is how a workflow-complete press is told
+ *   from a task's, and `postedAt` is what the press latch below keys on.
  * - iOS carries only the sealed blob. The Notification Service Extension
  *   (targets/nse/) rewrites the title and body before the OS renders the alert,
  *   but deliberately never touches `userInfo`, so no task identity is stored in
