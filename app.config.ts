@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
   owner: 'kangentic',
-  version: '1.1.0',
+  version: '1.2.0',
   orientation: 'portrait',
   scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
@@ -199,7 +199,24 @@ const config: ExpoConfig = {
     // subscribe was refused; and a terminal's Chat lens no longer showing its
     // screen twice after a re-init. No native dependency moved since 1.0.0
     // (only the protocol pin), but there is no OTA path, so it is a new build.
-    buildNumber: '18',
+    //
+    // 19 is the v1.2.0 release cut 2026-10-18, the first release built for the
+    // App Store through build-ios.yml's submit=appstore path (stage 1 prepares
+    // the version, stage 2 submits it for review). 18 is spent, tagged ios-b18.
+    // The iOS-only items are in the push path: the remote-notification
+    // background mode, so the receive task can apply the desktop's standalone
+    // clears (protocol 0.23.0), and the Notification Service Extension now
+    // removing the delivered alerts a push's sealed clears cover or it
+    // replaces, and grouping each task's alerts under an opaque keyed
+    // threadIdentifier. Both are unproven on hardware. The rest is
+    // cross-platform: Workflows (protocol 0.21.0: the Board header's Workflows
+    // button, the Workflows sheet, the workflow view with Pause and Resume, the
+    // workflow strip and lock on task cards), the column automations switch
+    // (0.22.0) in the long-press hub, and stale notifications cleared on the
+    // phone (stable ids, so a repeat replaces, and opening a task clears its
+    // alerts). Native dependencies moved with the SDK 57 drift (expo 57.0.30
+    // and eight more), so this is a new native build.
+    buildNumber: '19',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
@@ -434,13 +451,21 @@ const config: ExpoConfig = {
     // Android-only; it is the cross-platform list on ios.buildNumber's 18
     // above, Command Terminals first.
     //
+    // 17 is the v1.2.0 release cut 2026-10-18, going to the PRODUCTION track as
+    // a full release to every user, with no staged rollout (the default since
+    // 2026-10-15). 16 is spent, tagged android-vc16. The Android-specific item
+    // is the receive task acting on the desktop's sealed clears (protocol
+    // 0.23.0): it recognises a clear, cancels the alerts it covers and displays
+    // nothing. The rest is the cross-platform list on ios.buildNumber's 19
+    // above, Workflows first.
+    //
     // Keep this list current on the way OUT of a release, not the way in. The
     // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
     // into 2026-07-28 and cost a failed release run, because build 3 had in
     // fact already been uploaded. scripts/checkPlayVersionCode.mjs catches a
     // duplicate, but only in the submit job, which is after the ~25 minute
     // build AND after the approval gate.
-    versionCode: 16,
+    versionCode: 17,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
