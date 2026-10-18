@@ -17,13 +17,40 @@ jest.mock('react-native-safe-area-context', () =>
 );
 
 const mockPush = jest.fn();
-jest.mock('expo-router', () => ({
-  useRouter: () => ({ replace: jest.fn(), back: jest.fn(), push: mockPush }),
-  // The screen is always "focused" under test; the real hook runs the effect
-  // on focus and the cleanup on blur, which is the same thing for one render.
+// Whether the screen is the focused route. Focused by default (beforeEach resets
+// it), so a test that never touches it sees the screen as it always was: focused
+// for its whole life. `mockSetFocused` is the test's stand-in for a route being
+// pushed over the Board (false) and popped off again (true).
+let mockIsFocused = true;
+const mockFocusListeners = new Set<() => void>();
+function mockSetFocused(nextFocused: boolean): void {
+  mockIsFocused = nextFocused;
+  mockFocusListeners.forEach((listener) => listener());
+}
+jest.mock('expo-router', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
-  useFocusEffect: (effect: () => void | (() => void)) => require('react').useEffect(effect, [effect]),
-}));
+  const ReactModule = require('react');
+  return {
+    useRouter: () => ({ replace: jest.fn(), back: jest.fn(), push: mockPush }),
+    // The real one throws outside a navigator. It runs the effect while the
+    // route is focused, runs its cleanup on blur, and runs it again when focus
+    // returns, which is all the screen's focus effects depend on.
+    useFocusEffect: (effect: () => void | (() => void)) => {
+      const [focused, setFocused] = ReactModule.useState(mockIsFocused);
+      ReactModule.useEffect(() => {
+        const onFocusChange = (): void => setFocused(mockIsFocused);
+        mockFocusListeners.add(onFocusChange);
+        return () => {
+          mockFocusListeners.delete(onFocusChange);
+        };
+      }, []);
+      ReactModule.useEffect(() => {
+        if (!focused) return undefined;
+        return effect();
+      }, [effect, focused]);
+    },
+  };
+});
 
 const mockMoveTaskOptimistic = jest.fn().mockResolvedValue(undefined);
 const mockCreateTask = jest.fn().mockResolvedValue(undefined);
@@ -117,6 +144,8 @@ function seedBoard(): void {
 
 describe('BoardScreen', () => {
   beforeEach(() => {
+    mockIsFocused = true;
+    mockFocusListeners.clear();
     mockPush.mockClear();
     mockMoveTaskOptimistic.mockClear();
     mockCreateTask.mockClear();
@@ -183,7 +212,7 @@ describe('BoardScreen', () => {
    * alerts (the reconciler's clear on open): claimed on focus, released on
    * blur. Read back from the pure registry the reconciler reads.
    */
-  it('claims its project as an open notification surface while focused, and releases it on blur', async () => {
+  it('claims its project as an open notification surface while focused, and releases it when unmounted', async () => {
     await render(
       <ThemeProvider>
         <BoardScreen />
@@ -193,6 +222,69 @@ describe('BoardScreen', () => {
 
     await screen.unmount();
     expect(getOpenNotificationSurfaces()).toEqual([]);
+  });
+
+  /**
+   * The claim follows FOCUS, not mount: a route pushed over the Board (the
+   * create-task sheet, the project picker) leaves it mounted but no longer on
+   * screen, so its alerts are no longer redundant. Unmounting releases the
+   * claim under a plain `useEffect` too, which is why the test above cannot
+   * tell the two apart. Both halves are asserted in one test: the release
+   * while the Board is still mounted, and the claim again when focus returns
+   * (a release that never re-claimed would pass the first half alone).
+   *
+   * Mutation seen failing: swapping the surface effect's `useFocusEffect(` for
+   * a plain `useEffect(` in BoardScreen (the claim survived the blur: expected
+   * `[]`, received `[{ kind: 'project-board', projectId: 'project-1' }]`). The
+   * unmount test above stayed green under it.
+   */
+  it('releases its project while a route is pushed over it, and claims it again when focus returns', async () => {
+    await render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+    expect(getOpenNotificationSurfaces()).toEqual([{ kind: 'project-board', projectId: 'project-1' }]);
+
+    await act(() => {
+      mockSetFocused(false);
+    });
+    // Blurred, not unmounted: the release is the blur's, not the teardown's.
+    expect(screen.getByTestId('board-screen')).toBeTruthy();
+    expect(getOpenNotificationSurfaces()).toEqual([]);
+
+    await act(() => {
+      mockSetFocused(true);
+    });
+    expect(getOpenNotificationSurfaces()).toEqual([{ kind: 'project-board', projectId: 'project-1' }]);
+  });
+
+  /**
+   * The Board has no route param to read: its project is the store's selected
+   * one, else the first listed. With none listed there is no project to claim,
+   * and a claim made anyway would be a `project-board` surface for a null
+   * project. The second half is the control: the same mounted, focused screen
+   * claims the moment a project appears, so the empty registry before it is the
+   * guard's doing and not a focus effect that never ran.
+   *
+   * Mutation seen failing: dropping the `if (!projectId) return;` from the
+   * surface effect in BoardScreen (a surface was claimed for no project:
+   * received `[{ kind: 'project-board', projectId: null }]`).
+   */
+  it('claims no surface while no project is listed, and claims the project once one is', async () => {
+    useBoardStore.setState({ projects: [], boardsByProjectId: {}, pendingMoves: [] });
+    await render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+    expect(screen.getByText('Connect to your desktop to see the board.')).toBeTruthy();
+    expect(getOpenNotificationSurfaces()).toEqual([]);
+
+    await act(() => {
+      useBoardStore.setState({ projects: [{ id: 'project-1', name: 'Alpha' }] });
+    });
+    expect(getOpenNotificationSurfaces()).toEqual([{ kind: 'project-board', projectId: 'project-1' }]);
   });
 
   it('renders columns from the live store and navigates on card tap', async () => {

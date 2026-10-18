@@ -6,7 +6,7 @@ import { COMMAND_TERMINAL_FALLBACK_NAME, selectCommandTerminal, useBoardStore } 
 import { useSettingsStore } from '@/state/settingsStore';
 import { channelIdForCategory, titleForCategory } from './categoryCopy';
 import { ANDROID_NOTIFICATION_PRESENTATION } from './channels';
-import { POSTED_AT_DATA_KEY, notificationIdForRouting, routingFromNotificationData } from './notificationRouting';
+import { stampPosting } from './notificationRouting';
 import { noteNotificationDisplayed, subscribeToNotificationDismissals } from './notificationSignals';
 
 /**
@@ -159,20 +159,19 @@ export function startLocalNotifier(): () => void {
     const lastFiredAt = lastFiredAtByKey.get(cooldownKey);
     if (lastFiredAt !== undefined && now - lastFiredAt < LOCAL_NOTIFICATION_COOLDOWN_MS) return;
     lastFiredAtByKey.set(cooldownKey, now);
-    const data = { ...routingDataFor(category, entry), [POSTED_AT_DATA_KEY]: String(now) };
-    const routing = routingFromNotificationData(data);
     // The same stable id a remote push for this session and category gets, so
     // a repeat (local or remote) REPLACES this alert instead of stacking.
-    const stableId = routing === null ? null : notificationIdForRouting(routing);
-    // The prompt this alert is about. The reconciler cancels the alert once the
-    // session awaits a different one (or none): the question was answered.
+    const posting = stampPosting(routingDataFor(category, entry), now);
+    // The prompt this alert is about. The reconciler cancels the alert once
+    // that prompt resolves with none after it, or the session leaves
+    // permission: the question was answered.
     const promptIdAtPost = category === 'input-required' ? entry.awaitedPromptId : null;
     void notifee
       .displayNotification({
-        ...(stableId === null ? {} : { id: stableId }),
+        ...posting.idField,
         title: titleForCategory(category),
         body: resolveTaskTitle(entry),
-        data,
+        data: posting.data,
         android: {
           ...ANDROID_NOTIFICATION_PRESENTATION,
           channelId: channelIdForCategory(category),
@@ -180,7 +179,7 @@ export function startLocalNotifier(): () => void {
         },
       })
       .then((platformId) => {
-        noteNotificationDisplayed({ platformId, routing, postedAt: now, promptIdAtPost });
+        noteNotificationDisplayed({ platformId, routing: posting.routing, postedAt: now, promptIdAtPost });
       })
       .catch(() => {
         // Display failures (channel blocked, permission revoked) are the

@@ -8,8 +8,12 @@ import { useBoardStore } from '@/state/boardStore';
 import { useResumeStore } from '@/state/resumeStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { boardColumnFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
-import { resumeTaskSession } from '@/connection/actions';
-import { getOpenNotificationSurfaces } from '@/notifications/notificationSignals';
+import { closeSessionScreen, openSessionScreen, resumeTaskSession } from '@/connection/actions';
+import {
+  getOpenNotificationSurfaces,
+  subscribeToOpenedNotificationSurfaces,
+  type NotificationSurface,
+} from '@/notifications/notificationSignals';
 import { workflowWireFixture } from '../helpers/workflows';
 
 jest.mock('react-native-safe-area-context', () =>
@@ -18,12 +22,41 @@ jest.mock('react-native-safe-area-context', () =>
 );
 
 const mockRouter = { replace: jest.fn(), back: jest.fn(), push: jest.fn(), canGoBack: jest.fn(() => true) };
-jest.mock('expo-router', () => ({
-  useLocalSearchParams: () => ({ taskId: 'task-1', sessionId: 'sess-1', projectId: 'project-1', mode: 'terminal' }),
-  useRouter: () => mockRouter,
+// Whether the screen is the focused route. Focused by default (the beforeEach
+// blocks reset it), so a test that never touches it sees the screen as it always
+// was: focused for its whole life. `mockSetFocused` is the test's stand-in for a
+// route being pushed over the session (false) and popped off again (true).
+let mockIsFocused = true;
+const mockFocusListeners = new Set<() => void>();
+function mockSetFocused(nextFocused: boolean): void {
+  mockIsFocused = nextFocused;
+  mockFocusListeners.forEach((listener) => listener());
+}
+jest.mock('expo-router', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
-  useFocusEffect: (effect: () => void | (() => void)) => require('react').useEffect(effect, [effect]),
-}));
+  const ReactModule = require('react');
+  return {
+    useLocalSearchParams: () => ({ taskId: 'task-1', sessionId: 'sess-1', projectId: 'project-1', mode: 'terminal' }),
+    useRouter: () => mockRouter,
+    // The real one throws outside a navigator. It runs the effect while the
+    // route is focused, runs its cleanup on blur, and runs it again when focus
+    // returns, which is all the screen's focus effects depend on.
+    useFocusEffect: (effect: () => void | (() => void)) => {
+      const [focused, setFocused] = ReactModule.useState(mockIsFocused);
+      ReactModule.useEffect(() => {
+        const onFocusChange = (): void => setFocused(mockIsFocused);
+        mockFocusListeners.add(onFocusChange);
+        return () => {
+          mockFocusListeners.delete(onFocusChange);
+        };
+      }, []);
+      ReactModule.useEffect(() => {
+        if (!focused) return undefined;
+        return effect();
+      }, [effect, focused]);
+    },
+  };
+});
 
 jest.mock('@/connection/actions', () => ({
   openSessionScreen: jest.fn(),
@@ -85,6 +118,8 @@ jest.mock('@/screens/task/SessionInputBar', () => {
 });
 
 const resumeTaskSessionMock = resumeTaskSession as jest.Mock;
+const openSessionScreenMock = openSessionScreen as jest.Mock;
+const closeSessionScreenMock = closeSessionScreen as jest.Mock;
 
 /**
  * `sessionId: null` is the board's report once the desktop has paused the
@@ -155,6 +190,8 @@ async function renderSessionScreen(): Promise<void> {
 describe('SessionScreen Resume (a paused session)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockIsFocused = true;
+    mockFocusListeners.clear();
     useBoardStore.getState().reset();
     useActivityStore.getState().reset();
     useResumeStore.setState({ byTaskId: {} });
@@ -697,6 +734,8 @@ describe('SessionScreen Resume (a paused session)', () => {
 describe('SessionScreen notification surface', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockIsFocused = true;
+    mockFocusListeners.clear();
     useBoardStore.getState().reset();
     useActivityStore.getState().reset();
     seedBoard();
@@ -708,5 +747,94 @@ describe('SessionScreen notification surface', () => {
 
     await screen.unmount();
     expect(getOpenNotificationSurfaces()).toEqual([]);
+  });
+
+  /**
+   * The claim follows FOCUS, not mount: a route pushed over the session (the
+   * file diff, the move sheet) leaves it mounted but no longer on screen, so its
+   * alerts are no longer redundant. Unmounting releases the claim under a plain
+   * `useEffect` too, which is why the test above cannot tell the two apart. Both
+   * halves are asserted in one test: the release while the screen is still
+   * mounted, and the claim again when focus returns (a release that never
+   * re-claimed would pass the first half alone).
+   *
+   * Mutation seen failing: swapping the surface effect's `useFocusEffect(` for
+   * a plain `useEffect(` in SessionScreen (the claim survived the blur: expected
+   * `[]`, received `[{ kind: 'task', taskId: 'task-1' }]`). The unmount test
+   * above stayed green under it.
+   */
+  it('releases its task while a route is pushed over it, and claims it again when focus returns', async () => {
+    await renderSessionScreen();
+    expect(getOpenNotificationSurfaces()).toEqual([{ kind: 'task', taskId: 'task-1' }]);
+
+    await act(() => {
+      mockSetFocused(false);
+    });
+    // Blurred, not unmounted: the release is the blur's, not the teardown's.
+    expect(screen.getByTestId('stub-session-input-bar')).toBeTruthy();
+    expect(getOpenNotificationSurfaces()).toEqual([]);
+
+    await act(() => {
+      mockSetFocused(true);
+    });
+    expect(getOpenNotificationSurfaces()).toEqual([{ kind: 'task', taskId: 'task-1' }]);
+  });
+
+  /**
+   * Keyed on the TASK, so a respawn's rebind keeps the claim. The registry
+   * cannot show this on its own: it is ref-counted and answers one entry per
+   * surface, and React runs a changed effect's cleanup and its re-run inside one
+   * commit, so a claim keyed on the session ends every rebind reading exactly
+   * one task surface too. What differs is the OPEN: a claim keyed on the task is
+   * opened once and never again, a claim keyed on the session is released and
+   * opened anew at each rebind. So the test listens for opens, and asserts the
+   * one held across the whole respawn (sess-1, then the gap with no session,
+   * then sess-2), a registry that never reads empty or doubled at a step, and a
+   * release by the unmount that leaves nothing behind (a leaked holder would
+   * keep the surface open).
+   *
+   * The rebind assertions are the control: without them a screen that never
+   * rebound would pass for "kept the claim through it".
+   *
+   * Mutation seen failing: keying the effect on the session as well, `[taskId]`
+   * becoming `[taskId, sessionId]` on the surface effect in SessionScreen (the
+   * claim was released and reopened at each rebind: three opens of `{ kind:
+   * 'task', taskId: 'task-1' }` received where one was expected). Every
+   * registry assertion before that one stayed green under it, as predicted
+   * above, and so did the unmount and blur tests.
+   */
+  it('keeps one task claim open, opened once, while the screen rebinds to another session of the same task', async () => {
+    const openedSurfaces: NotificationSurface[] = [];
+    const stopListening = subscribeToOpenedNotificationSurfaces((surface) => {
+      openedSurfaces.push(surface);
+    });
+    try {
+      await renderSessionScreen();
+      expect(openSessionScreenMock).toHaveBeenCalledWith('sess-1');
+      expect(getOpenNotificationSurfaces()).toEqual([{ kind: 'task', taskId: 'task-1' }]);
+      expect(openedSurfaces).toEqual([{ kind: 'task', taskId: 'task-1' }]);
+
+      // The respawn's gap: the desktop has cleared the task's session and not yet bound the successor.
+      await act(() => {
+        seedBoard({ sessionId: null });
+      });
+      expect(closeSessionScreenMock).toHaveBeenCalledWith('sess-1');
+      expect(getOpenNotificationSurfaces()).toEqual([{ kind: 'task', taskId: 'task-1' }]);
+
+      // The successor binds.
+      await act(() => {
+        seedBoard({ sessionId: 'sess-2' });
+      });
+      expect(openSessionScreenMock).toHaveBeenCalledWith('sess-2');
+      expect(getOpenNotificationSurfaces()).toEqual([{ kind: 'task', taskId: 'task-1' }]);
+
+      // Held across the whole respawn, not dropped and taken again.
+      expect(openedSurfaces).toEqual([{ kind: 'task', taskId: 'task-1' }]);
+
+      await screen.unmount();
+      expect(getOpenNotificationSurfaces()).toEqual([]);
+    } finally {
+      stopListening();
+    }
   });
 });

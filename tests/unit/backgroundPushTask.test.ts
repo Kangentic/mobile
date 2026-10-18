@@ -255,6 +255,148 @@ describe('backgroundPushTask', () => {
   });
 
   /**
+   * The reconciler is told about the placeholder at once, not at its next native
+   * read, or an alert posted by a killed-app launch would go untracked until the
+   * app next opened. It names nothing, so it is noted with no routing and no
+   * prompt. The platform id is queued as a distinct value so it cannot be
+   * satisfied by the shared default every other display resolves to.
+   *
+   * Mutation that reddens this: delete the noteNotificationDisplayed call from
+   * displayPlaceholder. Seen red that way (no note arrived, [] received).
+   */
+  it('tells the reconciler about the placeholder it posted, with no routing and no prompt', async () => {
+    taskManagerState.displayNotification.mockResolvedValueOnce('placeholder-platform-id');
+    const { registerBackgroundPushTask } = await loadModule();
+    const { subscribeToDisplayedNotifications } = await import('@/notifications/notificationSignals');
+    const notes: unknown[] = [];
+    const unsubscribe = subscribeToDisplayedNotifications((note) => notes.push(note));
+    registerBackgroundPushTask();
+
+    const executor = taskManagerState.defineTask.mock.calls[0][1] as TaskExecutor;
+    await executor({
+      data: { notification: null, data: { blob: 'not-a-real-envelope' } },
+      error: null,
+      executionInfo: { taskName: 'kangentic-background-push' },
+    });
+    unsubscribe();
+
+    expect(taskManagerState.displayNotification).toHaveBeenCalledTimes(1);
+    const notification = taskManagerState.displayNotification.mock.calls[0][0] as { data?: Record<string, string> };
+    // Guards the Number() below: an unstamped postedAt would read NaN, and NaN equals NaN.
+    expect(notification.data?.postedAt).toMatch(/^\d+$/);
+    expect(notes).toEqual([
+      {
+        platformId: 'placeholder-platform-id',
+        routing: null,
+        postedAt: Number(notification.data?.postedAt),
+        promptIdAtPost: null,
+      },
+    ]);
+  });
+
+  /**
+   * An envelope whose data names no category this build knows (an older
+   * desktop that predates the field, or a newer one with a category added since)
+   * still has to render, and a repeat cannot replace it because there is nothing
+   * stable to key on. The id is therefore ABSENT, not `undefined`: notifee reads
+   * an `id` key it finds, and a present-but-undefined one is not the same as
+   * leaving the choice to it. The posting time still rides in data, and the
+   * reconciler is told the alert carries no category.
+   *
+   * The top-level `category` stays valid in both shapes: it picks the channel,
+   * and is a separate field from the one in `data` that the id and routing read.
+   *
+   * Mutations that redden this, each seen red in both cases: post
+   * `id: posting.idField.id` instead of spreading `posting.idField` (the `'id' in`
+   * check); post `data: decrypted.data` instead of `posting.data` (the missing
+   * postedAt); note `routing: null` instead of `posting.routing` (the
+   * category-less routing).
+   */
+  it.each([
+    ['carries no category key', { taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' }],
+    ['carries a category this build does not know', { category: 'not-a-category', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' }],
+  ])('posts a decrypted alert whose data %s with no id key, a stamped time, and a category-less note', async (_label, data) => {
+    decryptPushBlobMock.mockResolvedValueOnce({
+      title: 'Agent needs your input',
+      body: 'Ship the release',
+      category: 'input-required',
+      data,
+    });
+    taskManagerState.displayNotification.mockResolvedValueOnce('rich-platform-id');
+    const { registerBackgroundPushTask } = await loadModule();
+    const { subscribeToDisplayedNotifications } = await import('@/notifications/notificationSignals');
+    const notes: unknown[] = [];
+    const unsubscribe = subscribeToDisplayedNotifications((note) => notes.push(note));
+    registerBackgroundPushTask();
+
+    const executor = taskManagerState.defineTask.mock.calls[0][1] as TaskExecutor;
+    await executor({
+      data: { notification: null, data: { blob: 'a-real-envelope' } },
+      error: null,
+      executionInfo: { taskName: 'kangentic-background-push' },
+    });
+    unsubscribe();
+
+    expect(taskManagerState.displayNotification).toHaveBeenCalledTimes(1);
+    const notification = taskManagerState.displayNotification.mock.calls[0][0] as { data?: Record<string, string> };
+    expect('id' in notification).toBe(false);
+    expect(notification.data).toStrictEqual({ ...data, postedAt: expect.stringMatching(/^\d+$/) });
+    expect(notes).toEqual([
+      {
+        platformId: 'rich-platform-id',
+        routing: { category: null, taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null },
+        postedAt: Number(notification.data?.postedAt),
+        promptIdAtPost: null,
+      },
+    ]);
+  });
+
+  /**
+   * The stable-id case itself is pinned above for a task alert. This is the
+   * Command Terminal's shape (no task id, a session kind), where the routing the
+   * reconciler is handed has to carry the kind and the id has to key on the
+   * session, since a terminal has nothing else to be keyed by.
+   *
+   * Mutation that reddens this: note `routing: null` instead of `posting.routing`
+   * in the decrypted branch. Seen red that way (the same one that reddens the
+   * task alert's test above, so this adds the sessionKind dimension and not a
+   * second mechanism).
+   */
+  it('keys a decrypted Command Terminal alert on its session and notes the session kind', async () => {
+    decryptPushBlobMock.mockResolvedValueOnce({
+      title: 'Agent needs your input',
+      body: 'Fix The Flaky Test',
+      category: 'input-required',
+      data: { category: 'input-required', taskId: '', projectId: 'project-1', sessionId: 'terminal-sess-1', sessionKind: 'command-terminal' },
+    });
+    const { registerBackgroundPushTask } = await loadModule();
+    const { subscribeToDisplayedNotifications } = await import('@/notifications/notificationSignals');
+    const notes: unknown[] = [];
+    const unsubscribe = subscribeToDisplayedNotifications((note) => notes.push(note));
+    registerBackgroundPushTask();
+
+    const executor = taskManagerState.defineTask.mock.calls[0][1] as TaskExecutor;
+    await executor({
+      data: { notification: null, data: { blob: 'a-real-envelope' } },
+      error: null,
+      executionInfo: { taskName: 'kangentic-background-push' },
+    });
+    unsubscribe();
+
+    const notification = taskManagerState.displayNotification.mock.calls[0][0] as { id?: string; data?: Record<string, string> };
+    expect(notification.id).toBe('kangentic:input-required:session:terminal-sess-1');
+    expect(notification.data?.postedAt).toMatch(/^\d+$/);
+    expect(notes).toEqual([
+      {
+        platformId: 'notification-id',
+        routing: { category: 'input-required', taskId: '', projectId: 'project-1', sessionId: 'terminal-sess-1', sessionKind: 'command-terminal' },
+        postedAt: Number(notification.data?.postedAt),
+        promptIdAtPost: null,
+      },
+    ]);
+  });
+
+  /**
    * THE REGRESSION THIS FILE EXISTS FOR SECOND-MOST, after the decrypt-failure
    * placeholder above.
    *

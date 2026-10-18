@@ -115,8 +115,10 @@ function sessionEnded(context: StalenessContext, sessionId: string): boolean {
  * protects the successor race: a session subscribed from the desktop's
  * `successorSessionId` before any board names it keeps a live entry (the
  * reconcile retains it), so a board snapshot computed before the resume cannot
- * dismiss the prompt alert it just raised. A `'rejected'` entry counts as live
- * too: a refused subscribe is not proof the session is gone.
+ * dismiss the prompt alert it just raised. (The newer-session rule guards the
+ * same race its own way, by never reading a session it saw end as newer.) A
+ * `'rejected'` entry counts as live too: a refused subscribe is not proof the
+ * session is gone.
  */
 function hasLiveEntry(context: StalenessContext, sessionId: string): boolean {
   if (sessionId.length === 0) return false;
@@ -127,6 +129,30 @@ function hasLiveEntry(context: StalenessContext, sessionId: string): boolean {
 function taskColumnIsDone(board: ProjectBoard, row: BoardTaskWire): boolean {
   const column = board.columns.find((candidate) => candidate.id === row.swimlane_id);
   return column !== undefined && isDoneRole(column.role);
+}
+
+/**
+ * The session-state rules a task's alert and a Command Terminal's share, read
+ * only off a FRESH entry. "Needs your input" stops being true once the session
+ * leaves `permission`, or once the prompt first seen resolves with none after
+ * it. NOT when the session moves straight on to ANOTHER prompt: the agent still
+ * needs input, and the local notifier's cooldown can have swallowed that
+ * prompt's own alert, so dismissing here would leave the phone showing nothing
+ * for an agent that is waiting. "Finished" stops being true once it is
+ * thinking again.
+ */
+function sessionStateDismisses(notification: Extract<JudgedNotification, { kind: 'routed' }>, entry: SessionActivityEntry | null): boolean {
+  if (entry === null) return false;
+  switch (notification.routing.category) {
+    case 'input-required':
+      if (entry.state !== 'permission') return true;
+      return notification.firstSeenPromptId !== null && entry.awaitedPromptId === null;
+    case 'turn-complete':
+    case 'plan-complete':
+      return entry.state === 'thinking';
+    default:
+      return false;
+  }
 }
 
 function judgeTaskAlert(
@@ -153,8 +179,14 @@ function judgeTaskAlert(
   if (routing.category === null) return 'keep';
 
   const entry = freshEntry(context, routing.sessionId, postedAt);
-  /** A fresh board names a different, non-null session for the task: this desktop resumes into a new id on every column move. */
-  const newerSession = row !== null && row.session_id !== null && row.session_id !== routing.sessionId;
+  /**
+   * A fresh board names a different, non-null session for the task: this
+   * desktop resumes into a new id on every column move. Not when the board's
+   * session is one this phone saw END: that is the PREDECESSOR, on a board
+   * computed before the resume, and this alert is the live successor's.
+   */
+  const newerSession =
+    row !== null && row.session_id !== null && row.session_id !== routing.sessionId && !sessionEnded(context, row.session_id);
   /**
    * A fresh board holds no row for the task. In a 'sessions' board that means
    * the task has no live session and is neither paused nor preparing, which is
@@ -171,11 +203,7 @@ function judgeTaskAlert(
       // the store still runs this one: no prompt can be pending on it.
       const boardDropsSession = board !== null && routing.taskId.length > 0 && (row === null || row.session_id !== routing.sessionId);
       if (boardDropsSession && noLiveEntry) return 'dismiss';
-      if (entry !== null && entry.state !== 'permission') return 'dismiss';
-      if (entry !== null && notification.firstSeenPromptId !== null && entry.awaitedPromptId !== notification.firstSeenPromptId) {
-        return 'dismiss';
-      }
-      return 'keep';
+      return sessionStateDismisses(notification, entry) ? 'dismiss' : 'keep';
     }
     case 'turn-complete':
     case 'plan-complete':
@@ -184,7 +212,7 @@ function judgeTaskAlert(
       // still true of a paused task.
       if (newerSession) return 'dismiss';
       if (taskGone && noLiveEntry) return 'dismiss';
-      if (entry !== null && entry.state === 'thinking') return 'dismiss';
+      if (sessionStateDismisses(notification, entry)) return 'dismiss';
       if (row !== null && notification.firstSeenSwimlaneId !== null && row.swimlane_id !== notification.firstSeenSwimlaneId) {
         return 'dismiss';
       }
@@ -221,16 +249,10 @@ function judgeCommandTerminalAlert(
   const ended = sessionEnded(context, routing.sessionId) || terminalGone;
   switch (routing.category) {
     case 'input-required':
-      if (ended) return 'dismiss';
-      if (entry !== null && entry.state !== 'permission') return 'dismiss';
-      if (entry !== null && notification.firstSeenPromptId !== null && entry.awaitedPromptId !== notification.firstSeenPromptId) {
-        return 'dismiss';
-      }
-      return 'keep';
     case 'turn-complete':
     case 'plan-complete':
       if (ended) return 'dismiss';
-      return entry !== null && entry.state === 'thinking' ? 'dismiss' : 'keep';
+      return sessionStateDismisses(notification, entry) ? 'dismiss' : 'keep';
     default:
       return 'keep';
   }
@@ -245,9 +267,15 @@ function judgeCommandTerminalAlert(
  */
 function everyProjectFreshAfter(context: StalenessContext, postedAt: number): boolean {
   if (context.projects.length === 0) return false;
+  // Every board first, one lookup each, so the walk over every session below
+  // runs only once they have all landed.
+  const boards: ProjectBoard[] = [];
   for (const project of context.projects) {
     const board = freshBoard(context, project.id, postedAt);
     if (board === null) return false;
+    boards.push(board);
+  }
+  for (const board of boards) {
     for (const task of Object.values(board.tasksById)) {
       if (task.session_id === null || task.archived_at !== null) continue;
       if (freshEntry(context, task.session_id, postedAt) === null) return false;

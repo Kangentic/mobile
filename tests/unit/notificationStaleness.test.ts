@@ -7,13 +7,14 @@
  * session state).
  */
 import { describe, expect, it } from 'vitest';
-import type { PushCategory } from '@kangentic/protocol';
+import type { CommandTerminalWire, PushCategory } from '@kangentic/protocol';
 import {
   judgeNotification,
   notificationMatchesSurface,
   observeAtFirstSight,
   type JudgedNotification,
   type StalenessContext,
+  type StalenessVerdict,
 } from '@/notifications/notificationStaleness';
 import type { NotificationRouting } from '@/notifications/notificationRouting';
 import type { SessionActivityEntry } from '@/state/activityStore';
@@ -182,11 +183,22 @@ describe('input-required', () => {
     expect(judgeNotification(routed('input-required'), answered)).toBe('dismiss');
   });
 
-  it('dismisses once the awaited prompt changes from the one first seen', () => {
-    const nextPrompt = context({ bySessionId: { 'sess-1': entry({ awaitedPromptId: 'prompt-2' }) } });
-    expect(judgeNotification(routed('input-required', { firstSeenPromptId: 'prompt-1' }), nextPrompt)).toBe('dismiss');
+  it('dismisses once the prompt first seen resolves with no other awaited', () => {
     const resolvedInPlace = context({ bySessionId: { 'sess-1': entry({ awaitedPromptId: null }) } });
     expect(judgeNotification(routed('input-required', { firstSeenPromptId: 'prompt-1' }), resolvedInPlace)).toBe('dismiss');
+  });
+
+  /**
+   * The agent still needs input, and the local notifier's cooldown can have
+   * swallowed the next prompt's own alert: dismissing here would leave the
+   * phone showing nothing for an agent that is waiting.
+   *
+   * Mutation that reddens this: dismiss in sessionStateDismisses whenever the
+   * awaited prompt differs from the one first seen. Seen red that way.
+   */
+  it('keeps the alert while the session moves straight on to another prompt', () => {
+    const nextPrompt = context({ bySessionId: { 'sess-1': entry({ awaitedPromptId: 'prompt-2' }) } });
+    expect(judgeNotification(routed('input-required', { firstSeenPromptId: 'prompt-1' }), nextPrompt)).toBe('keep');
   });
 
   it('dismisses once the session ended, whenever that end was seen', () => {
@@ -337,6 +349,82 @@ describe('session-failed and spawn-stalled', () => {
   });
 });
 
+/**
+ * A board computed before a resume still names the PREDECESSOR session for the
+ * task. The phone saw that predecessor end, and the alert belongs to the live
+ * successor, so the row must not read as "a newer session runs for the task".
+ * Every fixture here keeps the board FRESH (a stale board has no row to read,
+ * which would pass for the wrong reason) and the successor's entry live.
+ */
+describe('the successor race on the newer-session rule', () => {
+  const RACE_CATEGORIES = ['input-required', 'turn-complete', 'plan-complete', 'session-failed'] as const;
+  interface PredecessorRecord {
+    endedSessionIds: Readonly<Record<string, true>>;
+    entry: SessionActivityEntry | null;
+  }
+  const endedPredecessorEntry = entry({ sessionId: 'sess-0', state: 'idle', awaitedPromptId: null, feedStatus: 'ended' });
+  const endSeenThrough: { name: string; predecessor: PredecessorRecord }[] = [
+    { name: 'a recorded end', predecessor: { endedSessionIds: { 'sess-0': true }, entry: null } },
+    { name: 'an ended feed', predecessor: { endedSessionIds: {}, entry: endedPredecessorEntry } },
+    { name: 'both', predecessor: { endedSessionIds: { 'sess-0': true }, entry: endedPredecessorEntry } },
+  ];
+  const neverSeenEnding: PredecessorRecord = { endedSessionIds: {}, entry: null };
+
+  /** The live successor: awaiting the prompt it just raised, or idle after a finished turn. */
+  const successorEntryFor = (category: PushCategory): SessionActivityEntry =>
+    category === 'input-required' ? entry() : entry({ state: 'idle', awaitedPromptId: null });
+
+  const raceContext = (category: PushCategory, predecessor: PredecessorRecord): StalenessContext =>
+    context({
+      // Fresh, and the task's row (in its column) still names sess-0.
+      boardsByProjectId: {
+        'project-1': board({ tasksById: { 'task-1': boardTaskFixture({ id: 'task-1', swimlane_id: 'lane-doing', session_id: 'sess-0' }) } }),
+      },
+      bySessionId:
+        predecessor.entry === null
+          ? { 'sess-1': successorEntryFor(category) }
+          : { 'sess-0': predecessor.entry, 'sess-1': successorEntryFor(category) },
+      endedSessionIds: predecessor.endedSessionIds,
+    });
+
+  const verdictsByCategory = (predecessor: PredecessorRecord): Record<string, StalenessVerdict> => {
+    const verdicts: Record<string, StalenessVerdict> = {};
+    for (const category of RACE_CATEGORIES) {
+      const notification = routed(category, { firstSeenPromptId: category === 'input-required' ? 'prompt-1' : null });
+      verdicts[category] = judgeNotification(notification, raceContext(category, predecessor));
+    }
+    return verdicts;
+  };
+
+  /**
+   * Mutation that would redden this: drop `&& !sessionEnded(context, row.session_id)`
+   * from `newerSession` in judgeTaskAlert. The row then names a "newer" sess-0
+   * and all four categories dismiss. The 'an ended feed' row also pins the
+   * second half of `sessionEnded` (`feedStatus === 'ended'`).
+   */
+  it.each(endSeenThrough)('keeps the successor alert of every category when the board names a predecessor whose end was seen as $name', ({ predecessor }) => {
+    expect(verdictsByCategory(predecessor)).toEqual({
+      'input-required': 'keep',
+      'turn-complete': 'keep',
+      'plan-complete': 'keep',
+      'session-failed': 'keep',
+    });
+  });
+
+  /**
+   * The control: the same boards and the same live successor, but the phone never
+   * saw sess-0 end. That is a genuinely newer session, so each category dismisses.
+   */
+  it('dismisses every category when the board names a session this phone never saw end (a genuinely newer one)', () => {
+    expect(verdictsByCategory(neverSeenEnding)).toEqual({
+      'input-required': 'dismiss',
+      'turn-complete': 'dismiss',
+      'plan-complete': 'dismiss',
+      'session-failed': 'dismiss',
+    });
+  });
+});
+
 describe('any task alert: the task is closed', () => {
   it('dismisses every category of a task in a done-role column', () => {
     const done = context({
@@ -446,6 +534,96 @@ describe('Command Terminal alerts', () => {
     });
     expect(judgeNotification(routed('input-required', {}, terminalOverrides), full)).toBe('keep');
   });
+
+  const terminalListing = (): CommandTerminalWire =>
+    commandTerminalWireFixture({ sessionId: 'term-1', projectId: 'project-1', slot: 1 });
+
+  /**
+   * A Command Terminal has no pause or successor, so a seen end is an end. The
+   * board predates the alert and still lists the terminal, and there is no entry:
+   * the recorded end is the only thing that can dismiss.
+   *
+   * Mutation that would redden this: drop `sessionEnded(context, routing.sessionId) ||`
+   * from `ended` in judgeCommandTerminalAlert. A stale board makes `terminalGone`
+   * false, so every category then keeps.
+   */
+  it('dismisses through a recorded end even when the board predates the alert', () => {
+    const endedOnStaleBoard = listed({
+      boardsByProjectId: { 'project-1': board({ snapshotAt: BEFORE, commandTerminals: [terminalListing()] }) },
+      bySessionId: {},
+      endedSessionIds: { 'term-1': true },
+    });
+    for (const category of ['input-required', 'turn-complete', 'plan-complete'] as const) {
+      expect(judgeNotification(routed(category, {}, terminalOverrides), endedOnStaleBoard)).toBe('dismiss');
+    }
+    // The control: the same stale board with no end recorded says nothing, so it keeps.
+    const noEndRecorded = { ...endedOnStaleBoard, endedSessionIds: {} };
+    for (const category of ['input-required', 'turn-complete', 'plan-complete'] as const) {
+      expect(judgeNotification(routed(category, {}, terminalOverrides), noEndRecorded)).toBe('keep');
+    }
+  });
+
+  /**
+   * The terminal was subscribed before any board lists it (the same race as a
+   * resumed task's successor), so a held entry keeps the alert. A `'rejected'` or
+   * `'pending'` entry is still held, and neither is fresh, so they decide nothing.
+   *
+   * Mutation that would redden this: drop `&& !hasLiveEntry(context, routing.sessionId)`
+   * from `terminalGone`. The unlisted terminal then reads as gone and every row dismisses.
+   */
+  it.each(['live', 'pending', 'rejected'] as const)(
+    'keeps its alerts when a fresh board no longer lists the terminal but a %s entry is still held',
+    (feedStatus) => {
+      const unlistedButHeld = listed({
+        boardsByProjectId: { 'project-1': board({ commandTerminals: [] }) },
+        bySessionId: { 'term-1': terminalEntry({ feedStatus }) },
+      });
+      expect(judgeNotification(routed('input-required', {}, terminalOverrides), unlistedButHeld)).toBe('keep');
+      expect(judgeNotification(routed('turn-complete', {}, terminalOverrides), unlistedButHeld)).toBe('keep');
+      // The control: the same unlisted terminal with nothing held is gone.
+      const unlistedAndNotHeld = { ...unlistedButHeld, bySessionId: {} };
+      expect(judgeNotification(routed('input-required', {}, terminalOverrides), unlistedAndNotHeld)).toBe('dismiss');
+    },
+  );
+
+  /**
+   * Mutations that would redden this. Make the final return of
+   * sessionStateDismisses' input-required arm `false`: the dismiss assertion
+   * reddens, and so does the task-alert test of this rule ('dismisses once the
+   * prompt first seen resolves with no other awaited'). Drop
+   * `notification.firstSeenPromptId !== null &&` from that return: only the
+   * control below reddens, so it is this test's own guard.
+   */
+  it('dismisses a prompt alert once the prompt first seen resolves with none awaited', () => {
+    const resolved = listed({ bySessionId: { 'term-1': terminalEntry({ awaitedPromptId: null }) } });
+    expect(judgeNotification(routed('input-required', { firstSeenPromptId: 'prompt-1' }, terminalOverrides), resolved)).toBe('dismiss');
+    // The control: with no prompt recorded at first sight, an empty awaited prompt resolves nothing.
+    expect(judgeNotification(routed('input-required', { firstSeenPromptId: null }, terminalOverrides), resolved)).toBe('keep');
+  });
+
+  /**
+   * Mutation that would redden this: dismiss in sessionStateDismisses whenever
+   * the awaited prompt differs from the one first seen (the same mutation that
+   * reddens the task-alert test 'keeps the alert while the session moves straight
+   * on to another prompt').
+   */
+  it('keeps a prompt alert while the terminal moves straight on to another prompt', () => {
+    const nextPrompt = listed({ bySessionId: { 'term-1': terminalEntry({ awaitedPromptId: 'prompt-2' }) } });
+    expect(judgeNotification(routed('input-required', { firstSeenPromptId: 'prompt-1' }, terminalOverrides), nextPrompt)).toBe('keep');
+  });
+
+  /**
+   * Mutation that would redden this: make the `'turn-complete'` / `'plan-complete'`
+   * arm of sessionStateDismisses return false (or test `entry.state === 'idle'`).
+   */
+  it('dismisses a finished-turn alert once the terminal is thinking again, and keeps it while idle', () => {
+    const working = listed({ bySessionId: { 'term-1': terminalEntry({ state: 'thinking', awaitedPromptId: null }) } });
+    expect(judgeNotification(routed('turn-complete', {}, terminalOverrides), working)).toBe('dismiss');
+    expect(judgeNotification(routed('plan-complete', {}, terminalOverrides), working)).toBe('dismiss');
+    const idle = listed({ bySessionId: { 'term-1': terminalEntry({ state: 'idle', awaitedPromptId: null }) } });
+    expect(judgeNotification(routed('turn-complete', {}, terminalOverrides), idle)).toBe('keep');
+    expect(judgeNotification(routed('plan-complete', {}, terminalOverrides), idle)).toBe('keep');
+  });
 });
 
 describe('Android placeholder', () => {
@@ -478,6 +656,84 @@ describe('Android placeholder', () => {
     expect(judgeNotification(placeholder, context({ projects: [] }))).toBe('keep');
     expect(judgeNotification({ kind: 'android-placeholder', postedAt: null }, context())).toBe('keep');
   });
+
+  /**
+   * The walk names every task with a session, and a task that is archived or has
+   * none is not one the Agents feed shows, so no entry is owed for it. Each
+   * control is the same row made countable, which then holds the placeholder.
+   *
+   * Mutation that would redden this: drop `|| task.archived_at !== null` from the
+   * skip in everyProjectFreshAfter. The archived row then needs an entry nobody has.
+   */
+  it('skips an archived task that holds a session when no entry follows it', () => {
+    const archivedTask = boardTaskFixture({
+      id: 'task-archived',
+      swimlane_id: 'lane-doing',
+      session_id: 'sess-archived',
+      archived_at: '2026-10-18T00:00:00.000Z',
+    });
+    const boardWith = (task: typeof archivedTask): ProjectBoard => board({ tasksById: { ...board().tasksById, [task.id]: task } });
+    expect(judgeNotification(placeholder, context({ boardsByProjectId: { 'project-1': boardWith(archivedTask) } }))).toBe('dismiss');
+    const unarchivedTask = { ...archivedTask, archived_at: null };
+    expect(judgeNotification(placeholder, context({ boardsByProjectId: { 'project-1': boardWith(unarchivedTask) } }))).toBe('keep');
+  });
+
+  /**
+   * Mutation that would redden this: turn the skip of a null `session_id` into
+   * `return false` in everyProjectFreshAfter. (Dropping the check outright throws
+   * a TypeError in freshEntry on `null.length`, which is red for the wrong reason.)
+   */
+  it('skips a task with no session', () => {
+    const sessionlessTask = boardTaskFixture({ id: 'task-sessionless', swimlane_id: 'lane-doing', session_id: null });
+    const boardWith = (task: typeof sessionlessTask): ProjectBoard => board({ tasksById: { ...board().tasksById, [task.id]: task } });
+    expect(judgeNotification(placeholder, context({ boardsByProjectId: { 'project-1': boardWith(sessionlessTask) } }))).toBe('dismiss');
+    const sessionHolding = { ...sessionlessTask, session_id: 'sess-unread' };
+    expect(judgeNotification(placeholder, context({ boardsByProjectId: { 'project-1': boardWith(sessionHolding) } }))).toBe('keep');
+  });
+
+  /**
+   * Task-1 and its sess-1 entry stay fully fresh, so only the terminal can hold
+   * the placeholder.
+   *
+   * Mutation that would redden this: delete the `board.commandTerminals` loop in
+   * everyProjectFreshAfter. The unread terminals are then never asked for.
+   */
+  it('keeps while a listed Command Terminal has no fresh entry, and dismisses once it has one', () => {
+    const terminalBoards = {
+      'project-1': board({ commandTerminals: [commandTerminalWireFixture({ sessionId: 'term-1', projectId: 'project-1', slot: 1 })] }),
+    };
+    const terminalEntry = (overrides: Partial<SessionActivityEntry> = {}): SessionActivityEntry =>
+      entry({ sessionId: 'term-1', taskId: '', kind: 'command-terminal', ...overrides });
+    const withTerminalEntry = (terminal: SessionActivityEntry | null): StalenessContext =>
+      context({
+        boardsByProjectId: terminalBoards,
+        bySessionId: terminal === null ? { 'sess-1': entry() } : { 'sess-1': entry(), 'term-1': terminal },
+      });
+    expect(judgeNotification(placeholder, withTerminalEntry(null))).toBe('keep');
+    expect(judgeNotification(placeholder, withTerminalEntry(terminalEntry({ lastEventAt: BEFORE })))).toBe('keep');
+    expect(judgeNotification(placeholder, withTerminalEntry(terminalEntry({ feedStatus: 'pending' })))).toBe('keep');
+    // The control: the same terminal, re-read after the placeholder.
+    expect(judgeNotification(placeholder, withTerminalEntry(terminalEntry()))).toBe('dismiss');
+  });
+
+  /**
+   * 'keeps while any one project board predates it' (above) already pins a stale
+   * second board, so this is the arm it leaves: a listed project with no board at
+   * all: a project listed before its board lands.
+   *
+   * Mutation that would redden this: walk `Object.keys(context.boardsByProjectId)`
+   * instead of `context.projects` in everyProjectFreshAfter.
+   */
+  it('keeps while a listed project has no board at all yet', () => {
+    const secondBoardMissing = context({
+      projects: [{ id: 'project-1' }, { id: 'project-2' }],
+      boardsByProjectId: { 'project-1': board() },
+    });
+    expect(judgeNotification(placeholder, secondBoardMissing)).toBe('keep');
+    // The control: the second project's board lands after the placeholder.
+    const secondBoardLanded = { ...secondBoardMissing, boardsByProjectId: { 'project-1': board(), 'project-2': board({ tasksById: {} }) } };
+    expect(judgeNotification(placeholder, secondBoardLanded)).toBe('dismiss');
+  });
 });
 
 describe('iOS alert this app cannot open', () => {
@@ -503,5 +759,75 @@ describe('observeAtFirstSight', () => {
     expect(observeAtFirstSight(routed('turn-complete'), context()).promptId).toBeNull();
     const terminal = routed('input-required', {}, { taskId: 'task-1', sessionKind: 'command-terminal' });
     expect(observeAtFirstSight(terminal, context()).swimlaneId).toBeNull();
+  });
+
+  /**
+   * A snapshot copies the desktop's awaited prompt id as sent (activityStore), so
+   * the reader must not trust one outside 'permission'. The id stays non-null on
+   * the thinking entry: with null, the guard would be invisible.
+   *
+   * Mutation that would redden this: drop `&& entry.state === 'permission'` from
+   * observeAtFirstSight. The thinking entry then records 'prompt-1'.
+   */
+  it('records no prompt from a fresh entry that is not in permission, whatever id it still carries', () => {
+    const working = context({ bySessionId: { 'sess-1': entry({ state: 'thinking', awaitedPromptId: 'prompt-1' }) } });
+    expect(observeAtFirstSight(routed('input-required'), working)).toEqual({ swimlaneId: 'lane-doing', promptId: null });
+    // The control: the same entry in permission records its prompt.
+    const asking = context({ bySessionId: { 'sess-1': entry({ state: 'permission', awaitedPromptId: 'prompt-1' }) } });
+    expect(observeAtFirstSight(routed('input-required'), asking)).toEqual({ swimlaneId: 'lane-doing', promptId: 'prompt-1' });
+  });
+
+  /**
+   * A non-default id, so the value is clearly the entry's own.
+   *
+   * Mutation that would redden this: return a constant or the notification's
+   * `firstSeenPromptId` instead of `entry.awaitedPromptId`.
+   */
+  it('records the prompt id a fresh permission entry awaits', () => {
+    const asking = context({ bySessionId: { 'sess-1': entry({ awaitedPromptId: 'prompt-7' }) } });
+    expect(observeAtFirstSight(routed('input-required'), asking).promptId).toBe('prompt-7');
+  });
+
+  /**
+   * The column comes from the board and the prompt from the entry, each gated on
+   * its own source. The existing test above moves both together, so it would pass
+   * a mutation that gates both fields on one source.
+   *
+   * Mutation that would redden this: read the prompt only when the board is fresh
+   * (or the column only when the entry is), e.g. `freshBoard(...) !== null &&` in
+   * front of the prompt's `freshEntry` read.
+   */
+  it('gates the column on the board and the prompt on the entry, independently', () => {
+    const staleEntry = context({ bySessionId: { 'sess-1': entry({ lastEventAt: BEFORE }) } });
+    expect(observeAtFirstSight(routed('input-required'), staleEntry)).toEqual({ swimlaneId: 'lane-doing', promptId: null });
+    const staleBoard = context({ boardsByProjectId: { 'project-1': board({ snapshotAt: BEFORE }) } });
+    expect(observeAtFirstSight(routed('input-required'), staleBoard)).toEqual({ swimlaneId: null, promptId: 'prompt-1' });
+  });
+
+  /**
+   * The made-up task id names a real row on this board, so a column read for it
+   * would record 'lane-doing'. The terminal's prompt is still recorded: its
+   * input-required rule needs the prompt first seen.
+   *
+   * Mutation that would redden this: drop `routing.sessionKind !== 'command-terminal' &&`
+   * from the swimlane read in observeAtFirstSight.
+   */
+  it('records a Command Terminal alert prompt but never a column, even when its made-up task id matches a row', () => {
+    const terminalAlert = routed('input-required', {}, { taskId: 'task-1', sessionKind: 'command-terminal', sessionId: 'term-1' });
+    const terminalAsking = context({
+      bySessionId: { 'term-1': entry({ sessionId: 'term-1', taskId: '', kind: 'command-terminal', awaitedPromptId: 'prompt-3' }) },
+    });
+    expect(observeAtFirstSight(terminalAlert, terminalAsking)).toEqual({ swimlaneId: null, promptId: 'prompt-3' });
+  });
+
+  /**
+   * With no posting time nothing is known to be newer than the alert, so even
+   * the freshest board and entry record nothing.
+   *
+   * Mutation that reddens this: drop the `postedAt === null` early return in
+   * observeAtFirstSight. Seen red that way.
+   */
+  it('records nothing for an alert whose posting time is unknown', () => {
+    expect(observeAtFirstSight(routed('input-required', { postedAt: null }), context())).toEqual({ swimlaneId: null, promptId: null });
   });
 });

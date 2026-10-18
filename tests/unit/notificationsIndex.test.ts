@@ -4,13 +4,14 @@
  * registerNotificationTapHandlers, startNotificationReconciler and
  * refreshNotificationPermission run on EVERY platform; registerForegroundServiceRunner, registerBackgroundPushTask
  * and createNotificationChannels stay behind `if (Platform.OS !== 'android')
- * return`. This branch moved the first two ABOVE that gate - the function used
- * to return early off Android entirely, which is how iOS ended up with no tap
- * routing and no seeded permission cache on top of never being asked for
- * authorization at all (see connectionManager.ts's own history of that bug).
- * Nothing pinned the split before this file: a regression that pushed either
- * call back below the gate would silently re-break iOS with nothing here to
- * catch it.
+ * return`. The tap handlers and the permission refresh were moved ABOVE that
+ * gate - the function used to return early off Android entirely, which is how
+ * iOS ended up with no tap routing and no seeded permission cache on top of
+ * never being asked for authorization at all (see connectionManager.ts's own
+ * history of that bug) - and the reconciler was added above it too. Nothing
+ * pinned the split before this file: a regression that pushed any of the three
+ * back below the gate would silently re-break iOS with nothing here to catch
+ * it.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
