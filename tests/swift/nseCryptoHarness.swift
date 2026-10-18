@@ -12,6 +12,9 @@ import Foundation
 // So this harness opens envelopes sealed by the protocol package's own
 // `sealPushEnvelope` (tests/swift/pushEnvelopeFixtures.json, regenerated with
 // scripts/generateNseCryptoFixtures.mjs) and checks the negative paths reject.
+// Since protocol 0.23.0 it also checks the extension's notification pruning
+// (NotificationPruning.swift): the piggybacked `clears` parse, which delivered
+// alerts a push removes, and the opaque thread identifier.
 //
 // Compiled and run by the "NSE crypto (swiftc)" job in ci.yml. It deliberately
 // does NOT compile NotificationService.swift or SharedKeychain.swift:
@@ -42,6 +45,28 @@ func hexToBytes(_ hex: String) -> [UInt8]? {
 
 func bytesToHex(_ bytes: [UInt8]) -> String {
   return bytes.map { String(format: "%02x", $0) }.joined()
+}
+
+/// A delivered or incoming alert from a match case: only what pruning reads.
+func alertEnvelope(_ value: Any?) -> PushEnvelopePlaintext? {
+  guard
+    let fields = value as? [String: Any],
+    let category = fields["category"] as? String,
+    let projectId = fields["projectId"] as? String,
+    let taskId = fields["taskId"] as? String,
+    let sessionId = fields["sessionId"] as? String,
+    let sentAt = fields["sentAt"] as? Double
+  else { return nil }
+  return PushEnvelopePlaintext(
+    category: category,
+    projectId: projectId,
+    taskId: taskId,
+    sessionId: sessionId,
+    taskTitle: "",
+    detail: "",
+    sentAt: sentAt,
+    clears: []
+  )
 }
 
 @main
@@ -152,9 +177,125 @@ struct NseCryptoHarness {
         CategoryCopy.title(forCategory: opened.category) != nil,
         "case \"\(name)\": no title for category \(opened.category)"
       )
+
+      // The piggybacked clears, against the protocol package's own tolerant
+      // parse. A case that sealed none must parse none.
+      let expectedClears = (expected["clears"] as? [[String: Any]]) ?? []
+      check(
+        opened.clears.count == expectedClears.count,
+        "case \"\(name)\": expected \(expectedClears.count) clears, parsed \(opened.clears.count)"
+      )
+      for (index, expectedClear) in expectedClears.enumerated() where index < opened.clears.count {
+        let parsed = opened.clears[index]
+        check(
+          parsed.category == expectedClear["category"] as? String
+            && parsed.projectId == expectedClear["projectId"] as? String
+            && parsed.taskId == expectedClear["taskId"] as? String
+            && parsed.sessionId == expectedClear["sessionId"] as? String
+            && parsed.notifiedAt == expectedClear["notifiedAt"] as? Double,
+          "case \"\(name)\": clear \(index) does not match the protocol's parse"
+        )
+      }
     }
 
-    // 3. A wrong key and a wrong AAD must fail even on an otherwise good blob.
+    // 3. Pruning: which delivered alerts an incoming push removes. The same
+    //    table tests/unit/nseCrypto.test.ts runs through the app's TypeScript
+    //    matcher, so the two platforms cannot disagree on it.
+    let matchCases = root["matchCases"] as? [[String: Any]] ?? []
+    check(!matchCases.isEmpty, "the fixture file carried no matchCases")
+    for matchCase in matchCases {
+      guard
+        let name = matchCase["name"] as? String,
+        let kind = matchCase["kind"] as? String,
+        let expected = matchCase["expected"] as? Bool,
+        let delivered = alertEnvelope(matchCase["delivered"])
+      else {
+        failures.append("a match case was missing its name, kind, expectation or delivered alert")
+        continue
+      }
+      let deliveredList = [(identifier: "delivered", envelope: delivered)]
+      switch kind {
+      case "covers":
+        // Through the real parser, so an entry it would drop cannot be judged.
+        guard
+          let rawEntry = matchCase["entry"],
+          let entry = NotificationPruning.parseClearEntries([rawEntry]).first
+        else {
+          failures.append("match case \"\(name)\": its entry did not parse")
+          continue
+        }
+        check(
+          NotificationPruning.clearCovers(entry, delivered: delivered) == expected,
+          "match case \"\(name)\": clearCovers should be \(expected)"
+        )
+        // And composed: an unrelated incoming push carrying the entry, which
+        // cannot supersede the delivered alert on its own.
+        let carrier = PushEnvelopePlaintext(
+          category: "plan-complete",
+          projectId: "carrier-project",
+          taskId: "carrier-task",
+          sessionId: "carrier-session",
+          taskTitle: "",
+          detail: "",
+          sentAt: delivered.sentAt + 1,
+          clears: [entry]
+        )
+        check(
+          NotificationPruning.identifiersToRemove(incoming: carrier, delivered: deliveredList) == (expected ? ["delivered"] : []),
+          "match case \"\(name)\": identifiersToRemove disagrees with clearCovers"
+        )
+      case "supersedes":
+        guard let incoming = alertEnvelope(matchCase["incoming"]) else {
+          failures.append("match case \"\(name)\": no incoming alert")
+          continue
+        }
+        check(
+          NotificationPruning.identityKey(incoming) == matchCase["incomingIdentityKey"] as? String,
+          "match case \"\(name)\": identityKey is not the Android stable id"
+        )
+        check(
+          NotificationPruning.supersedes(incoming, delivered: delivered) == expected,
+          "match case \"\(name)\": supersedes should be \(expected)"
+        )
+        check(
+          NotificationPruning.identifiersToRemove(incoming: incoming, delivered: deliveredList) == (expected ? ["delivered"] : []),
+          "match case \"\(name)\": identifiersToRemove disagrees with supersedes"
+        )
+      default:
+        failures.append("match case \"\(name)\": unknown kind \(kind)")
+      }
+    }
+
+    // 4. The opaque thread identifier, against @noble/hashes' HKDF and HMAC.
+    let threadVectors = root["threadIdentifierVectors"] as? [[String: Any]] ?? []
+    check(!threadVectors.isEmpty, "the fixture file carried no threadIdentifierVectors")
+    for vector in threadVectors {
+      guard
+        let name = vector["name"] as? String,
+        let taskId = vector["taskId"] as? String,
+        let projectId = vector["projectId"] as? String
+      else {
+        failures.append("a thread identifier vector was missing its name or ids")
+        continue
+      }
+      let envelope = PushEnvelopePlaintext(
+        category: "input-required",
+        projectId: projectId,
+        taskId: taskId,
+        sessionId: "",
+        taskTitle: "",
+        detail: "",
+        sentAt: 0,
+        clears: []
+      )
+      let derived = NotificationPruning.threadIdentifier(for: envelope, pushKey: pushKey)
+      check(
+        derived == vector["expected"] as? String,
+        "thread vector \"\(name)\": expected \(String(describing: vector["expected"])), got \(String(describing: derived))"
+      )
+    }
+
+    // 5. A wrong key and a wrong AAD must fail even on an otherwise good blob.
     //    Asserted here rather than only through fixtures so the check survives a
     //    regenerated fixture file.
     if let goodCase = cases.first(where: { ($0["name"] as? String) == "good" }),

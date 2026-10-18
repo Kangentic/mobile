@@ -202,6 +202,31 @@ export async function persistNsePushIdentityPublicKey(identityPublicKey: Uint8Ar
 }
 
 /**
+ * Reads back the copy persistNsePushIdentityPublicKey wrote, for the APP's own
+ * decrypt path when it runs with the phone locked. That happens since iOS gained
+ * the `remote-notification` background mode (protocol 0.23.0's sealed clears): a
+ * background launch can run JS before first unlock is over, and the identity
+ * SECRET the usual fallback re-derives the public key from is
+ * `WHEN_UNLOCKED_THIS_DEVICE_ONLY`, so it is unreadable exactly then. This copy is
+ * `AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY`, like everything in the shared group.
+ *
+ * Null wherever there is no shared group (every Android build: nothing is ever
+ * written there, so the read is skipped rather than attempted), when nothing is
+ * stored, when the stored value is the wrong length, or when an unpair landed
+ * while the read was in flight (the same unpair-wins rule as getPushKeyIfExists).
+ */
+export async function getNsePushIdentityPublicKeyIfExists(): Promise<Uint8Array | null> {
+  if (!usesSharedKeychain()) return null;
+  const generationAtLoadStart = pushKeyGeneration;
+  const storedPublicKeyHex = await SecureStore.getItemAsync(PUSH_IDENTITY_PUBLIC_KEY_STORAGE_KEY, sharedPushStorageOptions());
+  if (!storedPublicKeyHex) return null;
+  const identityPublicKey = hexToBytes(storedPublicKeyHex);
+  if (identityPublicKey.length !== PUSH_KEY_LENGTH) return null;
+  if (generationAtLoadStart !== pushKeyGeneration) return null;
+  return identityPublicKey;
+}
+
+/**
  * PROBE ONLY (`build-ios.yml -f nse_probe=true`, src/devsupport/nseProbe.ts).
  * Overwrites both items the Notification Service Extension reads with KNOWN
  * vectors, through the SAME options every real write uses, so the runner can

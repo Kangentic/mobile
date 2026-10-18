@@ -6,8 +6,10 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  clearEntryCovers,
   notificationIdForRouting,
   readPostedAt,
+  readSentAt,
   routingFromNotificationData,
   routingNamesAnything,
   stampPosting,
@@ -172,5 +174,43 @@ describe('readPostedAt', () => {
     expect(readPostedAt({ postedAt: 'soon' }, undefined)).toBeNull();
     expect(readPostedAt(undefined, '')).toBeNull();
     expect(readPostedAt(undefined, 0)).toBeNull();
+  });
+});
+
+/**
+ * The desktop clock a decrypted push carries, which is NOT the phone's posting
+ * time: a sealed clear's `notifiedAt` is a desktop time, so only this can be
+ * ordered against it, and nothing falls back to `postedAt`.
+ */
+describe('readSentAt', () => {
+  it('reads the stored desktop sentAt, and never the posting time', () => {
+    expect(readSentAt({ sentAt: '1700000000000', postedAt: '1800000000000' })).toBe(1_700_000_000_000);
+    expect(readSentAt({ postedAt: '1800000000000' })).toBeNull();
+    expect(readSentAt({ sentAt: 'soon' })).toBeNull();
+    expect(readSentAt(undefined)).toBeNull();
+  });
+});
+
+/**
+ * The covering rule itself is held to the same fixture table as the iOS
+ * extension (nseCrypto.test.ts); these are the two edges that table cannot
+ * express, because a Swift envelope always has a known category and a sentAt.
+ */
+describe('clearEntryCovers', () => {
+  const entry = { category: 'input-required' as const, projectId: 'project-1', taskId: 'task-1', sessionId: 'sess-1', notifiedAt: 2_000 };
+
+  it('covers a matching alert sent at or before notifiedAt', () => {
+    expect(clearEntryCovers(entry, routing(), 2_000)).toBe(true);
+    expect(clearEntryCovers(entry, routing(), 2_001)).toBe(false);
+  });
+
+  it('never covers an alert with no known category or no sentAt', () => {
+    expect(clearEntryCovers(entry, routing({ category: null }), 1_000)).toBe(false);
+    expect(clearEntryCovers(entry, routing(), null)).toBe(false);
+  });
+
+  it('ignores sessionKind, as the stable id and the extension do', () => {
+    expect(clearEntryCovers({ ...entry, sessionKind: 'command-terminal' }, routing(), 1_000)).toBe(true);
+    expect(clearEntryCovers(entry, routing({ sessionKind: 'command-terminal' }), 1_000)).toBe(true);
   });
 });

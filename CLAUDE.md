@@ -150,7 +150,11 @@ targets/nse/                  # iOS Notification Service Extension source (Swift
                               #   generated Xcode project by the plugin above, never into ios/.
                               #   Decrypts the push envelope before iOS renders the alert; vendors
                               #   no crypto (HChaCha20 by hand, then CryptoKit's ChaChaPoly), so it
-                              #   needs no Pods entry. Cross-checked against @kangentic/protocol by
+                              #   needs no Pods entry. Since protocol 0.23.0 it also removes the
+                              #   delivered alerts a push's sealed `clears` cover or it replaces,
+                              #   and sets an opaque keyed threadIdentifier (NotificationPruning.swift,
+                              #   the pure half; HARDWARE-UNPROVEN until a TestFlight run).
+                              #   Cross-checked against @kangentic/protocol by
                               #   the NSE crypto (swiftc) job in ci.yml
 src/
   screens/        # TriageHome (+ home/ needs-you cards, feed sections and the section filter's
@@ -220,7 +224,10 @@ src/
                   #   decrypts in the targets/nse/ extension, Android in the Notifee handler),
                   #   and the stale-notification reconciler (cross-platform: stable Android ids,
                   #   the pure staleness rules in notificationStaleness.ts, clear on open through
-                  #   the pure notificationSignals.ts the screens import)
+                  #   the pure notificationSignals.ts the screens import), and the desktop's
+                  #   sealed clears (protocol 0.23.0): applied by the receive task on Android and,
+                  #   standalone only, on iOS via the remote-notification background mode, with
+                  #   one matching rule (clearEntryCovers) shared with the extension
   state/          # Zustand stores (activity/board/transcript/diff/channel/settings/readingView, all
                   #   channel-fed, in-memory; resume, the one Resume attempt per task that the
                   #   session screen, header and long-press hub share; commandTerminal, the
@@ -242,7 +249,9 @@ src/
                   #   the signal as a plain callback the Sentry-banned directories can subscribe
                   #   to. A breadcrumb is scope data, so the two-capture-call count is unchanged
   lib/            # Shared pure utilities (crypto polyfills, haptics, the bounded task queue that
-                  #   caps the Home feed's cold-start snippet pre-warm)
+                  #   caps the Home feed's cold-start snippet pre-warm, and runWhenFirstActive:
+                  #   the root layout's guard against hydrating settings in an iOS background
+                  #   launch, where the phone may be locked and WHEN_UNLOCKED reads throw)
 tests/
   unit/           # vitest (pure TS, no RN runtime) - includes the loopback-transport + stub-desktop-peer helpers
   components/     # Jest + React Native Testing Library

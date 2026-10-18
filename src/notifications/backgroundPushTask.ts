@@ -1,4 +1,4 @@
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
 import notifee from '@notifee/react-native';
@@ -9,9 +9,19 @@ import {
   channelIdForCategory,
   createNotificationChannels,
 } from './channels';
-import { PUSH_PLACEHOLDER_BODY, PUSH_PLACEHOLDER_TITLE, decryptPushBlob, extractBlobFromTaskData } from './pushDecrypt';
+import {
+  PUSH_PLACEHOLDER_BODY,
+  PUSH_PLACEHOLDER_TITLE,
+  decryptPushBlob,
+  decryptPushClear,
+  extractBlobFromTaskData,
+  extractClearFromTaskData,
+  pushPayloadCarriesClear,
+  type DecryptedPushNotification,
+} from './pushDecrypt';
 import { POSTED_AT_DATA_KEY, stampPosting } from './notificationRouting';
 import { noteNotificationDisplayed } from './notificationSignals';
+import { dismissNotificationsClearedBy } from './notificationReconciler';
 
 // Re-exported from its new home in pushDecrypt.ts (the iOS tap router needs it
 // too, and that path must not import notifee). Kept here so this module's own
@@ -32,14 +42,21 @@ export { extractBlobFromTaskData };
  * is why each step below degrades rather than returns, and why the one
  * genuinely unrecoverable case is commented as such instead of being left to
  * look like an oversight.
+ *
+ * The ONE message that must display nothing is a sealed clear (protocol
+ * 0.23.0, `data.clear`): it only removes alerts, and every failure on its path
+ * is silent rather than the placeholder. See applySealedClear and
+ * registerBackgroundPushTask, which also explains the clears-only role this
+ * task plays on iOS.
  */
 
 const BACKGROUND_PUSH_TASK_NAME = 'kangentic-background-push';
 
 /**
  * Whether the headless receive task actually registered with
- * expo-notifications. 'pending' covers both "not tried yet" and every
- * non-Android platform, where the task is never registered by design.
+ * expo-notifications. 'pending' covers both "not tried yet" and iOS, where
+ * the task applies sealed clears only and never decides whether an alert can
+ * be seen, so its registration is not tracked here.
  *
  * Exists because the registration failure below is otherwise unobservable:
  * nothing reads the task name, so an install that can never receive a push
@@ -75,8 +92,7 @@ async function displayPlaceholder(): Promise<void> {
   noteNotificationDisplayed({ platformId, routing: null, postedAt, promptIdAtPost: null });
 }
 
-async function displayDecryptedOrPlaceholder(blob: string | null): Promise<void> {
-  const decrypted = blob === null ? null : await decryptPushBlob(blob);
+async function displayDecryptedOrPlaceholder(decrypted: DecryptedPushNotification | null): Promise<void> {
   if (decrypted) {
     try {
       const postedAt = Date.now();
@@ -171,8 +187,49 @@ function watchingAlready(): boolean {
   }
 }
 
+/**
+ * A sealed clear (protocol 0.23.0): the desktop saw notifications it already
+ * sent resolve. Removes the ones it covers and DISPLAYS NOTHING, on every path.
+ * A clear that cannot be opened (no key, wrong key, tampered, stale, malformed,
+ * a non-string value) does nothing at all, and explicitly not the placeholder:
+ * a clear is never a reason to notify (e2e-notification-privacy.md).
+ */
+async function applySealedClear(payload: unknown): Promise<void> {
+  try {
+    const blob = extractClearFromTaskData(payload);
+    if (blob === null) return;
+    const entries = await decryptPushClear(blob);
+    if (entries === null) return;
+    await dismissNotificationsClearedBy(entries);
+  } catch {
+    // Silent by design: see above.
+  }
+}
+
 let taskRegistered = false;
 
+/**
+ * Registers the receive task on BOTH platforms, with two different jobs.
+ *
+ * - Android: every push lands here (data-only), so this task renders it, and
+ *   applies any sealed clear: a standalone one, or `clears` riding a
+ *   notification envelope, which are applied before that envelope displays.
+ * - iOS: the OS draws every alert from the APNs request, and the Notification
+ *   Service Extension applies the `clears` a visible push carries
+ *   (targets/nse/). This task only ever applies a STANDALONE clear, which the
+ *   desktop sends as a background (`content-available`) push with no alert, so
+ *   it needs the `remote-notification` background mode (app.config.ts).
+ *   expo-notifications also runs this task for a visible push received in the
+ *   foreground, so the iOS branch returns before anything that could display:
+ *   a notifee post there would sit on top of the alert iOS already shows.
+ *   iOS delivers background pushes only when it chooses to (Apple's guidance
+ *   is two or three an hour) and never to an app the user force-quit, so this
+ *   path is best-effort; the extension is the reliable half.
+ *
+ * The status the Settings push line reads moves on Android only. On iOS the
+ * task decides nothing about whether an alert can be SEEN, so a failed
+ * registration there must not report remote push as unavailable.
+ */
 export function registerBackgroundPushTask(): void {
   if (taskRegistered) return;
   taskRegistered = true;
@@ -181,6 +238,27 @@ export function registerBackgroundPushTask(): void {
     // Notification-response payloads (action taps) are the tap router's
     // job; this task only handles incoming data messages.
     if ('actionIdentifier' in data) return;
+    // A clear is recognised by its KEY, before anything is decrypted and
+    // before the watching gate: the desktop already resolved what it names,
+    // so it applies whether or not the user is looking. Checked first because
+    // a payload with no `blob` falls through to the placeholder below, and a
+    // clear must never become a notification.
+    if (pushPayloadCarriesClear(data.data)) {
+      await applySealedClear(data.data);
+      return;
+    }
+    if (Platform.OS !== 'android') return;
+    // Decrypted BEFORE the watching gate so the clears it carries are applied
+    // even while the user is looking: an Android clear the desktop piggybacked
+    // is consumed once Expo accepts the push, so dropping it here would lose
+    // the only copy.
+    const blob = extractBlobFromTaskData(data.data);
+    const decrypted = blob === null ? null : await decryptPushBlob(blob);
+    try {
+      if (decrypted !== null && decrypted.clears.length > 0) await dismissNotificationsClearedBy(decrypted.clears);
+    } catch {
+      // Never costs the notification it rode on.
+    }
     // Nothing fires over the top of a live session the user is watching.
     if (watchingAlready()) return;
     // The channels displayed into are created by initializeNotifications(),
@@ -207,22 +285,23 @@ export function registerBackgroundPushTask(): void {
       // See above.
     }
     try {
-      await displayDecryptedOrPlaceholder(extractBlobFromTaskData(data.data));
+      await displayDecryptedOrPlaceholder(decrypted);
     } catch {
       // The placeholder itself failed, which is the one case with nothing
       // left to degrade to: notifee is the only renderer this message has.
       // Swallowing keeps the headless task from crash-looping.
     }
   });
+  const tracksStatus = Platform.OS === 'android';
   void Notifications.registerTaskAsync(BACKGROUND_PUSH_TASK_NAME)
     .then(() => {
-      backgroundPushTaskStatus = 'registered';
+      if (tracksStatus) backgroundPushTaskStatus = 'registered';
     })
     .catch(() => {
       // Without FCM credentials (no google-services.json) registration can
       // fail; remote push is simply unavailable, never a boot failure.
       // Recorded rather than swallowed outright so Settings can stop
       // reporting "registered" for an install that can never receive one.
-      backgroundPushTaskStatus = 'unavailable';
+      if (tracksStatus) backgroundPushTaskStatus = 'unavailable';
     });
 }

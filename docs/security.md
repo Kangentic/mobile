@@ -294,6 +294,19 @@ per-device key expiry, so a lost phone is not trusted forever even if revocation
   the backup-portability property above is unchanged, and the identity SECRET key is deliberately
   NOT among them.
 
+- **The app itself can now run while the phone is locked, on iOS, and reads only those two
+  items there.** Sealed clears (protocol 0.23.0) arrive as a background push, which needs the
+  `remote-notification` background mode, and that lets iOS launch the whole app in the background,
+  very often locked. Every `WHEN_UNLOCKED` item throws on read then. Two consequences, both
+  handled. The receive task's decrypt reads the AAD from the shared `push.identity.pk` copy
+  before the identity secret (`src/notifications/pushIdentity.ts`), so it uses only the two
+  `AFTER_FIRST_UNLOCK` items the extension already reads; nothing new became readable while
+  locked. And boot work that reads a `WHEN_UNLOCKED` item waits for the app to first come to the
+  front (`src/lib/whenFirstActive.ts`, used by `app/_layout.tsx` for the settings hydrate), because
+  `settingsStore` turns each failed read into its default and the next connection would otherwise
+  re-register DEFAULT push categories with the desktop. The connection opens only on 'active' in
+  any case, so the identity secret and the trust anchor are never read in a background launch.
+
 - **The extension reads through a shared Keychain access group, never a copy of the key.**
   The app declares `keychain-access-groups` with its own application-identifier group **first**
   and `<bundle id>.shared` second; the extension declares only the shared group
@@ -349,7 +362,8 @@ moves the peer-type signal earlier, so it is named here too.
 
 Push notifications are ciphertext plus a generic placeholder only (see
 `.claude/rules/e2e-notification-privacy.md`); every failure mode degrades to the placeholder,
-never to plaintext or raw ciphertext shown to the user. That is a floor on WHAT IS RENDERED, not
+never to plaintext or raw ciphertext shown to the user (the one exception renders nothing at all:
+a sealed clear, below). That is a floor on WHAT IS RENDERED, not
 a delivery guarantee: the Android message is data-only, so there is no OS-drawn notification
 behind our handler, and anything that stops it running at all produces silence rather than a
 placeholder. See the notification pipeline in [architecture.md](architecture.md) for the full
@@ -371,7 +385,14 @@ crypto is vendored. Agreement with `@kangentic/protocol` is not assumed: the `NS
 `sealPushEnvelope` and checks that the tamper, wrong-key, wrong-AAD and staleness paths all
 reject.
 
-The extension mutates only the notification's title and body. It never writes to `userInfo`,
+The extension mutates only the notification's title, body and `threadIdentifier`. The thread
+identifier, which makes iOS stack a task's alerts, is an OPAQUE value and never an id: the first
+16 bytes of HMAC-SHA256 over `task:<taskId>` (or `project:<projectId>` for an alert naming no
+task), under a key derived from the push key with HKDF-SHA256 and its own info label
+(`kangentic nse thread v1`), so the AEAD key does no second job and the value is stable per task on
+this device and meaningless to anyone without the push key
+(`targets/nse/NotificationPruning.swift`; cross-checked against `@noble/hashes` by the `NSE crypto
+(swiftc)` job). It never writes to `userInfo`,
 and in particular never puts the decrypted `taskId` there: tap routing re-derives it by
 decrypting on tap (`src/notifications/tapRouter.ts`), so task identity never enters the
 OS-visible object. The same holds for a Command Terminal's alert (protocol 0.20.0): its
@@ -395,7 +416,46 @@ push network, and would also break the tap router's identifier latch. To judge a
 app decrypts its sealed blob in memory, exactly as a tap does, and dismisses it by request
 identifier; nothing decrypted is written back to the OS-visible notification or logged, and a
 reconciler failure is swallowed silently. An alert the app cannot open is dismissed only once it is
-older than the 24h envelope window, after which no key could ever open it.
+older than the 24h envelope window, after which no key could ever open it. The extension's own
+pruning (below) works the same way: it decrypts each delivered alert's blob in memory to compare
+it, removes by request identifier, and writes nothing back.
+
+### Sealed clears (protocol 0.23.0)
+
+The desktop tells the phone when a notified condition resolves at the desk, so a stale alert can
+leave the lock screen before the app is opened. A clear is sealed exactly like a notification
+(XChaCha20-Poly1305 under the push key, this phone's static public key as AAD, the same 24h / 5min
+window), so its CONTENT (which alerts, by category, project, task and session id) is as private as
+any envelope. What the push network learns is new, and named here rather than implied:
+
+- **That a message is a clear.** It rides `data.clear` rather than `data.blob`, so the key name
+  is visible to Expo, FCM and APNs. That is deliberate: the phone must tell a clear from a
+  notification BEFORE decrypting, because a phone that falls through to the display path would
+  render a clear as a new notification.
+- **When things resolve.** A clear's timing tells the push network roughly when a session's
+  condition changed at the desk, as a notification's timing already tells it when one arose. The
+  desktop coalesces clears for 5 s, so one task move costs one message.
+- **On iOS, a background push.** A standalone iOS clear is `content-available` with no alert, at
+  APNs priority 5, at most one per device per 20 minutes. Visible pushes carry pending clears
+  inside their sealed envelope (`clears`), which adds nothing OS-visible.
+
+Only a registration that set `acceptsClears` (`src/notifications/pushRegistration.ts`) is sent
+clears, and every failure on a clear's path on the phone is SILENT: a clear never renders anything,
+and an unopenable one does nothing rather than show the placeholder
+(`.claude/rules/e2e-notification-privacy.md`). A clear removes an alert only if the category and
+all three ids match AND the alert's own envelope `sentAt` is at or before the clear's `notifiedAt`,
+so a clear that Doze or APNs delivered late cannot remove a newer alert; an alert carrying no
+`sentAt` (a local alert, the placeholder) is never removed by one. Android applies clears in its
+receive task, iOS applies a standalone clear in the same task via the background mode (best-effort
+by Apple's terms, and never after a force-quit) and a piggybacked one in the extension, which also
+removes an older delivered alert the incoming push replaces. Whether an extension can remove
+delivered notifications is not documented by Apple and is proven only by a hardware run; if it
+cannot, that pruning is dropped and the rest stands.
+
+**Rejected for now: `com.apple.developer.usernotifications.filtering`.** That entitlement would let
+the extension swallow a visible push entirely, so a clear could ride a visible push and render
+nothing. Apple grants it by application, mostly to end-to-end messaging apps, with reported
+rejections and multi-week waits; it stays a future option rather than a dependency.
 
 One dependency worth naming: **APNs invokes a service extension only for a push that carries
 `mutable-content: 1` AND an alert.** The desktop deliberately sends iOS a placeholder title and

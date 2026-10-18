@@ -11,14 +11,25 @@
  * Committed rather than generated at test time so the Swift harness needs no
  * Node, and so a change to the fixtures is visible in review.
  *
+ * Since protocol 0.23.0 it also carries the extension's notification pruning
+ * (targets/nse/NotificationPruning.swift): envelopes with piggybacked `clears`
+ * whose expected parse is the protocol's own `parsePushClearEntries`, a truth
+ * table of which delivered alerts a push removes (`matchCases`, which
+ * tests/unit/nseCrypto.test.ts also runs through the app's TypeScript matcher,
+ * so one table binds both platforms), and `threadIdentifierVectors` computed
+ * here with @noble/hashes and checked against CryptoKit.
+ *
  * Run: node scripts/generateNseCryptoFixtures.mjs
  */
 import { Buffer } from 'node:buffer';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { sealPushEnvelope, openPushEnvelope, randomBytes, bytesToHex } from '@kangentic/protocol';
+import { sealPushEnvelope, openPushEnvelope, parsePushClearEntries, randomBytes, bytesToHex } from '@kangentic/protocol';
 import { chacha20poly1305, xchacha20poly1305 } from '@noble/ciphers/chacha.js';
+import { hkdf } from '@noble/hashes/hkdf.js';
+import { hmac } from '@noble/hashes/hmac.js';
+import { sha256 } from '@noble/hashes/sha2.js';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 /**
@@ -130,6 +141,25 @@ function tamper(blob) {
   return base64UrlEncode(bytes);
 }
 
+/** HKDF info label for the extension's thread key; NotificationPruning.threadKeyInfo must match. */
+export const THREAD_KEY_INFO = 'kangentic nse thread v1';
+
+/**
+ * The extension's opaque threadIdentifier (NotificationPruning.threadIdentifier),
+ * written independently with @noble/hashes so the Swift CryptoKit version is
+ * checked against a second implementation rather than against itself:
+ * HKDF-SHA256(push key, no salt, THREAD_KEY_INFO) -> 32-byte thread key, then
+ * HMAC-SHA256(thread key, "task:<taskId>" else "project:<projectId>"), first
+ * 16 bytes, lowercase hex. Null when the alert names neither.
+ */
+export function threadIdentifier(pushKeyBytes, taskId, projectId) {
+  const subject = taskId.length > 0 ? `task:${taskId}` : projectId.length > 0 ? `project:${projectId}` : null;
+  if (subject === null) return null;
+  const encoder = new TextEncoder();
+  const threadKey = hkdf(sha256, pushKeyBytes, undefined, encoder.encode(THREAD_KEY_INFO), 32);
+  return bytesToHex(hmac(sha256, threadKey, encoder.encode(subject)).subarray(0, 16));
+}
+
 selfCheckHChaCha20();
 
 const pushKey = randomBytes(32);
@@ -154,6 +184,31 @@ const basePlaintext = {
   detail: 'Needs your approval to run the migration',
   sentAt: nowMilliseconds - 30_000,
 };
+
+/**
+ * Piggybacked clears (protocol 0.23.0), two valid entries around every shape
+ * the protocol's tolerant parser drops on its own: an unknown category, a
+ * non-string id, a non-numeric and a boolean `notifiedAt`, a non-object. The
+ * EXPECTED list is the protocol's own parse of this array, never a hand-copied
+ * one, so the Swift parser is held to what the package actually keeps.
+ */
+const rawPiggybackedClears = [
+  { category: 'input-required', projectId: 'project-alpha', taskId: 'task-42', sessionId: 'session-6', notifiedAt: nowMilliseconds - 60_000 },
+  { category: 'not-a-category', projectId: 'project-alpha', taskId: 'task-42', sessionId: 'session-6', notifiedAt: nowMilliseconds - 60_000 },
+  { category: 'input-required', projectId: 7, taskId: 'task-42', sessionId: 'session-6', notifiedAt: nowMilliseconds - 60_000 },
+  { category: 'input-required', projectId: 'project-alpha', taskId: 'task-42', sessionId: 'session-6', notifiedAt: 'soon' },
+  { category: 'input-required', projectId: 'project-alpha', taskId: 'task-42', sessionId: 'session-6', notifiedAt: true },
+  'not-an-object',
+  null,
+  {
+    category: 'spawn-stalled',
+    projectId: 'project-alpha',
+    taskId: 'task-42',
+    sessionId: '',
+    notifiedAt: nowMilliseconds - 90_000,
+    sessionKind: 'not-a-kind',
+  },
+];
 
 const cases = [
   {
@@ -200,6 +255,17 @@ const cases = [
     },
   },
   {
+    name: 'piggybacked-clears-parse-tolerantly',
+    blob: sealPushEnvelope(pushKey, identityPublicKey, { ...basePlaintext, clears: rawPiggybackedClears }),
+    expected: { ...basePlaintext, clears: parsePushClearEntries(rawPiggybackedClears) },
+  },
+  {
+    // A malformed list must never cost the notification it rides on.
+    name: 'malformed-clears-list-still-opens',
+    blob: sealPushEnvelope(pushKey, identityPublicKey, { ...basePlaintext, clears: 'not-a-list' }),
+    expected: { ...basePlaintext, clears: [] },
+  },
+  {
     name: 'tampered-tag',
     blob: tamper(sealPushEnvelope(pushKey, identityPublicKey, basePlaintext)),
     expected: null,
@@ -236,7 +302,115 @@ for (const testCase of cases) {
   if (opened.taskId !== testCase.expected.taskId) {
     throw new Error(`Fixture "${testCase.name}" does not round-trip through openPushEnvelope.`);
   }
+  if (JSON.stringify(opened.clears ?? []) !== JSON.stringify(testCase.expected.clears ?? [])) {
+    throw new Error(`Fixture "${testCase.name}" clears do not round-trip through openPushEnvelope.`);
+  }
 }
+
+/**
+ * Which delivered alerts an incoming push removes, as a truth table both
+ * platforms are held to: the Swift harness runs it through
+ * NotificationPruning, and tests/unit/nseCrypto.test.ts runs the `covers` rows
+ * through the app's clearEntryCovers and the `supersedes` rows' identities
+ * through notificationIdForRouting, the Android stable id.
+ *
+ * - `covers`: does a clear entry remove the delivered alert? Same category and
+ *   all three ids, and the alert's `sentAt` at or before `notifiedAt`.
+ * - `supersedes`: does the incoming push replace the delivered alert? Same
+ *   stable identity (category + session, else task, else project), and the
+ *   delivered one sealed at or before the incoming one.
+ */
+const deliveredAlert = {
+  category: 'input-required',
+  projectId: 'project-alpha',
+  taskId: 'task-42',
+  sessionId: 'session-7',
+  sentAt: nowMilliseconds - 60_000,
+};
+const alertIds = { category: 'input-required', projectId: 'project-alpha', taskId: 'task-42', sessionId: 'session-7' };
+const workflowAlert = { category: 'workflow-complete', projectId: 'project-alpha', taskId: '', sessionId: '', sentAt: nowMilliseconds - 60_000 };
+const stalledAlert = { category: 'spawn-stalled', projectId: 'project-alpha', taskId: 'task-42', sessionId: '', sentAt: nowMilliseconds - 60_000 };
+
+const matchCases = [
+  { name: 'clear-covers-an-alert-sent-before-notified-at', kind: 'covers', entry: { ...alertIds, notifiedAt: deliveredAlert.sentAt + 1_000 }, delivered: deliveredAlert, expected: true },
+  { name: 'clear-covers-an-alert-sent-exactly-at-notified-at', kind: 'covers', entry: { ...alertIds, notifiedAt: deliveredAlert.sentAt }, delivered: deliveredAlert, expected: true },
+  { name: 'clear-keeps-an-alert-sent-after-notified-at', kind: 'covers', entry: { ...alertIds, notifiedAt: deliveredAlert.sentAt - 1 }, delivered: deliveredAlert, expected: false },
+  { name: 'clear-keeps-another-category', kind: 'covers', entry: { ...alertIds, category: 'turn-complete', notifiedAt: nowMilliseconds }, delivered: deliveredAlert, expected: false },
+  { name: 'clear-keeps-another-session', kind: 'covers', entry: { ...alertIds, sessionId: 'session-8', notifiedAt: nowMilliseconds }, delivered: deliveredAlert, expected: false },
+  { name: 'clear-keeps-another-task', kind: 'covers', entry: { ...alertIds, taskId: 'task-43', notifiedAt: nowMilliseconds }, delivered: deliveredAlert, expected: false },
+  { name: 'clear-keeps-another-project', kind: 'covers', entry: { ...alertIds, projectId: 'project-beta', notifiedAt: nowMilliseconds }, delivered: deliveredAlert, expected: false },
+  {
+    name: 'clear-covers-spawn-stalled-with-an-empty-session',
+    kind: 'covers',
+    entry: { category: 'spawn-stalled', projectId: 'project-alpha', taskId: 'task-42', sessionId: '', notifiedAt: nowMilliseconds },
+    delivered: stalledAlert,
+    expected: true,
+  },
+  {
+    name: 'newer-push-supersedes-the-same-session-and-category',
+    kind: 'supersedes',
+    incoming: { ...deliveredAlert, sentAt: deliveredAlert.sentAt + 5_000 },
+    delivered: deliveredAlert,
+    incomingIdentityKey: 'kangentic:input-required:session:session-7',
+    expected: true,
+  },
+  {
+    name: 'older-push-arriving-late-supersedes-nothing',
+    kind: 'supersedes',
+    incoming: { ...deliveredAlert, sentAt: deliveredAlert.sentAt - 5_000 },
+    delivered: deliveredAlert,
+    incomingIdentityKey: 'kangentic:input-required:session:session-7',
+    expected: false,
+  },
+  {
+    name: 'another-session-of-the-same-task-is-kept',
+    kind: 'supersedes',
+    incoming: { ...deliveredAlert, sessionId: 'session-8', sentAt: nowMilliseconds },
+    delivered: deliveredAlert,
+    incomingIdentityKey: 'kangentic:input-required:session:session-8',
+    expected: false,
+  },
+  {
+    name: 'another-category-of-the-same-session-is-kept',
+    kind: 'supersedes',
+    incoming: { ...deliveredAlert, category: 'turn-complete', sentAt: nowMilliseconds },
+    delivered: deliveredAlert,
+    incomingIdentityKey: 'kangentic:turn-complete:session:session-7',
+    expected: false,
+  },
+  {
+    name: 'workflow-complete-supersedes-within-its-project',
+    kind: 'supersedes',
+    incoming: { ...workflowAlert, sentAt: nowMilliseconds },
+    delivered: workflowAlert,
+    incomingIdentityKey: 'kangentic:workflow-complete:project:project-alpha',
+    expected: true,
+  },
+  {
+    name: 'workflow-complete-of-another-project-is-kept',
+    kind: 'supersedes',
+    incoming: { ...workflowAlert, projectId: 'project-beta', sentAt: nowMilliseconds },
+    delivered: workflowAlert,
+    incomingIdentityKey: 'kangentic:workflow-complete:project:project-beta',
+    expected: false,
+  },
+  {
+    name: 'spawn-stalled-supersedes-by-task',
+    kind: 'supersedes',
+    incoming: { ...stalledAlert, sentAt: nowMilliseconds },
+    delivered: stalledAlert,
+    incomingIdentityKey: 'kangentic:spawn-stalled:task:task-42',
+    expected: true,
+  },
+];
+
+const threadIdentifierVectors = [
+  { name: 'keys-on-the-task', taskId: 'task-42', projectId: 'project-alpha' },
+  { name: 'a-task-without-a-project-still-keys-on-the-task', taskId: 'task-42', projectId: '' },
+  { name: 'workflow-complete-falls-back-to-its-project', taskId: '', projectId: 'project-alpha' },
+  { name: 'non-ascii-ids-hash-as-utf8', taskId: 'tâche-✓', projectId: 'project-alpha' },
+  { name: 'an-alert-naming-nothing-has-no-thread', taskId: '', projectId: '' },
+].map((vector) => ({ ...vector, expected: threadIdentifier(pushKey, vector.taskId, vector.projectId) }));
 
 // The RFC's own HChaCha20 input, so a failure isolates subkey derivation from
 // the nonce split and the AEAD.
@@ -256,6 +430,8 @@ const fixtures = {
     subkeyHex: bytesToHex(hchacha20(vectorKey, vectorNonce)),
   },
   cases,
+  matchCases,
+  threadIdentifierVectors,
 };
 
 /**

@@ -1,11 +1,19 @@
 import { AppState, Platform } from 'react-native';
 import notifee from '@notifee/react-native';
 import * as Notifications from 'expo-notifications';
+import type { PushClearEntry } from '@kangentic/protocol';
 import { useActivityStore, type SessionActivityEntry } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { CONNECTION_CHANNEL_ID, CONNECTION_NOTIFICATION_ID } from './categoryCopy';
 import { decryptPushBlob, extractBlobFromTaskData } from './pushDecrypt';
-import { readPostedAt, routingFromNotificationData, routingNamesAnything, type NotificationRouting } from './notificationRouting';
+import {
+  clearEntryCovers,
+  readPostedAt,
+  readSentAt,
+  routingFromNotificationData,
+  routingNamesAnything,
+  type NotificationRouting,
+} from './notificationRouting';
 import {
   getOpenNotificationSurfaces,
   publishNotificationDismissed,
@@ -38,12 +46,24 @@ import { judgeNotification, observeAtFirstSight, type JudgedNotification, type S
  * leaves the alerts exactly as they were, which is today's behaviour. Nothing
  * here logs (e2e-notification-privacy.md) and nothing reports to Sentry
  * (crash-reporting-scope.md bans this directory).
+ *
+ * It also applies the desktop's sealed clears (protocol 0.23.0,
+ * dismissNotificationsClearedBy below), which reach a process that may have no
+ * stores at all (Android's headless task, an iOS background launch): the
+ * desktop saw the condition resolve, so the clear itself is the verdict and no
+ * staleness rule is consulted.
  */
 
 type TrackedNotification = JudgedNotification & {
   platformId: string;
   /** When an `ios-undecryptable` alert's blob was last tried, so a refresh does not retry it every time. */
   decryptAttemptedAt?: number;
+  /**
+   * The alert's own envelope `sentAt` (the desktop's clock), which bounds what a
+   * sealed clear may remove. Null or absent when the alert carries none, and such
+   * an alert is never cleared (clearEntryCovers).
+   */
+  sentAt?: number | null;
 };
 
 /**
@@ -157,7 +177,10 @@ async function readAndroidDisplayed(previousById: ReadonlyMap<string, TrackedNot
     // service notifications); this keeps it out of judging altogether.
     if (platformId === CONNECTION_NOTIFICATION_ID || notification.android?.channelId === CONNECTION_CHANNEL_ID) continue;
     const postedAt = readPostedAt(notification.data, item.date);
-    const next = notifeeRecord(platformId, routingFromNotificationData(notification.data), postedAt, null);
+    const next = {
+      ...notifeeRecord(platformId, routingFromNotificationData(notification.data), postedAt, null),
+      sentAt: readSentAt(notification.data),
+    };
     result.push(mergeTracked(previousById.get(platformId), next));
   }
   return result;
@@ -206,9 +229,9 @@ async function readIosPresented(previousById: ReadonlyMap<string, TrackedNotific
     const decrypted = await decryptPushBlob(blob);
     const routing = decrypted === null ? null : routingFromNotificationData(decrypted.data);
     result.push(
-      routing === null
+      decrypted === null || routing === null
         ? { platformId, kind: 'ios-undecryptable', postedAt, decryptAttemptedAt }
-        : routedRecord(platformId, routing, postedAt, null),
+        : { ...routedRecord(platformId, routing, postedAt, null), sentAt: decrypted.sentAt },
     );
   }
   return result;
@@ -280,6 +303,47 @@ async function rejudgeTracked(): Promise<void> {
     if (record.kind === 'routed') publishNotificationDismissed(record.routing);
   }
   await Promise.allSettled(dismissed.map((record) => cancelPlatformNotification(record)));
+}
+
+/**
+ * Applies a sealed clear's entries (protocol 0.23.0): reads what is on screen
+ * NOW, the same way a refresh does, and cancels every alert an entry covers
+ * (clearEntryCovers: same category and ids, and posted at or before the entry's
+ * `notifiedAt`). Never a blind cancel by stable id, which would skip that bound
+ * and could remove a newer alert under the same id; a local alert under that id
+ * carries no `sentAt` and is kept.
+ *
+ * Callers await it: Android's headless task returns once it settles, and a
+ * piggybacked clear must land BEFORE its own envelope is displayed.
+ *
+ * Runs outside the pass loop on purpose, since a headless launch has no pass to
+ * join. A pass in flight at the same time can at worst try to cancel an alert
+ * this already removed, and a cancel of a missing id is a no-op on both
+ * platforms. Swallows everything, like the rest of this file: a clear that
+ * cannot be applied leaves the alerts exactly as they were.
+ */
+export async function dismissNotificationsClearedBy(entries: readonly PushClearEntry[]): Promise<void> {
+  if (entries.length === 0) return;
+  try {
+    const previousById = new Map(tracked.map((record) => [record.platformId, record]));
+    const onScreen = Platform.OS === 'android' ? await readAndroidDisplayed(previousById) : await readIosPresented(previousById);
+    const cleared: TrackedNotification[] = [];
+    for (const record of onScreen) {
+      if (record.kind !== 'routed') continue;
+      const sentAt = record.sentAt ?? null;
+      if (entries.some((entry) => clearEntryCovers(entry, record.routing, sentAt))) cleared.push(record);
+    }
+    if (cleared.length === 0) return;
+    const clearedIds = new Set(cleared.map((record) => record.platformId));
+    tracked = tracked.filter((record) => !clearedIds.has(record.platformId));
+    // Before the cancels settle, for the same reason rejudgeTracked publishes first.
+    for (const record of cleared) {
+      if (record.kind === 'routed') publishNotificationDismissed(record.routing);
+    }
+    await Promise.allSettled(cleared.map((record) => cancelPlatformNotification(record)));
+  } catch {
+    // Swallowed: see the file header.
+  }
 }
 
 async function runPasses(): Promise<void> {

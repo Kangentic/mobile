@@ -1,4 +1,4 @@
-import { isPushCategory, isPushSessionKind, type PushCategory, type PushSessionKind } from '@kangentic/protocol';
+import { isPushCategory, isPushSessionKind, type PushCategory, type PushClearEntry, type PushSessionKind } from '@kangentic/protocol';
 
 /**
  * What a displayed notification is ABOUT, read the same way by every reader:
@@ -29,6 +29,17 @@ export interface NotificationRouting {
  * second press on the same alert from a press on the same id posted again.
  */
 export const POSTED_AT_DATA_KEY = 'postedAt';
+
+/**
+ * The key a decrypted push's own envelope `sentAt` rides under in notifee
+ * `data` (epoch milliseconds on the DESKTOP's clock, as a string). Not the same
+ * value as `postedAt`, which is the phone's clock at display time: a sealed
+ * clear bounds what it removes by the desktop's `sentAt` (clearEntryCovers), so
+ * only the desktop's own clock can be compared against it. Absent on everything
+ * that is not a decrypted push (a local alert, the placeholder, an alert posted
+ * before this key existed), and an absent one is never cleared.
+ */
+export const SENT_AT_DATA_KEY = 'sentAt';
 
 function isUnknownRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -130,4 +141,36 @@ export function readPostedAt(data: unknown, displayedDate: unknown): number | nu
     if (posted !== null) return posted;
   }
   return parseEpochMs(displayedDate);
+}
+
+/** The desktop `sentAt` a decrypted push stored in its `data`, or null when it carries none. */
+export function readSentAt(data: unknown): number | null {
+  return isUnknownRecord(data) ? parseEpochMs(data[SENT_AT_DATA_KEY]) : null;
+}
+
+/**
+ * Whether a sealed clear entry (protocol 0.23.0) removes a displayed alert: its
+ * category and all three ids match, AND the alert's own envelope `sentAt` is at
+ * or before the entry's `notifiedAt`. The bound is what makes delivery order
+ * irrelevant: a normal-priority clear that Doze held back can land after a
+ * fresh push for the same session and category, and must not remove it.
+ *
+ * `sessionKind` is deliberately not compared. The ids alone are unique, the
+ * stable Android id (notificationIdForRouting) leaves it out for the same
+ * reason, and the iOS extension (targets/nse/NotificationPruning.swift) applies
+ * this same rule without parsing it.
+ *
+ * An alert with no category or no `sentAt` is never covered: a local alert, the
+ * placeholder, or an alert posted before `sentAt` was stored. Never dismiss on
+ * unknown; the reconciler judges those on the next open instead.
+ */
+export function clearEntryCovers(entry: PushClearEntry, routing: NotificationRouting, sentAt: number | null): boolean {
+  if (routing.category === null || sentAt === null) return false;
+  return (
+    routing.category === entry.category &&
+    routing.projectId === entry.projectId &&
+    routing.taskId === entry.taskId &&
+    routing.sessionId === entry.sessionId &&
+    sentAt <= entry.notifiedAt
+  );
 }

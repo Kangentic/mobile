@@ -1,8 +1,9 @@
 /**
  * initializeNotifications' platform split.
  *
- * registerNotificationTapHandlers, startNotificationReconciler and
- * refreshNotificationPermission run on EVERY platform; registerForegroundServiceRunner, registerBackgroundPushTask
+ * registerNotificationTapHandlers, startNotificationReconciler,
+ * refreshNotificationPermission and (since sealed clears, protocol 0.23.0)
+ * registerBackgroundPushTask run on EVERY platform; registerForegroundServiceRunner
  * and createNotificationChannels stay behind `if (Platform.OS !== 'android')
  * return`. The tap handlers and the permission refresh were moved ABOVE that
  * gate - the function used to return early off Android entirely, which is how
@@ -120,11 +121,16 @@ describe('initializeNotifications platform split', () => {
 
   /**
    * The TestFlight bug this split fixes: tap routing and the permission cache
-   * seed have to survive the `Platform.OS !== 'android'` gate, while the three
-   * genuinely Android-only pieces (notifee channels, the FCM data-message task,
-   * the foreground service) stay behind it.
+   * seed have to survive the `Platform.OS !== 'android'` gate, while the
+   * genuinely Android-only pieces (notifee channels, the foreground service)
+   * stay behind it. The receive task crossed the gate with sealed clears: on iOS
+   * it applies standalone clears only, and an iOS background launch for one
+   * mounts no screen that could register it later.
+   *
+   * Mutation that reddens the receive-task line: move registerBackgroundPushTask
+   * back below the gate. Seen red.
    */
-  it('runs only the tap handlers, the reconciler and the permission refresh on iOS, never the three Android-only calls', async () => {
+  it('runs the tap handlers, the reconciler, the permission refresh and the receive task on iOS, never the Android-only calls', async () => {
     platformMock.OS = 'ios';
     const initializeNotifications = await loadInitializeNotifications();
 
@@ -135,9 +141,9 @@ describe('initializeNotifications platform split', () => {
     // presented alerts too, by decrypting them in-app.
     expect(startNotificationReconcilerMock).toHaveBeenCalledTimes(1);
     expect(refreshNotificationPermissionMock).toHaveBeenCalledTimes(1);
+    expect(registerBackgroundPushTaskMock).toHaveBeenCalledTimes(1);
     expect(registerForegroundServiceRunnerMock).not.toHaveBeenCalled();
     expect(stopOrphanedForegroundServiceAtBootMock).not.toHaveBeenCalled();
-    expect(registerBackgroundPushTaskMock).not.toHaveBeenCalled();
     expect(createNotificationChannelsMock).not.toHaveBeenCalled();
   });
 

@@ -5,11 +5,12 @@
  * the generic placeholder - never ciphertext, never plaintext
  * (e2e-notification-privacy.md).
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   bytesToHex,
   generateX25519KeyPair,
   randomBytes,
+  sealPushClear,
   sealPushEnvelope,
   type PushEnvelopePlaintext,
 } from '@kangentic/protocol';
@@ -22,6 +23,7 @@ vi.mock('expo-secure-store', () => ({
     secureStoreState.storedValues.set(key, value);
   }),
   WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'whenUnlockedThisDeviceOnly',
+  AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY: 'afterFirstUnlockThisDeviceOnly',
 }));
 
 type PushDecryptModule = typeof import('@/notifications/pushDecrypt');
@@ -59,14 +61,23 @@ describe('decryptPushBlob', () => {
     const { pushDecrypt, pushIdentity } = await loadModules();
     pushIdentity.setActivePushIdentityPublicKey(identity.publicKey);
 
-    const blob = sealPushEnvelope(pushKey, identity.publicKey, plaintextFixture());
+    const plaintext = plaintextFixture();
+    const blob = sealPushEnvelope(pushKey, identity.publicKey, plaintext);
     const decrypted = await pushDecrypt.decryptPushBlob(blob);
 
     expect(decrypted).not.toBeNull();
     expect(decrypted?.title).toBe('Agent needs your input');
     expect(decrypted?.body).toBe('Fix the flaky test - Bash: npm run test');
     expect(decrypted?.category).toBe('input-required');
-    expect(decrypted?.data).toStrictEqual({ category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' });
+    expect(decrypted?.data).toStrictEqual({
+      category: 'input-required',
+      taskId: 'task-1',
+      projectId: 'project-1',
+      sessionId: 'sess-1',
+      sentAt: String(plaintext.sentAt),
+    });
+    expect(decrypted?.sentAt).toBe(plaintext.sentAt);
+    expect(decrypted?.clears).toEqual([]);
   });
 
   it('maps every category to its human title', async () => {
@@ -185,16 +196,13 @@ describe('decryptPushBlob', () => {
     const { pushDecrypt, pushIdentity } = await loadModules();
     pushIdentity.setActivePushIdentityPublicKey(identity.publicKey);
 
-    const blob = sealPushEnvelope(
-      pushKey,
-      identity.publicKey,
-      plaintextFixture({
-        taskId: 'made-up-terminal-task',
-        sessionId: 'terminal-sess-1',
-        taskTitle: 'Fix The Flaky Test',
-        sessionKind: 'command-terminal',
-      }),
-    );
+    const plaintext = plaintextFixture({
+      taskId: 'made-up-terminal-task',
+      sessionId: 'terminal-sess-1',
+      taskTitle: 'Fix The Flaky Test',
+      sessionKind: 'command-terminal',
+    });
+    const blob = sealPushEnvelope(pushKey, identity.publicKey, plaintext);
     const decrypted = await pushDecrypt.decryptPushBlob(blob);
 
     expect(decrypted?.data).toStrictEqual({
@@ -203,6 +211,7 @@ describe('decryptPushBlob', () => {
       projectId: 'project-1',
       sessionId: 'terminal-sess-1',
       sessionKind: 'command-terminal',
+      sentAt: String(plaintext.sentAt),
     });
     // The terminal's own name leads the body, as a task's title would.
     expect(decrypted?.body).toBe('Fix The Flaky Test - Bash: npm run test');
@@ -224,11 +233,18 @@ describe('decryptPushBlob', () => {
     const { pushDecrypt, pushIdentity } = await loadModules();
     pushIdentity.setActivePushIdentityPublicKey(identity.publicKey);
 
-    const blob = sealPushEnvelope(pushKey, identity.publicKey, plaintextFixture());
+    const plaintext = plaintextFixture();
+    const blob = sealPushEnvelope(pushKey, identity.publicKey, plaintext);
     const decrypted = await pushDecrypt.decryptPushBlob(blob);
 
     expect(decrypted).not.toBeNull();
-    expect(decrypted?.data).toStrictEqual({ category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' });
+    expect(decrypted?.data).toStrictEqual({
+      category: 'input-required',
+      taskId: 'task-1',
+      projectId: 'project-1',
+      sessionId: 'sess-1',
+      sentAt: String(plaintext.sentAt),
+    });
     expect(Object.keys(decrypted?.data ?? {})).not.toContain('sessionKind');
   });
 
@@ -250,24 +266,27 @@ describe('decryptPushBlob', () => {
     const { pushDecrypt, pushIdentity } = await loadModules();
     pushIdentity.setActivePushIdentityPublicKey(identity.publicKey);
 
-    const blob = sealPushEnvelope(
-      pushKey,
-      identity.publicKey,
-      plaintextFixture({
-        category: 'workflow-complete',
-        projectId: 'home-project',
-        taskId: '',
-        sessionId: '',
-        taskTitle: 'Checkout hardening',
-        detail: 'All 6 tasks are in Done.',
-      }),
-    );
+    const plaintext = plaintextFixture({
+      category: 'workflow-complete',
+      projectId: 'home-project',
+      taskId: '',
+      sessionId: '',
+      taskTitle: 'Checkout hardening',
+      detail: 'All 6 tasks are in Done.',
+    });
+    const blob = sealPushEnvelope(pushKey, identity.publicKey, plaintext);
     const decrypted = await pushDecrypt.decryptPushBlob(blob);
 
     expect(decrypted?.title).toBe('Workflow complete');
     expect(decrypted?.body).toBe('Checkout hardening - All 6 tasks are in Done.');
     expect(decrypted?.category).toBe('workflow-complete');
-    expect(decrypted?.data).toStrictEqual({ category: 'workflow-complete', taskId: '', projectId: 'home-project', sessionId: '' });
+    expect(decrypted?.data).toStrictEqual({
+      category: 'workflow-complete',
+      taskId: '',
+      projectId: 'home-project',
+      sessionId: '',
+      sentAt: String(plaintext.sentAt),
+    });
   });
 
   /**
@@ -321,5 +340,144 @@ describe('decryptPushBlob', () => {
     const { pushDecrypt } = await loadModules();
     expect(pushDecrypt.PUSH_PLACEHOLDER_TITLE).toBe('Kangentic');
     expect(pushDecrypt.PUSH_PLACEHOLDER_BODY).toBe('Agent needs attention');
+  });
+
+  /**
+   * Piggybacked clears (protocol 0.23.0) come back parsed by the protocol's own
+   * tolerant parser: a malformed entry is dropped on its own, and never costs
+   * the notification it rides on.
+   */
+  it('returns the clears a notification carries, dropping a malformed entry on its own', async () => {
+    const pushKey = randomBytes(32);
+    const identity = generateX25519KeyPair();
+    secureStoreState.storedValues.set('push.decrypt.key', bytesToHex(pushKey));
+    const { pushDecrypt, pushIdentity } = await loadModules();
+    pushIdentity.setActivePushIdentityPublicKey(identity.publicKey);
+
+    const goodEntry = { category: 'turn-complete' as const, projectId: 'project-1', taskId: 'task-1', sessionId: 'sess-0', notifiedAt: Date.now() - 5_000 };
+    const blob = sealPushEnvelope(pushKey, identity.publicKey, {
+      ...plaintextFixture(),
+      clears: [goodEntry, { ...goodEntry, category: 'not-a-category' } as never],
+    });
+    const decrypted = await pushDecrypt.decryptPushBlob(blob);
+
+    expect(decrypted?.title).toBe('Agent needs your input');
+    expect(decrypted?.clears).toEqual([goodEntry]);
+  });
+});
+
+describe('decryptPushClear', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    secureStoreState.storedValues.clear();
+  });
+
+  const entry = { category: 'input-required' as const, projectId: 'project-1', taskId: 'task-1', sessionId: 'sess-1', notifiedAt: Date.now() - 5_000 };
+
+  it('opens a real sealed clear to its entries', async () => {
+    const pushKey = randomBytes(32);
+    const identity = generateX25519KeyPair();
+    secureStoreState.storedValues.set('push.decrypt.key', bytesToHex(pushKey));
+    const { pushDecrypt, pushIdentity } = await loadModules();
+    pushIdentity.setActivePushIdentityPublicKey(identity.publicKey);
+
+    const blob = sealPushClear(pushKey, identity.publicKey, { clears: [entry], sentAt: Date.now() });
+    expect(await pushDecrypt.decryptPushClear(blob)).toEqual([entry]);
+  });
+
+  it.each([
+    ['sealed with another push key', (pushKey: Uint8Array, recipient: Uint8Array) => sealPushClear(randomBytes(32), recipient, { clears: [entry], sentAt: Date.now() })],
+    ['sealed for another recipient', (pushKey: Uint8Array) => sealPushClear(pushKey, generateX25519KeyPair().publicKey, { clears: [entry], sentAt: Date.now() })],
+    ['stale', (pushKey: Uint8Array, recipient: Uint8Array) => sealPushClear(pushKey, recipient, { clears: [entry], sentAt: Date.now() - 25 * 60 * 60 * 1000 })],
+    ['missing its clears array', (pushKey: Uint8Array, recipient: Uint8Array) => sealPushClear(pushKey, recipient, { clears: 'none' as never, sentAt: Date.now() })],
+    ['not a blob at all', () => 'not-a-blob'],
+  ])('returns null for a clear %s', async (_label, buildBlob) => {
+    const pushKey = randomBytes(32);
+    const identity = generateX25519KeyPair();
+    secureStoreState.storedValues.set('push.decrypt.key', bytesToHex(pushKey));
+    const { pushDecrypt, pushIdentity } = await loadModules();
+    pushIdentity.setActivePushIdentityPublicKey(identity.publicKey);
+
+    expect(await pushDecrypt.decryptPushClear(buildBlob(pushKey, identity.publicKey))).toBeNull();
+  });
+
+  it('returns null when no push key is stored', async () => {
+    const identity = generateX25519KeyPair();
+    const { pushDecrypt, pushIdentity } = await loadModules();
+    pushIdentity.setActivePushIdentityPublicKey(identity.publicKey);
+
+    expect(await pushDecrypt.decryptPushClear(sealPushClear(randomBytes(32), identity.publicKey, { clears: [entry], sentAt: Date.now() }))).toBeNull();
+  });
+});
+
+/**
+ * A clear is recognised by its KEY, whatever the value, in every shape a push
+ * reaches JS in: top level (an FCM data message), the `dataString` copy and an
+ * FCM `body` string (Android), and a `body` that is still a dictionary (the iOS
+ * background task, which gets the raw `userInfo`).
+ */
+describe('pushPayloadCarriesClear and extractClearFromTaskData', () => {
+  it.each([
+    ['at top level', { clear: 'sealed' }, true, 'sealed'],
+    ['at top level with a non-string value', { clear: 42 }, true, null],
+    ['inside dataString', { dataString: JSON.stringify({ clear: 'sealed' }) }, true, 'sealed'],
+    ['inside a body string', { body: JSON.stringify({ clear: 'sealed' }) }, true, 'sealed'],
+    ['inside a body dictionary', { body: { clear: 'sealed' } }, true, 'sealed'],
+    ['nowhere: a notification envelope', { blob: 'sealed' }, false, null],
+    ['nowhere: malformed dataString', { dataString: 'not json' }, false, null],
+    ['nowhere: not a record', 'a string', false, null],
+    ['nowhere: null', null, false, null],
+  ])('%s', async (_label, payload, expectedCarries, expectedBlob) => {
+    const { pushDecrypt } = await loadModules();
+    expect(pushDecrypt.pushPayloadCarriesClear(payload)).toBe(expectedCarries);
+    expect(pushDecrypt.extractClearFromTaskData(payload)).toBe(expectedBlob);
+  });
+});
+
+/**
+ * The AAD a background launch decrypts with. On iOS that launch is usually
+ * with the phone LOCKED, where the identity secret (`WHEN_UNLOCKED`) is
+ * unreadable, so the shared `push.identity.pk` copy (`AFTER_FIRST_UNLOCK`) is
+ * read first. Off iOS (no shared group) it is never read at all.
+ *
+ * Mutation that reddens the first case: drop the shared-copy read from
+ * getPushIdentityPublicKey. Seen red (null: the persisted secret is another
+ * identity's, so the AAD no longer matches).
+ */
+describe('getPushIdentityPublicKey with no active connection', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    secureStoreState.storedValues.clear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('reads the shared copy the extension uses before the identity secret, where there is a shared group', async () => {
+    vi.stubEnv('EXPO_PUBLIC_KANGENTIC_IOS_KEYCHAIN_GROUP', 'TEAMID.com.kangentic.mobile.shared');
+    const pushKey = randomBytes(32);
+    const registered = generateX25519KeyPair();
+    const unrelatedSecret = generateX25519KeyPair();
+    secureStoreState.storedValues.set('push.decrypt.key', bytesToHex(pushKey));
+    secureStoreState.storedValues.set('push.identity.pk', bytesToHex(registered.publicKey));
+    secureStoreState.storedValues.set('device.identity.sk', bytesToHex(unrelatedSecret.secretKey));
+    const { pushDecrypt } = await loadModules();
+
+    const blob = sealPushEnvelope(pushKey, registered.publicKey, plaintextFixture());
+    expect((await pushDecrypt.decryptPushBlob(blob))?.data.sessionId).toBe('sess-1');
+  });
+
+  it('never reads that copy without a shared group (every Android build)', async () => {
+    const pushKey = randomBytes(32);
+    const registered = generateX25519KeyPair();
+    const deviceIdentity = generateX25519KeyPair();
+    secureStoreState.storedValues.set('push.decrypt.key', bytesToHex(pushKey));
+    secureStoreState.storedValues.set('push.identity.pk', bytesToHex(registered.publicKey));
+    secureStoreState.storedValues.set('device.identity.sk', bytesToHex(deviceIdentity.secretKey));
+    const { pushDecrypt } = await loadModules();
+
+    expect(await pushDecrypt.decryptPushBlob(sealPushEnvelope(pushKey, registered.publicKey, plaintextFixture()))).toBeNull();
+    expect((await pushDecrypt.decryptPushBlob(sealPushEnvelope(pushKey, deviceIdentity.publicKey, plaintextFixture())))?.data.sessionId).toBe('sess-1');
   });
 });

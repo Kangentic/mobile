@@ -2,10 +2,20 @@
  * The killed-app data-message path: blob extraction from the shapes
  * expo-notifications delivers, and the hard guarantee that a failed
  * decrypt displays the generic placeholder - never ciphertext
- * (e2e-notification-privacy.md).
+ * (e2e-notification-privacy.md). And its one exception: a sealed clear
+ * (protocol 0.23.0) displays NOTHING, on every path.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TransportState } from '@kangentic/protocol';
+import {
+  bytesToHex,
+  generateX25519KeyPair,
+  randomBytes,
+  sealPushClear,
+  sealPushEnvelope,
+  type PushClearEntry,
+  type PushEnvelopePlaintext,
+  type TransportState,
+} from '@kangentic/protocol';
 import { brandTokens } from '@/components/theme/tokens';
 import { flushMicrotasks } from '../helpers/async';
 
@@ -15,7 +25,12 @@ const taskManagerState = vi.hoisted(() => ({
   registerTaskAsync: vi.fn(async () => null),
   displayNotification: vi.fn(async (_notification: unknown) => 'notification-id'),
   createChannels: vi.fn(async () => undefined),
+  getDisplayedNotifications: vi.fn(async (): Promise<unknown[]> => []),
+  cancelNotification: vi.fn(async (_notificationId: string) => undefined),
+  getPresentedNotificationsAsync: vi.fn(async (): Promise<unknown[]> => []),
+  dismissNotificationAsync: vi.fn(async (_identifier: string) => undefined),
 }));
+const platformMock = vi.hoisted(() => ({ OS: 'android' as 'android' | 'ios' }));
 
 vi.mock('expo-secure-store', () => ({
   getItemAsync: vi.fn(async (key: string) => secureStoreState.storedValues.get(key) ?? null),
@@ -43,17 +58,23 @@ vi.mock('react-native', () => ({
     get currentState() {
       return appStateMock.currentState;
     },
+    addEventListener: () => ({ remove: () => undefined }),
   },
+  Platform: platformMock,
 }));
 
 vi.mock('expo-notifications', () => ({
   registerTaskAsync: taskManagerState.registerTaskAsync,
+  getPresentedNotificationsAsync: taskManagerState.getPresentedNotificationsAsync,
+  dismissNotificationAsync: taskManagerState.dismissNotificationAsync,
 }));
 
 vi.mock('@notifee/react-native', () => ({
   default: {
     displayNotification: taskManagerState.displayNotification,
     createChannels: taskManagerState.createChannels,
+    getDisplayedNotifications: taskManagerState.getDisplayedNotifications,
+    cancelNotification: taskManagerState.cancelNotification,
   },
   AndroidImportance: { NONE: 0, MIN: 1, LOW: 2, DEFAULT: 3, HIGH: 4 },
   AuthorizationStatus: { NOT_DETERMINED: -1, DENIED: 0, AUTHORIZED: 1, PROVISIONAL: 2 },
@@ -102,11 +123,18 @@ describe('backgroundPushTask', () => {
   beforeEach(() => {
     vi.resetModules();
     appStateMock.currentState = 'background';
+    platformMock.OS = 'android';
     secureStoreState.storedValues.clear();
     taskManagerState.defineTask.mockClear();
     taskManagerState.registerTaskAsync.mockClear();
     taskManagerState.displayNotification.mockClear();
     taskManagerState.createChannels.mockClear();
+    taskManagerState.getDisplayedNotifications.mockReset();
+    taskManagerState.getDisplayedNotifications.mockResolvedValue([]);
+    taskManagerState.cancelNotification.mockClear();
+    taskManagerState.getPresentedNotificationsAsync.mockReset();
+    taskManagerState.getPresentedNotificationsAsync.mockResolvedValue([]);
+    taskManagerState.dismissNotificationAsync.mockClear();
     decryptPushBlobMock.mockReset();
     decryptPushBlobMock.mockImplementation(async (blob) => {
       const { realDecryptPushBlob } = pushDecryptState;
@@ -728,5 +756,287 @@ describe('backgroundPushTask', () => {
 
     expect(taskManagerState.displayNotification).toHaveBeenCalledTimes(1);
     getStateSpy.mockRestore();
+  });
+
+  /**
+   * Sealed clears (protocol 0.23.0), with REAL sealed blobs. The one message
+   * this task must never display: before this branch existed, a `data.clear`
+   * message had no `blob`, so it fell through to the placeholder and a clear
+   * became a new "Agent needs attention" notification.
+   */
+  describe('sealed clears', () => {
+    interface PushKeys {
+      pushKey: Uint8Array;
+      identityPublicKey: Uint8Array;
+    }
+
+    /**
+     * ONE real push key and device identity for the whole block, stored again
+     * before each test. Not one per test: the mocked pushDecrypt is built with
+     * vi.importActual, and the key caches in the modules it pulls in
+     * (pushKeys.ts' cachedPushKey, deviceIdentity.ts' cachedIdentity) survived
+     * vi.resetModules, so a second test's fresh keys were never read and its
+     * real decrypt failed. The identity rides the persisted-secret fallback
+     * rather than the in-memory active key for the same reason.
+     */
+    const blockIdentity = generateX25519KeyPair();
+    const blockKeys: PushKeys = { pushKey: randomBytes(32), identityPublicKey: blockIdentity.publicKey };
+
+    function armPushKeys(): PushKeys {
+      secureStoreState.storedValues.set('push.decrypt.key', bytesToHex(blockKeys.pushKey));
+      secureStoreState.storedValues.set('device.identity.sk', bytesToHex(blockIdentity.secretKey));
+      return blockKeys;
+    }
+
+    function clearEntry(overrides: Partial<PushClearEntry> = {}): PushClearEntry {
+      return { category: 'input-required', projectId: 'project-1', taskId: 'task-1', sessionId: 'sess-1', notifiedAt: Date.now() - 30_000, ...overrides };
+    }
+
+    function envelope(overrides: Partial<PushEnvelopePlaintext> = {}): PushEnvelopePlaintext {
+      return {
+        category: 'input-required',
+        projectId: 'project-1',
+        taskId: 'task-1',
+        sessionId: 'sess-1',
+        taskTitle: 'Ship the release',
+        detail: 'Approve the migration?',
+        sentAt: Date.now() - 60_000,
+        ...overrides,
+      };
+    }
+
+    /** An alert notifee reports on screen, as either display path posted it; `alertSentAt` null is a local alert. */
+    function displayedAlert(sessionId: string, alertSentAt: number | null): { id: string; notification: { id: string; data: Record<string, string> } } {
+      const id = `kangentic:input-required:session:${sessionId}`;
+      return {
+        id,
+        notification: {
+          id,
+          data: {
+            category: 'input-required',
+            taskId: 'task-1',
+            projectId: 'project-1',
+            sessionId,
+            postedAt: String(Date.now()),
+            ...(alertSentAt === null ? {} : { sentAt: String(alertSentAt) }),
+          },
+        },
+      };
+    }
+
+    async function runTask(payload: unknown): Promise<void> {
+      const { registerBackgroundPushTask } = await loadModule();
+      registerBackgroundPushTask();
+      const executor = taskManagerState.defineTask.mock.calls[0][1] as TaskExecutor;
+      await executor({ data: { notification: null, data: payload }, error: null, executionInfo: { taskName: 'kangentic-background-push' } });
+    }
+
+    /**
+     * Mutation that reddens this: delete the `pushPayloadCarriesClear` branch
+     * from the task. Seen red: nothing was cancelled.
+     */
+    it('removes the alert a standalone clear covers and displays nothing', async () => {
+      const keys = armPushKeys();
+      const alertSentAt = Date.now() - 60_000;
+      taskManagerState.getDisplayedNotifications.mockResolvedValue([displayedAlert('sess-1', alertSentAt), displayedAlert('sess-2', alertSentAt)]);
+
+      await runTask({ clear: sealPushClear(keys.pushKey, keys.identityPublicKey, { clears: [clearEntry({ notifiedAt: alertSentAt })], sentAt: Date.now() }) });
+
+      expect(taskManagerState.cancelNotification.mock.calls).toEqual([['kangentic:input-required:session:sess-1']]);
+      expect(taskManagerState.displayNotification).not.toHaveBeenCalled();
+      expect(taskManagerState.createChannels).not.toHaveBeenCalled();
+    });
+
+    it('applies a clear in the dataString shape expo-notifications wraps a message in', async () => {
+      const keys = armPushKeys();
+      const alertSentAt = Date.now() - 60_000;
+      taskManagerState.getDisplayedNotifications.mockResolvedValue([displayedAlert('sess-1', alertSentAt)]);
+      const blob = sealPushClear(keys.pushKey, keys.identityPublicKey, { clears: [clearEntry({ notifiedAt: alertSentAt })], sentAt: Date.now() });
+
+      await runTask({ dataString: JSON.stringify({ clear: blob }) });
+
+      expect(taskManagerState.cancelNotification.mock.calls).toEqual([['kangentic:input-required:session:sess-1']]);
+      expect(taskManagerState.displayNotification).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Every failure on the clear path is SILENT, never the placeholder: a clear
+     * is not a reason to notify. Includes a value that is not even a string,
+     * which is still a clear because the key, not the value, marks one.
+     *
+     * Mutation that reddens these: test `extractClearFromTaskData(...) !== null`
+     * instead of `pushPayloadCarriesClear(...)` at the branch. Seen red on the
+     * non-string row (the placeholder was displayed).
+     */
+    it.each([
+      ['a value that is not a sealed clear', (_keys: PushKeys): unknown => ({ clear: 'not-a-sealed-clear' })],
+      ['a value that is not a string', (_keys: PushKeys): unknown => ({ clear: 12345 })],
+      ['an unopenable clear nested in dataString', (_keys: PushKeys): unknown => ({ dataString: JSON.stringify({ clear: 'garbage' }) })],
+      [
+        'a clear sealed with another push key',
+        (keys: PushKeys): unknown => ({ clear: sealPushClear(randomBytes(32), keys.identityPublicKey, { clears: [clearEntry()], sentAt: Date.now() }) }),
+      ],
+      [
+        'a stale clear',
+        (keys: PushKeys): unknown => ({
+          clear: sealPushClear(keys.pushKey, keys.identityPublicKey, { clears: [clearEntry()], sentAt: Date.now() - 25 * 60 * 60 * 1000 }),
+        }),
+      ],
+    ])('displays and cancels nothing for %s', async (_label, buildPayload) => {
+      const keys = armPushKeys();
+      taskManagerState.getDisplayedNotifications.mockResolvedValue([displayedAlert('sess-1', Date.now() - 60_000)]);
+
+      await runTask(buildPayload(keys));
+
+      expect(taskManagerState.displayNotification).not.toHaveBeenCalled();
+      expect(taskManagerState.cancelNotification).not.toHaveBeenCalled();
+    });
+
+    it('displays nothing for a clear sealed for another device entirely', async () => {
+      const otherKeys = { pushKey: randomBytes(32), identityPublicKey: generateX25519KeyPair().publicKey };
+      await runTask({ clear: sealPushClear(otherKeys.pushKey, otherKeys.identityPublicKey, { clears: [clearEntry()], sentAt: Date.now() }) });
+
+      expect(taskManagerState.displayNotification).not.toHaveBeenCalled();
+      expect(taskManagerState.cancelNotification).not.toHaveBeenCalled();
+    });
+
+    it('applies a clear even while the app is in front and connected', async () => {
+      appStateMock.currentState = 'active';
+      await setChannelState({ established: true, transportState: 'connected' });
+      const keys = armPushKeys();
+      const alertSentAt = Date.now() - 60_000;
+      taskManagerState.getDisplayedNotifications.mockResolvedValue([displayedAlert('sess-1', alertSentAt)]);
+
+      await runTask({ clear: sealPushClear(keys.pushKey, keys.identityPublicKey, { clears: [clearEntry({ notifiedAt: alertSentAt })], sentAt: Date.now() }) });
+
+      expect(taskManagerState.cancelNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps an alert sent after the clear was, and a local alert that carries no sentAt', async () => {
+      const keys = armPushKeys();
+      const notifiedAt = Date.now() - 60_000;
+      taskManagerState.getDisplayedNotifications.mockResolvedValue([displayedAlert('sess-1', notifiedAt + 1), displayedAlert('sess-2', null)]);
+
+      await runTask({
+        clear: sealPushClear(keys.pushKey, keys.identityPublicKey, {
+          clears: [clearEntry({ notifiedAt }), clearEntry({ sessionId: 'sess-2', notifiedAt: Date.now() })],
+          sentAt: Date.now(),
+        }),
+      });
+
+      expect(taskManagerState.cancelNotification).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Mutations that redden this, each seen red: apply the envelope's clears
+     * AFTER displayNotification (the call-order assertion); drop them entirely
+     * (no cancel); drop `sentAt` from decryptPushBlob's `data` (the stored
+     * sentAt).
+     */
+    it('cancels what a piggybacked clear covers BEFORE displaying its envelope, which stores its own sentAt', async () => {
+      const keys = armPushKeys();
+      const olderSentAt = Date.now() - 120_000;
+      taskManagerState.getDisplayedNotifications.mockResolvedValue([displayedAlert('sess-old', olderSentAt)]);
+      const incoming = envelope({ sessionId: 'sess-new', sentAt: Date.now() - 1_000, clears: [clearEntry({ sessionId: 'sess-old', notifiedAt: olderSentAt })] });
+
+      await runTask({ blob: sealPushEnvelope(keys.pushKey, keys.identityPublicKey, incoming) });
+
+      expect(taskManagerState.cancelNotification.mock.calls).toEqual([['kangentic:input-required:session:sess-old']]);
+      expect(taskManagerState.displayNotification).toHaveBeenCalledTimes(1);
+      expect(taskManagerState.cancelNotification.mock.invocationCallOrder[0]).toBeLessThan(
+        taskManagerState.displayNotification.mock.invocationCallOrder[0],
+      );
+      const notification = taskManagerState.displayNotification.mock.calls[0][0] as { id?: string; data?: Record<string, string> };
+      expect(notification.id).toBe('kangentic:input-required:session:sess-new');
+      expect(notification.data?.sentAt).toBe(String(incoming.sentAt));
+    });
+
+    /**
+     * An Android piggyback is consumed once Expo accepts the push, so a phone
+     * that drops it while the user is looking loses the only copy.
+     */
+    it('applies piggybacked clears while the user is watching, and still suppresses the display', async () => {
+      appStateMock.currentState = 'active';
+      await setChannelState({ established: true, transportState: 'connected' });
+      const keys = armPushKeys();
+      const olderSentAt = Date.now() - 120_000;
+      taskManagerState.getDisplayedNotifications.mockResolvedValue([displayedAlert('sess-old', olderSentAt)]);
+      const incoming = envelope({ sessionId: 'sess-new', clears: [clearEntry({ sessionId: 'sess-old', notifiedAt: olderSentAt })] });
+
+      await runTask({ blob: sealPushEnvelope(keys.pushKey, keys.identityPublicKey, incoming) });
+
+      expect(taskManagerState.cancelNotification).toHaveBeenCalledTimes(1);
+      expect(taskManagerState.displayNotification).not.toHaveBeenCalled();
+    });
+
+    describe('on iOS', () => {
+      beforeEach(() => {
+        platformMock.OS = 'ios';
+      });
+
+      /**
+       * expo-notifications runs this task for a visible push received in the
+       * foreground too. iOS already draws that alert, so a notifee post here
+       * would be a duplicate on top of it.
+       *
+       * Mutation that reddens this: delete the `Platform.OS !== 'android'`
+       * return. Seen red (the rich notification was posted through notifee).
+       */
+      it('posts nothing through notifee for a visible push', async () => {
+        const keys = armPushKeys();
+        const blob = sealPushEnvelope(keys.pushKey, keys.identityPublicKey, envelope());
+
+        await runTask({ dataString: JSON.stringify({ blob }), body: { blob } });
+
+        expect(taskManagerState.displayNotification).not.toHaveBeenCalled();
+        expect(taskManagerState.createChannels).not.toHaveBeenCalled();
+        expect(decryptPushBlobMock).not.toHaveBeenCalled();
+      });
+
+      it('dismisses the presented alert a standalone clear covers, through expo-notifications', async () => {
+        const keys = armPushKeys();
+        const coveredSentAt = Date.now() - 120_000;
+        const presented = (identifier: string, sessionId: string, alertSentAt: number) => ({
+          date: alertSentAt / 1000,
+          request: {
+            identifier,
+            content: { data: { blob: sealPushEnvelope(keys.pushKey, keys.identityPublicKey, envelope({ sessionId, sentAt: alertSentAt })) } },
+          },
+        });
+        taskManagerState.getPresentedNotificationsAsync.mockResolvedValue([
+          presented('ios-covered', 'sess-1', coveredSentAt),
+          presented('ios-other-session', 'sess-2', coveredSentAt),
+        ]);
+        const blob = sealPushClear(keys.pushKey, keys.identityPublicKey, { clears: [clearEntry({ notifiedAt: coveredSentAt })], sentAt: Date.now() });
+
+        // The shape the iOS task receives: Expo's `body` dictionary still nested, plus its dataString copy.
+        await runTask({ dataString: JSON.stringify({ clear: blob }), body: { clear: blob } });
+
+        expect(taskManagerState.dismissNotificationAsync.mock.calls).toEqual([['ios-covered']]);
+        expect(taskManagerState.displayNotification).not.toHaveBeenCalled();
+        expect(taskManagerState.cancelNotification).not.toHaveBeenCalled();
+      });
+
+      /**
+       * The Settings push line reads this status to say whether a push can be
+       * SEEN, which on iOS this task never decides.
+       *
+       * Mutation that reddens this: record the status on every platform. Seen
+       * red ('registered' where 'pending' was expected).
+       */
+      it('leaves the Settings task status pending whether registration resolves or rejects', async () => {
+        const { registerBackgroundPushTask, getBackgroundPushTaskStatus } = await loadModule();
+        registerBackgroundPushTask();
+        await flushMicrotasks();
+        expect(getBackgroundPushTaskStatus()).toBe('pending');
+
+        vi.resetModules();
+        taskManagerState.registerTaskAsync.mockRejectedValueOnce(new Error('no remote-notification background mode'));
+        const reloaded = await loadModule();
+        reloaded.registerBackgroundPushTask();
+        await flushMicrotasks();
+        expect(reloaded.getBackgroundPushTaskStatus()).toBe('pending');
+      });
+    });
   });
 });

@@ -1330,9 +1330,9 @@ placeholder, on the same failure path as a tampered or wrong-key blob.
 
 An alert used to live until the user swiped it: every display took a random id, nothing replaced
 and nothing cancelled, so coming back to the phone meant a stack of alerts for prompts already
-answered and tasks already closed. This is the phone-only layer (no protocol or desktop change);
-sealed clears from the desktop, and all iOS Notification Service Extension work on lifetime, are a
-later task.
+answered and tasks already closed. Two layers fix it. The phone-only layer below (stable ids, the
+reconciler, clear on open) needs the app process alive. The desktop's sealed clears (protocol
+0.23.0, see Sealed clears at the end of this section) reach a phone whose app is NOT running.
 
 **Stable ids (Android).** Every task alert, local or decrypted, posts under
 `notificationIdForRouting` (`notificationRouting.ts`): `kangentic:<category>:session:<id>`,
@@ -1402,6 +1402,39 @@ native module): a task's alerts, a terminal's (by session), a project's `workflo
 matching alert is dismissed on every pass while the app is in front, so opening the screen clears
 it and so does returning to the app on a screen already open. Not while backgrounded: a screen
 stays mounted then, and the keepalive's alert for that very task must not be eaten on posting.
+
+**Sealed clears (protocol 0.23.0).** Only the desktop sees a notified condition resolve while the
+app is not running, so it tells the phone. The phone opts in with `register-push`'s
+`acceptsClears: true` (`pushRegistration.ts`); the desktop skips a device that is connected at that
+moment, since the reconciler above already handles it. A clear names alerts by category, project,
+task and session id plus a `notifiedAt`, and arrives two ways:
+
+- **Standalone**, under `data.clear` rather than `data.blob`: data-only at normal priority on
+  Android, and on iOS a `content-available` push with no alert, at most one per device per 20
+  minutes, which stays pending on the desktop until a visible push carries it or 24 h pass.
+- **Piggybacked**, as `clears` inside a visible push's sealed envelope, applied BEFORE that push is
+  presented.
+
+The rule, in one pure function both platforms share (`clearEntryCovers` in
+`notificationRouting.ts`, mirrored by `NotificationPruning.clearCovers` in the extension and held
+to one fixture table by `nseCrypto.test.ts` and the `NSE crypto (swiftc)` job): remove an alert only
+if its category and all three ids match AND its own envelope `sentAt` is at or before
+`notifiedAt`. The bound makes delivery order irrelevant: a clear that Doze held back can land after
+a fresh push for the same session and category, and must not remove it. So each decrypted Android
+alert stores its envelope `sentAt` (the desktop's clock) in `data` beside `postedAt` (the phone's),
+and an alert with no `sentAt` (a local alert, the placeholder, one posted before this) is never
+removed by a clear; the reconciler judges it on the next open. `sessionKind` is not compared.
+
+| Where | What it does with a clear |
+|-------|---------------------------|
+| Android receive task (`backgroundPushTask.ts`) | Recognises a clear by its KEY before anything else, before the watching gate, opens it (`decryptPushClear`), cancels what it covers via `dismissNotificationsClearedBy` (`notificationReconciler.ts`, a fresh native read, never a blind cancel by stable id), and DISPLAYS NOTHING. Any failure does nothing, not the placeholder. A notification's piggybacked `clears` are applied before it displays, even while the user is watching, because an Android piggyback is consumed once Expo accepts the push |
+| iOS receive task (the same task, via the `remote-notification` background mode) | Applies a STANDALONE clear only (`getPresentedNotificationsAsync`, decrypt, `dismissNotificationAsync`) and returns before anything that could display, since expo-notifications also runs it for a visible push in the foreground. Best-effort by Apple's terms: about two or three background pushes an hour, never after a force-quit. Its registration status is not tracked for Settings |
+| iOS Notification Service Extension (`targets/nse/`) | Applies the `clears` a visible push carries, AND removes an older delivered alert the push replaces (the same identity as the Android stable id, sealed at or before it), so iOS keeps one alert per session and category as Android does. It decrypts each delivered alert's blob, calls `removeDeliveredNotifications`, confirms the removal by re-reading for at most 1.5 s, then delivers; `contentHandler` is taken under a lock so the expiry path still delivers exactly once. It also sets an opaque keyed `threadIdentifier` per task so iOS stacks a task's alerts. UNPROVEN ON HARDWARE until a TestFlight run: Apple documents neither removal from an extension nor its timing, and if it does not work the pruning function is deleted and the rest stands |
+
+The background mode means iOS can launch the whole app in the background, often locked, which
+it never did before. `app/_layout.tsx` therefore defers the settings hydrate (and the splash hide)
+to the first `'active'` in that case (`src/lib/whenFirstActive.ts`), and the receive task reads its
+AAD from the shared `push.identity.pk` copy before the identity secret; see `docs/security.md`.
 
 ## Later phases (future, not built yet)
 

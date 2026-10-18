@@ -9,6 +9,7 @@ import { ThemeProvider, useTheme } from '@/components';
 import { startConnectionLifecycle } from '@/connection/connectionManager';
 import { traceConnection } from '@/devsupport/connectionTrace';
 import { initializeNotifications } from '@/notifications';
+import { runWhenFirstActive } from '@/lib/whenFirstActive';
 import { PendingNavigationRunner } from '@/navigation/PendingNavigationRunner';
 import { AppErrorBoundaryScreen } from '@/screens/AppErrorBoundaryScreen';
 import { useSettingsStore } from '@/state/settingsStore';
@@ -58,13 +59,18 @@ export default function RootLayout(): React.JSX.Element {
     // scope, outside React, present in headless launches too).
     initializeNotifications();
     startConnectionLifecycle();
-    void useSettingsStore
-      .getState()
-      .hydrate()
-      .finally(() => {
-        traceConnection('settings-hydrated');
-        void SplashScreen.hideAsync().catch(() => undefined);
-      });
+    // Deferred in an iOS background launch (a sealed clear can launch the app
+    // with the phone locked), where the settings' Keychain reads would fail
+    // and hydrate to defaults. See runWhenFirstActive.
+    return runWhenFirstActive(() => {
+      void useSettingsStore
+        .getState()
+        .hydrate()
+        .finally(() => {
+          traceConnection('settings-hydrated');
+          void SplashScreen.hideAsync().catch(() => undefined);
+        });
+    });
   }, []);
 
   return (
