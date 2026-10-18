@@ -37,6 +37,12 @@ function isUnknownRecord(value: unknown): value is Record<string, unknown> {
  * platforms need it now: the iOS tap router reads the same blob out of an
  * expo-notifications response. This module is the notifee-free one, so it is
  * the only place both callers can import from.
+ *
+ * No branch for a `body` that is already a record, unlike findClearField below:
+ * every caller gets data expo-notifications has already unwrapped (the iOS
+ * background task, which does not, returns before it reaches the blob). Its
+ * precedence is pinned against the extension's extractBlob by
+ * nsePayloadShapeParity.test.ts, which is why the two lookups are not merged.
  */
 export function extractBlobFromTaskData(data: unknown): string | null {
   if (!isUnknownRecord(data)) return null;
@@ -58,7 +64,8 @@ export function extractBlobFromTaskData(data: unknown): string | null {
  * a record: that is the shape the iOS background task receives, since
  * expo-notifications hands it the raw `userInfo` with Expo's `body` dictionary
  * still nested (BackgroundEventTransformer.swift) alongside the `dataString`
- * copy of it.
+ * copy of it. A superset of extractBlobFromTaskData's lookup on purpose: a new
+ * delivery shape belongs in both.
  */
 function findClearField(data: unknown): { found: boolean; value: unknown } {
   if (!isUnknownRecord(data)) return { found: false, value: undefined };

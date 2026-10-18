@@ -83,6 +83,14 @@ vi.mock('@notifee/react-native', () => ({
 const decryptPushBlobMock = vi.hoisted(() => vi.fn<(blob: string) => Promise<unknown>>());
 
 /**
+ * The two fields every decrypted notification carries since protocol 0.23.0,
+ * spread into each hand-written decrypt result below. Without them the task's
+ * `decrypted.clears.length` throws, and the rich post is reached only because
+ * the catch around the piggybacked clears swallows that TypeError.
+ */
+const NO_PIGGYBACKED_CLEARS = { sentAt: 1_700_000_000_000, clears: [] };
+
+/**
  * Captured so the mock can DELEGATE to the real decrypt by default. Only the
  * test that needs a successful decrypt overrides it (with mockResolvedValueOnce,
  * which takes precedence). Without this default, a bare vi.fn() returns
@@ -192,6 +200,7 @@ describe('backgroundPushTask', () => {
       body: 'Ship the release',
       category: 'input-required',
       data: { taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' },
+      ...NO_PIGGYBACKED_CLEARS,
     });
     const { registerBackgroundPushTask } = await loadModule();
     registerBackgroundPushTask();
@@ -228,6 +237,7 @@ describe('backgroundPushTask', () => {
       body: 'Ship the release',
       category: 'turn-complete',
       data: { category: 'turn-complete', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' },
+      ...NO_PIGGYBACKED_CLEARS,
     });
     const { registerBackgroundPushTask } = await loadModule();
     const { subscribeToDisplayedNotifications } = await import('@/notifications/notificationSignals');
@@ -349,6 +359,7 @@ describe('backgroundPushTask', () => {
       body: 'Ship the release',
       category: 'input-required',
       data,
+      ...NO_PIGGYBACKED_CLEARS,
     });
     taskManagerState.displayNotification.mockResolvedValueOnce('rich-platform-id');
     const { registerBackgroundPushTask } = await loadModule();
@@ -396,6 +407,7 @@ describe('backgroundPushTask', () => {
       body: 'Fix The Flaky Test',
       category: 'input-required',
       data: { category: 'input-required', taskId: '', projectId: 'project-1', sessionId: 'terminal-sess-1', sessionKind: 'command-terminal' },
+      ...NO_PIGGYBACKED_CLEARS,
     });
     const { registerBackgroundPushTask } = await loadModule();
     const { subscribeToDisplayedNotifications } = await import('@/notifications/notificationSignals');
@@ -442,6 +454,7 @@ describe('backgroundPushTask', () => {
       body: 'Ship the release',
       category: 'input-required',
       data: { taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' },
+      ...NO_PIGGYBACKED_CLEARS,
     });
     // A blocked or missing category channel fails the rich post while the plain
     // placeholder on needs-attention still lands.
@@ -967,6 +980,53 @@ describe('backgroundPushTask', () => {
 
       expect(taskManagerState.cancelNotification).toHaveBeenCalledTimes(1);
       expect(taskManagerState.displayNotification).not.toHaveBeenCalled();
+    });
+
+    /**
+     * "A failure there costs only the clearing, never the notification"
+     * (e2e-notification-privacy.md). The real dismissNotificationsClearedBy
+     * swallows its own errors, so only a reconciler whose function REJECTS can
+     * reach the task's outer catch; this one is replaced for this test alone
+     * (doMock, unmocked in the finally, because vi.resetModules clears the module
+     * cache but not the mock registry).
+     *
+     * The call assertion keeps this from passing vacuously: without it, an
+     * envelope whose clears were dropped on the way in would also display.
+     * The stable id and the exact rich title and body prove the DECRYPTED post
+     * went out, not the placeholder, which carries none of them.
+     *
+     * Mutation that reddens this: leave the piggybacked
+     * `await dismissNotificationsClearedBy(...)` bare, with no try/catch around
+     * it. Seen red: the task promise rejected with the clear failure instead of
+     * resolving, so nothing was displayed. (Keep `decrypted.clears` read-safe
+     * when mutating: six older tests mock a decrypt result with no `clears`, and
+     * only that same try/catch swallows the TypeError, so removing it whole
+     * reddens them too.)
+     */
+    it('still displays the rich notification when applying its piggybacked clears rejects', async () => {
+      const keys = armPushKeys();
+      const coveredClear = clearEntry({ sessionId: 'sess-old', notifiedAt: Date.now() - 120_000 });
+      const incoming = envelope({ sessionId: 'sess-new', clears: [coveredClear] });
+      const failingDismiss = vi.fn<(entries: readonly PushClearEntry[]) => Promise<void>>();
+      failingDismiss.mockRejectedValue(new Error('piggybacked clear application failed'));
+      vi.doMock('@/notifications/notificationReconciler', async () => {
+        const actual = await vi.importActual<typeof import('@/notifications/notificationReconciler')>('@/notifications/notificationReconciler');
+        return { ...actual, dismissNotificationsClearedBy: failingDismiss };
+      });
+
+      try {
+        await expect(runTask({ blob: sealPushEnvelope(keys.pushKey, keys.identityPublicKey, incoming) })).resolves.toBeUndefined();
+
+        expect(failingDismiss).toHaveBeenCalledTimes(1);
+        expect(failingDismiss.mock.calls[0][0]).toEqual([coveredClear]);
+        expect(taskManagerState.displayNotification).toHaveBeenCalledTimes(1);
+        const notification = taskManagerState.displayNotification.mock.calls[0][0] as { id?: string; title?: string; body?: string };
+        expect(notification.id).toBe('kangentic:input-required:session:sess-new');
+        expect(notification.title).toBe('Agent needs your input');
+        expect(notification.body).toBe('Ship the release - Approve the migration?');
+      } finally {
+        vi.doUnmock('@/notifications/notificationReconciler');
+      }
     });
 
     describe('on iOS', () => {

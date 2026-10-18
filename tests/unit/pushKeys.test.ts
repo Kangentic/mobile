@@ -76,6 +76,14 @@ function sharedValue(key: string): string | undefined {
   );
 }
 
+/** Seeds the shared-group copy of the identity public key the way a registration would have left it. */
+function storeSharedValue(key: string, value: string): void {
+  secureStoreState.storedValues.set(
+    secureStoreState.locationOf(key, { keychainService: SHARED_SERVICE, accessGroup: SHARED_ACCESS_GROUP }),
+    value,
+  );
+}
+
 function configureSharedKeychain(): void {
   process.env.EXPO_PUBLIC_KANGENTIC_IOS_KEYCHAIN_GROUP = SHARED_ACCESS_GROUP;
 }
@@ -562,6 +570,209 @@ describe('pushKeys - shared Keychain migration for the iOS NSE', () => {
     expect(sharedValue('push.decrypt.key')).toBeUndefined();
     expect(legacyValue('push.decrypt.key')).toBeUndefined();
     expect(sharedValue('push.identity.pk')).toBeUndefined();
+  });
+});
+
+/**
+ * The APP's own read of the shared identity public key copy, and the cache that
+ * keeps a pass decrypting many presented alerts from re-reading the Keychain once
+ * per alert. Only a KEY is ever cached, so a null (nothing stored, wrong length,
+ * an unpair mid-read) or a throw (phone locked) is retried by the next call.
+ *
+ * The read count for `push.identity.pk` is the load-bearing assertion in the
+ * cache cases: the returned bytes alone come out right even with the early cache
+ * return deleted, because the recheck after the await serves the same value.
+ */
+describe('pushKeys - shared identity public key read and cache', () => {
+  const firstKey = new Uint8Array(32).fill(0x21);
+  const secondKey = new Uint8Array(32).fill(0x42);
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    secureStoreState.storedValues.clear();
+    secureStoreState.swallowWrites = false;
+    delete process.env.EXPO_PUBLIC_KANGENTIC_NSE_PROBE;
+    configureSharedKeychain();
+  });
+
+  afterEach(() => {
+    delete process.env.EXPO_PUBLIC_KANGENTIC_IOS_KEYCHAIN_GROUP;
+    delete process.env.EXPO_PUBLIC_KANGENTIC_NSE_PROBE;
+  });
+
+  function hexOf(identityPublicKey: Uint8Array | null): string | null {
+    return identityPublicKey === null ? null : bytesToHex(identityPublicKey);
+  }
+
+  function identityReadCount(secureStoreModule: typeof import('expo-secure-store')): number {
+    return vi.mocked(secureStoreModule.getItemAsync).mock.calls.filter(([key]) => key === 'push.identity.pk').length;
+  }
+
+  /** Holds the NEXT SecureStore read open; the returned function resolves it with `valueAtRelease`. */
+  function holdNextRead(secureStoreModule: typeof import('expo-secure-store'), valueAtRelease: string | null): () => void {
+    let release: () => void = () => {};
+    vi.mocked(secureStoreModule.getItemAsync).mockImplementationOnce(
+      () =>
+        new Promise<string | null>((resolve) => {
+          release = () => resolve(valueAtRelease);
+        }),
+    );
+    return () => release();
+  }
+
+  it.each([31, 33])('returns null for a stored value that is %i bytes, not 32', async (byteLength) => {
+    storeSharedValue('push.identity.pk', bytesToHex(new Uint8Array(byteLength).fill(0x21)));
+    const pushKeys = await loadPushKeys();
+
+    expect(await pushKeys.getNsePushIdentityPublicKeyIfExists()).toBeNull();
+  });
+
+  it('returns null when nothing is stored, and does not cache the null', async () => {
+    const secureStoreModule = await import('expo-secure-store');
+    const pushKeys = await loadPushKeys();
+
+    expect(await pushKeys.getNsePushIdentityPublicKeyIfExists()).toBeNull();
+    // The Keychain really was asked: a null from a skipped read would pass for the wrong reason.
+    expect(identityReadCount(secureStoreModule)).toBe(1);
+
+    storeSharedValue('push.identity.pk', bytesToHex(firstKey));
+    expect(hexOf(await pushKeys.getNsePushIdentityPublicKeyIfExists())).toBe(bytesToHex(firstKey));
+    expect(identityReadCount(secureStoreModule)).toBe(2);
+  });
+
+  it('a read already in flight when clearPushRegistration runs returns null and caches nothing', async () => {
+    storeSharedValue('push.identity.pk', bytesToHex(firstKey));
+    const secureStoreModule = await import('expo-secure-store');
+    const pushKeys = await loadPushKeys();
+
+    // The read has already fetched the old key by the time the unpair lands.
+    const releaseRead = holdNextRead(secureStoreModule, bytesToHex(firstKey));
+    const inFlightRead = pushKeys.getNsePushIdentityPublicKeyIfExists();
+    await pushKeys.clearPushRegistration();
+    releaseRead();
+    const inFlightResult = await inFlightRead;
+
+    // A re-pair stores a new key. A cache that latched onto the wiped read would serve the old one.
+    storeSharedValue('push.identity.pk', bytesToHex(secondKey));
+    const laterResult = await pushKeys.getNsePushIdentityPublicKeyIfExists();
+
+    expect(inFlightResult).toBeNull();
+    expect(hexOf(laterResult)).toBe(bytesToHex(secondKey));
+  });
+
+  it('serves a second call from the cache, without reading the Keychain again', async () => {
+    storeSharedValue('push.identity.pk', bytesToHex(firstKey));
+    const secureStoreModule = await import('expo-secure-store');
+    const pushKeys = await loadPushKeys();
+
+    const firstResult = await pushKeys.getNsePushIdentityPublicKeyIfExists();
+    const secondResult = await pushKeys.getNsePushIdentityPublicKeyIfExists();
+
+    expect(hexOf(firstResult)).toBe(bytesToHex(firstKey));
+    expect(hexOf(secondResult)).toBe(bytesToHex(firstKey));
+    expect(identityReadCount(secureStoreModule)).toBe(1);
+  });
+
+  it('clearPushRegistration drops the cache, so the next call reads the Keychain again', async () => {
+    storeSharedValue('push.identity.pk', bytesToHex(firstKey));
+    const secureStoreModule = await import('expo-secure-store');
+    const pushKeys = await loadPushKeys();
+
+    const cachedResult = await pushKeys.getNsePushIdentityPublicKeyIfExists();
+    await pushKeys.clearPushRegistration();
+    const resultAfterClear = await pushKeys.getNsePushIdentityPublicKeyIfExists();
+
+    expect(hexOf(cachedResult)).toBe(bytesToHex(firstKey));
+    // The wipe really deleted the item, so a cache that survived it is the only way to get a key back.
+    expect(sharedValue('push.identity.pk')).toBeUndefined();
+    expect(resultAfterClear).toBeNull();
+    expect(identityReadCount(secureStoreModule)).toBe(2);
+  });
+
+  it('persistNsePushIdentityPublicKey writes through, so the next call returns the new key without re-reading', async () => {
+    storeSharedValue('push.identity.pk', bytesToHex(firstKey));
+    const secureStoreModule = await import('expo-secure-store');
+    const pushKeys = await loadPushKeys();
+
+    const cachedResult = await pushKeys.getNsePushIdentityPublicKeyIfExists();
+    await pushKeys.persistNsePushIdentityPublicKey(secondKey);
+    const resultAfterPersist = await pushKeys.getNsePushIdentityPublicKeyIfExists();
+
+    expect(hexOf(cachedResult)).toBe(bytesToHex(firstKey));
+    expect(hexOf(resultAfterPersist)).toBe(bytesToHex(secondKey));
+    expect(identityReadCount(secureStoreModule)).toBe(1);
+  });
+
+  it('a read in flight when a persist lands returns the persisted key, not the older value it read', async () => {
+    storeSharedValue('push.identity.pk', bytesToHex(firstKey));
+    const secureStoreModule = await import('expo-secure-store');
+    const pushKeys = await loadPushKeys();
+
+    // The read fetched the old key before the persist; the persist completes first.
+    const releaseRead = holdNextRead(secureStoreModule, bytesToHex(firstKey));
+    const inFlightRead = pushKeys.getNsePushIdentityPublicKeyIfExists();
+    await pushKeys.persistNsePushIdentityPublicKey(secondKey);
+    releaseRead();
+    const inFlightResult = await inFlightRead;
+    const laterResult = await pushKeys.getNsePushIdentityPublicKeyIfExists();
+
+    expect(hexOf(inFlightResult)).toBe(bytesToHex(secondKey));
+    // And the stale value did not overwrite the persisted one in the cache.
+    expect(hexOf(laterResult)).toBe(bytesToHex(secondKey));
+    expect(identityReadCount(secureStoreModule)).toBe(1);
+  });
+
+  it('a persist whose write lands after clearPushRegistration is not cached', async () => {
+    const secureStoreModule = await import('expo-secure-store');
+    const pushKeys = await loadPushKeys();
+
+    // Hold the write open until the unpair has run past it, then let it land.
+    let releaseWrite: () => void = () => {};
+    vi.mocked(secureStoreModule.setItemAsync).mockImplementationOnce(
+      (key: string, value: string, options?: MockSecureStoreOptions) =>
+        new Promise<void>((resolve) => {
+          releaseWrite = () => {
+            secureStoreState.storedValues.set(secureStoreState.locationOf(key, options), value);
+            resolve();
+          };
+        }),
+    );
+    const inFlightPersist = pushKeys.persistNsePushIdentityPublicKey(firstKey);
+    await pushKeys.clearPushRegistration();
+    releaseWrite();
+    await inFlightPersist;
+
+    await pushKeys.getNsePushIdentityPublicKeyIfExists();
+
+    // Read from the Keychain, not served from a cache the unpair had already dropped.
+    expect(identityReadCount(secureStoreModule)).toBe(1);
+  });
+
+  it('does not cache a throwing read: the next call reads the Keychain again and returns the key', async () => {
+    storeSharedValue('push.identity.pk', bytesToHex(firstKey));
+    const secureStoreModule = await import('expo-secure-store');
+    vi.mocked(secureStoreModule.getItemAsync).mockRejectedValueOnce(new Error('keychain unavailable while locked'));
+    const pushKeys = await loadPushKeys();
+
+    await expect(pushKeys.getNsePushIdentityPublicKeyIfExists()).rejects.toThrow('keychain unavailable while locked');
+    const retriedResult = await pushKeys.getNsePushIdentityPublicKeyIfExists();
+
+    expect(hexOf(retriedResult)).toBe(bytesToHex(firstKey));
+    expect(identityReadCount(secureStoreModule)).toBe(2);
+  });
+
+  it('seedSharedPushKeysForProbe drops the cached identity key, so the next call returns the seeded one', async () => {
+    enableNseProbe();
+    storeSharedValue('push.identity.pk', bytesToHex(firstKey));
+    const pushKeys = await loadPushKeys();
+
+    const cachedResult = await pushKeys.getNsePushIdentityPublicKeyIfExists();
+    await pushKeys.seedSharedPushKeysForProbe(new Uint8Array(32).fill(0x11), secondKey);
+    const resultAfterSeed = await pushKeys.getNsePushIdentityPublicKeyIfExists();
+
+    expect(hexOf(cachedResult)).toBe(bytesToHex(firstKey));
+    expect(hexOf(resultAfterSeed)).toBe(bytesToHex(secondKey));
   });
 });
 

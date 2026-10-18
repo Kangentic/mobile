@@ -110,10 +110,12 @@ describe('NSE payload-shape parity: extractBlob vs extractBlobFromTaskData', () 
   });
 
   it('keeps the nested-DICTIONARY branch the TypeScript deliberately does not have', () => {
-    // expo-notifications hands JS an already-unwrapped `data` object, so the
-    // TS side never encounters userInfo's raw nested-dictionary shape - only
-    // the extension reads the untouched APNs payload. Deleting this branch to
-    // "match" the TypeScript would be the regression, not a fix.
+    // expo-notifications hands every caller of extractBlobFromTaskData an
+    // already-unwrapped `data` object, so the blob path never encounters
+    // userInfo's raw nested-dictionary shape. The iOS background task does see
+    // it, but looks only for a sealed clear there (findClearField, which has a
+    // dictionary branch of its own). Deleting this branch to "match" the
+    // TypeScript blob path would be the regression, not a fix.
     expect(swiftCode).toContain('userInfo[key] as? [AnyHashable: Any]');
     expect(swiftCode).toContain('nested["blob"] as? String');
   });

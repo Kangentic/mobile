@@ -1205,6 +1205,66 @@ describe('notificationReconciler', () => {
       expect(dismissed).toEqual([{ category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null }]);
     });
 
+    /**
+     * A cleared alert has to leave the TRACKED list as well as the tray. The
+     * tray is read fresh by a refresh, but a pass that makes no native read (an
+     * end recorded, an activity change reaching a tracked alert) judges the list
+     * the reconciler already holds, so a record left in it is dismissed and
+     * cancelled a second time once the staleness rules agree it is stale.
+     *
+     * The setup is shaped around that: the board exists before start (so seeding
+     * it is not the first-board native read), a SECOND uncovered alert keeps the
+     * list non-empty (the activity subscriber skips an empty list, which would
+     * make the follow-up pass never run), and ending both sessions in one tick
+     * makes one rejudge-only pass that provably ran, because it cancels the
+     * second alert. Reading the tray twice in total (one refresh, one clear)
+     * proves the pass made no read of its own, which would have replaced the
+     * tracked list and hidden the bug.
+     *
+     * Mutation that reddens this, seen red: delete the
+     * `tracked = tracked.filter((record) => !clearedIds.has(record.platformId))`
+     * line in dismissNotificationsClearedBy. The cleared alert is then cancelled
+     * and published as dismissed a second time by the rejudge-only pass, and the
+     * cancel-calls assertion reads sess-1's id twice.
+     */
+    it('does not dismiss a cleared alert a second time when a later pass judges the tracked list', async () => {
+      const modules = await loadModules();
+      seedBoard(modules);
+      const clearedAlertId = sessionAlertId('input-required', 'sess-1');
+      const uncoveredAlertId = sessionAlertId('input-required', 'sess-2');
+      notifeeMock.getDisplayedNotifications.mockResolvedValue([
+        { id: clearedAlertId, notification: { data: pushedData('input-required', 'sess-1', 'task-1', sentAt) } },
+        { id: uncoveredAlertId, notification: { data: pushedData('input-required', 'sess-2', 'task-2', sentAt) } },
+      ]);
+      stopReconciler = modules.reconciler.startNotificationReconciler();
+      const dismissed: unknown[] = [];
+      modules.signals.subscribeToNotificationDismissals((routing) => dismissed.push(routing));
+
+      // Both alerts enter the tracked list through a refresh, and neither is stale yet.
+      appStateMock.emit('active');
+      await settle();
+      expect(notifeeMock.getDisplayedNotifications).toHaveBeenCalledTimes(1);
+      expect(notifeeMock.cancelNotification).not.toHaveBeenCalled();
+
+      await modules.reconciler.dismissNotificationsClearedBy([clearEntry('input-required', 'sess-1', 'task-1', sentAt)]);
+      expect(notifeeMock.cancelNotification.mock.calls).toEqual([[clearedAlertId]]);
+      expect(notifeeMock.getDisplayedNotifications).toHaveBeenCalledTimes(2);
+
+      // Both sessions end: the staleness rules now dismiss an input-required alert
+      // for either one, so a record still tracked for sess-1 would be dismissed again.
+      modules.useActivityStore.getState().applyActivityEvent(sessionEndedEvent('sess-1', 'task-1'));
+      modules.useActivityStore.getState().applyActivityEvent(sessionEndedEvent('sess-2', 'task-2'));
+      await settle();
+
+      // The pass ran (it cancelled the uncovered alert) and made no read of its own.
+      expect(notifeeMock.getDisplayedNotifications).toHaveBeenCalledTimes(2);
+      expect(notifeeMock.cancelNotification.mock.calls).toEqual([[clearedAlertId], [uncoveredAlertId]]);
+      expect(dismissed).toEqual([
+        { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null },
+        { category: 'input-required', taskId: 'task-2', projectId: 'project-1', sessionId: 'sess-2', sessionKind: null },
+      ]);
+    });
+
     it('on iOS decrypts what is presented and dismisses the covered alert by its request identifier', async () => {
       platformMock.OS = 'ios';
       const modules = await loadModules();
