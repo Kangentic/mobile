@@ -194,7 +194,8 @@ export type HandledErrorSite =
   | 'connection-open'
   | 'crash-test'
   | 'create-task'
-  | 'devices-paired-info';
+  | 'devices-paired-info'
+  | 'task-automations';
 
 /**
  * Error classes that are a normal condition on a phone, never a defect: no
