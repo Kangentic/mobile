@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
  * Waits on one GitHub Actions run until it has a pending deployment gate, or it
- * completes, then prints what it found and exits 0. /release runs it in the
- * background between dispatching a build and approving its store gates, so the
- * session is woken once per gate, when there is something to act on. It exits
+ * completes, then prints what it found and exits 0 (exit 1 only on POLL-FAILED,
+ * below). /release runs it in the background between dispatching a build and
+ * approving its store gates, so the session is woken once per gate, when there
+ * is something to act on. It exits
  * at the first pending gate, so a run with two gates needs it started twice.
  *
  * READ-ONLY by construction: the only calls are GETs of the run, its jobs, and
