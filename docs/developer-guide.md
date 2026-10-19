@@ -1411,11 +1411,17 @@ on 2026-10-15 that a production release reaches every user at 100%, every time. 
 It needs the `ASC_*` API key on the **App Manager** role. The app-specific-password fallback can
 upload but cannot reach the API, so the `device` job refuses `appstore` without the key, before
 the archive. Both active team keys were on App Manager when checked in Users and Access on
-2026-10-15, so whichever one `ASC_KEY_ID` names qualifies. **Neither stage has run against Apple
-yet** (2026-10-15). One thing only the first run can answer: whether a version created through the
-API inherits the previous version's screenshots. The stage-1 report shows it. Apple does not
-document whether App Review Information is inherited either, which is why stage 1 carries it over
-itself (2026-10-18) rather than leaving a release to stop at stage 2 for a human to retype it.
+2026-10-15, so whichever one `ASC_KEY_ID` names qualifies. **Both stages have run against Apple**:
+v1.2.0 build 19 went from upload to `WAITING_FOR_REVIEW` on 2026-10-19 (run 39182661900), with all
+three release gates approved through the API. That run also answered what Apple does not
+document: a version created through the API **inherits** the previous version's screenshots and
+App Review Information (1.2.0 arrived with 7 screenshots, contact details and notes). Stage 1 still
+carries the App Review Information over itself when a version lacks it (2026-10-18), as a safety
+net, so a release cannot stop at stage 2 for a human to retype it.
+
+While the run waits at the second gate, `gh run view --log` refuses to print anything. Read the
+finished `Submit (TestFlight)` job's log, stage 1's report included, with
+`gh api repos/Kangentic/mobile/actions/jobs/<job id>/logs`.
 
 **`app-store-check.yml` is the read-only preflight for that path.** `gh workflow run
 app-store-check.yml --ref main` (add `-f version=1.2.0` to pick a version) runs the same script

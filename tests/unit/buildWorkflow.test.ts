@@ -1648,6 +1648,25 @@ describe('build-android staged rollout', () => {
     expect(notes.trim().length).toBeGreaterThan(0);
     expect(notes.length).toBeLessThanOrEqual(500);
   });
+
+  it('names the track through `tracks`, never the deprecated `track`, on both uploads', () => {
+    // r0adkll/upload-google-play@v1 warns that `track` will be removed and
+    // refuses the two together. The removal would fail a release at the upload,
+    // after the build and the approval gate. An EMPTY `tracks` is worse: the
+    // action falls back to production, so both uploads must pass the dispatch
+    // input through.
+    const workflow = parseYaml(workflowSource) as {
+      jobs: Record<string, { steps?: { name?: string; with?: Record<string, string> }[] }>;
+    };
+    const uploads = (workflow.jobs['submit-play'].steps ?? []).filter((step) =>
+      step.name?.startsWith('Upload to Google Play')
+    );
+    expect(uploads).toHaveLength(2);
+    for (const upload of uploads) {
+      expect(upload.with).not.toHaveProperty('track');
+      expect(upload.with?.tracks).toBe('${{ inputs.submit_track }}');
+    }
+  });
 });
 
 describe('build-ios App Store release', () => {
