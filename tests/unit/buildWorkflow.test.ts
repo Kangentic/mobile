@@ -1539,6 +1539,16 @@ describe('Actions cache budget', () => {
 });
 
 describe('build-android staged rollout', () => {
+  // The rollout and full-release uploads, the two steps the Play tests below read.
+  function playUploadSteps() {
+    const workflow = parseYaml(workflowSource) as {
+      jobs: Record<string, { steps?: { name?: string; with?: Record<string, string> }[] }>;
+    };
+    return (workflow.jobs['submit-play'].steps ?? []).filter((step) =>
+      step.name?.startsWith('Upload to Google Play')
+    );
+  }
+
   it('keeps the rollout and full-release uploads as separate steps', () => {
     // `userFraction` is only valid with an inProgress status; Play rejects it
     // alongside `completed`. One step with interpolated values would be a silent
@@ -1634,12 +1644,7 @@ describe('build-android staged rollout', () => {
     // without whatsNewDirectory a production release ships with a blank "What's
     // new". Play rejects an over-length note, but only inside submit-play, after
     // a ~25 minute build and the approval gate; this catches it in seconds.
-    const workflow = parseYaml(workflowSource) as {
-      jobs: Record<string, { steps?: { name?: string; with?: Record<string, string> }[] }>;
-    };
-    const uploads = (workflow.jobs['submit-play'].steps ?? []).filter((step) =>
-      step.name?.startsWith('Upload to Google Play')
-    );
+    const uploads = playUploadSteps();
     expect(uploads).toHaveLength(2);
     for (const upload of uploads) {
       expect(upload.with?.whatsNewDirectory).toBe('store/whatsnew');
@@ -1658,12 +1663,7 @@ describe('build-android staged rollout', () => {
     // after the build and the approval gate. An EMPTY `tracks` is worse: the
     // action falls back to production, so both uploads must pass the dispatch
     // input through.
-    const workflow = parseYaml(workflowSource) as {
-      jobs: Record<string, { steps?: { name?: string; with?: Record<string, string> }[] }>;
-    };
-    const uploads = (workflow.jobs['submit-play'].steps ?? []).filter((step) =>
-      step.name?.startsWith('Upload to Google Play')
-    );
+    const uploads = playUploadSteps();
     expect(uploads).toHaveLength(2);
     for (const upload of uploads) {
       expect(upload.with).not.toHaveProperty('track');
@@ -1983,18 +1983,20 @@ describe('Linux runner image', () => {
   // docs/developer-guide.md.
   const pinnedUbuntuImage = 'ubuntu-24.04';
   const workflowDirectory = `${repositoryRoot}.github/workflows`;
-  const linuxRunners = readdirSync(workflowDirectory)
-    .filter((fileName) => fileName.endsWith('.yml'))
-    .flatMap((fileName) => {
-      const workflow = parseYaml(readFileSync(join(workflowDirectory, fileName), 'utf8')) as {
-        jobs: Record<string, { 'runs-on'?: string }>;
-      };
-      return Object.entries(workflow.jobs)
-        .map(([jobName, job]) => ({ job: `${fileName} ${jobName}`, runner: job['runs-on'] ?? '' }))
-        .filter(({ runner }) => runner.startsWith('ubuntu'));
-    });
 
   it('pins every Linux job to the same image, never ubuntu-latest', () => {
+    // Scanned inside the test, so a workflow that fails to parse fails this test
+    // rather than the whole file at collection.
+    const linuxRunners = readdirSync(workflowDirectory)
+      .filter((fileName) => fileName.endsWith('.yml'))
+      .flatMap((fileName) => {
+        const workflow = parseYaml(readFileSync(join(workflowDirectory, fileName), 'utf8')) as {
+          jobs: Record<string, { 'runs-on'?: string }>;
+        };
+        return Object.entries(workflow.jobs)
+          .map(([jobName, job]) => ({ job: `${fileName} ${jobName}`, runner: job['runs-on'] ?? '' }))
+          .filter(({ runner }) => runner.startsWith('ubuntu'));
+      });
     // Non-vacuous: ci.yml and e2e.yml alone hold more than ten Linux jobs.
     expect(linuxRunners.length).toBeGreaterThan(10);
     expect(linuxRunners.filter(({ runner }) => runner !== pinnedUbuntuImage)).toEqual([]);

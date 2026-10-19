@@ -1557,8 +1557,8 @@ Two consequences worth knowing before touching that plugin:
   instead, and the plugin declares a local interface for the one method it uses. There is also no way
   to run `expo prebuild --platform ios` on Windows to check it by hand.
 
-**Measured build time: about 11 minutes**, which is faster than the Android release build, and not
-where you would guess:
+**Measured build time: about 11 minutes** (out of date: 17 minutes on 2026-10-19, see the re-measure
+below), which is faster than the Android release build, and not where you would guess:
 
 | Step | Time |
 |---|---|
