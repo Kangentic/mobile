@@ -44,7 +44,7 @@ interface FakeVersion {
   releaseType: string;
   buildId: string | null;
   phasedRelease: { id: string; phasedReleaseState: string } | null;
-  reviewDetail: Record<string, string> | null;
+  reviewDetail: Record<string, string | boolean> | null;
   createdDate?: string;
 }
 
@@ -75,7 +75,7 @@ interface FakeSeed {
   reviewSubmissions?: FakeReviewSubmission[];
   /** What Apple copies onto a version created through the API. */
   newVersionLocalizations?: { locale: string; screenshotCount: number }[];
-  newVersionReviewDetail?: Record<string, string> | null;
+  newVersionReviewDetail?: Record<string, string | boolean> | null;
   /** `METHOD path` prefixes answered with a 403. */
   forbidden?: string[];
   /** `METHOD path` prefixes answered with the given status (a 401 or a 500, say). */
@@ -281,6 +281,24 @@ function createFakeAppStoreConnect(seed: FakeSeed = {}) {
       if (!version) return notFound(method, apiPath);
       version.phasedRelease = null;
       return respond(204);
+    }
+    if (method === 'POST' && pathname === '/appStoreReviewDetails') {
+      const versionId = (body as { data: { relationships: { appStoreVersion: { data: { id: string } } } } }).data
+        .relationships.appStoreVersion.data.id;
+      const version = versions.find((candidate) => candidate.id === versionId);
+      if (!version) return notFound(method, apiPath);
+      // Apple allows one review detail per version, so a second create conflicts.
+      if (version.reviewDetail) {
+        return respond(409, { errors: [{ title: 'Conflict', detail: 'The version already has a review detail.' }] });
+      }
+      version.reviewDetail = { ...(requestData?.attributes as Record<string, string | boolean>) };
+      return respond(201, { data: { type: 'appStoreReviewDetails', id: `review-${version.id}` } });
+    }
+    if ((match = pathname.match(/^\/appStoreReviewDetails\/([^/]+)$/)) && method === 'PATCH') {
+      const version = versions.find((candidate) => `review-${candidate.id}` === match?.[1]);
+      if (!version?.reviewDetail) return notFound(method, apiPath);
+      version.reviewDetail = { ...version.reviewDetail, ...(requestData?.attributes as Record<string, string | boolean>) };
+      return respond(200, body);
     }
     if ((match = pathname.match(/^\/appStoreVersions\/([^/]+)\/appStoreVersionLocalizations$/)) && method === 'GET') {
       return respond(200, {
@@ -729,6 +747,123 @@ describe('stage 1 and the one-unreleased-version rule', () => {
       expect(writes(fake.calls)).toEqual([]);
     }
   );
+});
+
+describe('stage 1 carries the App Review Information over to a new version', () => {
+  // Apple does not document whether a version created through the API inherits
+  // the previous version's App Review Information, and stage 2 refuses without
+  // it. Stage 1 copies what the new version lacks from the newest complete one.
+  const liveVersion = (overrides: Partial<FakeVersion> = {}) =>
+    editableVersion({
+      id: 'version-live',
+      versionString: '1.1.0',
+      appVersionState: 'READY_FOR_DISTRIBUTION',
+      releaseType: 'AFTER_APPROVAL',
+      buildId: 'build-18',
+      createdDate: '2026-10-12T00:00:00-07:00',
+      ...overrides,
+    });
+  const replacedVersion = (id: string, versionString: string, createdDate: string, notes: string) =>
+    editableVersion({
+      id,
+      versionString,
+      appVersionState: 'REPLACED_WITH_NEW_VERSION',
+      buildId: `build-${id}`,
+      createdDate,
+      reviewDetail: { ...COMPLETE_REVIEW_DETAIL, notes },
+    });
+  const reviewDetailWrites = (fake: FakeAppStoreConnect) =>
+    fake.calls.filter((call) => call.method !== 'GET' && call.path.startsWith('/appStoreReviewDetails'));
+  const createdVersion = (fake: FakeAppStoreConnect) => fake.versions.find((version) => version.id === 'version-new');
+
+  it('creates the details on a new version that has none, from the live version, and never logs them', async () => {
+    const fake = createFakeAppStoreConnect({ versions: [liveVersion()], newVersionReviewDetail: null });
+    const logged: string[] = [];
+    const report = await prepareAppStoreRelease({
+      request: fake.request,
+      ...releaseIdentity,
+      readWhatsNew: readWhatsNewFor({ 'en-US': RELEASE_NOTES }),
+      log: (line: string) => logged.push(line),
+    });
+
+    const [create, ...others] = reviewDetailWrites(fake);
+    expect(others).toEqual([]);
+    expect(create).toMatchObject({
+      method: 'POST',
+      path: '/appStoreReviewDetails',
+      body: { data: { relationships: { appStoreVersion: { data: { type: 'appStoreVersions', id: 'version-new' } } } } },
+    });
+    expect(createdVersion(fake)?.reviewDetail).toEqual(COMPLETE_REVIEW_DETAIL);
+    expect(report.reviewDetail).toEqual({ hasContact: true, hasNotes: true });
+    expect(report.problems).toEqual([]);
+    expect(report.changes.join('\n')).toMatch(/App Review Information carried over from version 1\.1\.0/);
+    const output = logged.join('\n');
+    for (const secret of [
+      COMPLETE_REVIEW_DETAIL.notes,
+      COMPLETE_REVIEW_DETAIL.contactEmail,
+      COMPLETE_REVIEW_DETAIL.contactPhone,
+      COMPLETE_REVIEW_DETAIL.demoAccountPassword,
+    ]) {
+      expect(output).not.toContain(secret);
+    }
+  });
+
+  it('fills only the fields an existing detail lacks, leaving the ones it has alone', async () => {
+    const fake = createFakeAppStoreConnect({
+      versions: [liveVersion()],
+      newVersionReviewDetail: { ...COMPLETE_REVIEW_DETAIL, contactPhone: '+1 555 0199', notes: '' },
+    });
+    const report = await runWritingStage('prepare', fake);
+
+    expect(reviewDetailWrites(fake)).toEqual([
+      {
+        method: 'PATCH',
+        path: '/appStoreReviewDetails/review-version-new',
+        body: {
+          data: {
+            type: 'appStoreReviewDetails',
+            id: 'review-version-new',
+            attributes: { notes: COMPLETE_REVIEW_DETAIL.notes },
+          },
+        },
+      },
+    ]);
+    expect(createdVersion(fake)?.reviewDetail).toMatchObject({
+      contactPhone: '+1 555 0199',
+      notes: COMPLETE_REVIEW_DETAIL.notes,
+    });
+    expect(report.problems).toEqual([]);
+  });
+
+  it('writes no details to a new version whose own are already complete', async () => {
+    const fake = createFakeAppStoreConnect({ versions: [liveVersion()] });
+    await runWritingStage('prepare', fake);
+    expect(reviewDetailWrites(fake)).toEqual([]);
+  });
+
+  it('copies from the newest version whose details are complete, passing over a newer incomplete one', async () => {
+    // Listed oldest first, so taking the first complete version would pick 0.9.0.
+    const fake = createFakeAppStoreConnect({
+      versions: [
+        replacedVersion('version-oldest', '0.9.0', '2026-09-01T00:00:00-07:00', 'Oldest notes.'),
+        replacedVersion('version-older', '1.0.0', '2026-10-07T00:00:00-07:00', 'Pair with demo code DEMO-CODE-100.'),
+        liveVersion({ reviewDetail: { ...COMPLETE_REVIEW_DETAIL, notes: '' } }),
+      ],
+      newVersionReviewDetail: null,
+    });
+    const report = await runWritingStage('prepare', fake);
+
+    expect(createdVersion(fake)?.reviewDetail?.notes).toBe('Pair with demo code DEMO-CODE-100.');
+    expect(report.changes.join('\n')).toMatch(/carried over from version 1\.0\.0/);
+  });
+
+  it('leaves the details missing, and reported, when no other version has complete ones', async () => {
+    const fake = createFakeAppStoreConnect({ versions: [liveVersion({ reviewDetail: null })], newVersionReviewDetail: null });
+    const report = await runWritingStage('prepare', fake);
+
+    expect(reviewDetailWrites(fake)).toEqual([]);
+    expect(report.problems.join('\n')).toMatch(/no App Review Information/);
+  });
 });
 
 describe.each(WRITING_STAGES)('%s: an existing version, and the lookups it depends on', (stage) => {
