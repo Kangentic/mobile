@@ -124,7 +124,7 @@ jobs:
   # Fail-safe direction is to RUN: anything we cannot classify builds.
   changes:
     name: Changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       run-e2e: ${{ steps.filter.outputs.run-e2e }}
@@ -233,7 +233,7 @@ jobs:
     name: Build (APK)
     needs: changes
     if: needs.changes.outputs.run-e2e == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     outputs:
       apk-name: ${{ steps.name.outputs.apk-name }}
@@ -472,7 +472,7 @@ jobs:
     name: E2E Tests (${{ matrix.label }})
     needs: [changes, build-apk]
     if: needs.changes.outputs.run-e2e == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -530,7 +530,7 @@ jobs:
             exit 1
           fi
 
-      # The emulator needs hardware acceleration to be usable. ubuntu-latest has
+      # The emulator needs hardware acceleration to be usable. The Ubuntu runner has
       # KVM available but not world-writable by default.
       - name: Enable KVM
         run: |
@@ -609,7 +609,7 @@ jobs:
     name: E2E Tests (Paired)
     needs: [changes, build-apk]
     if: needs.changes.outputs.run-e2e == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Local runtime was 15-20 minutes, measured with 11 flows (.claude/skills/e2e/SKILL.md),
     # on top of emulator boot, APK install, relay start, and pairing. The app
     # never reports UI-idle, so Maestro falls back to settled-hierarchy aiming
@@ -732,7 +732,7 @@ jobs:
             exit 1
           fi
 
-      # The emulator needs hardware acceleration to be usable. ubuntu-latest has
+      # The emulator needs hardware acceleration to be usable. The Ubuntu runner has
       # KVM available but not world-writable by default.
       - name: Enable KVM
         run: |
@@ -809,7 +809,7 @@ jobs:
     name: E2E Tests (Maestro)
     needs: [changes, maestro]
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Gate on suite results

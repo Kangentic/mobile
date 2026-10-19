@@ -20,9 +20,12 @@
  * CI enforcement steps and workflow wiring that keep a minified release
  * symbolicatable. app.config.ts's own R8 flags are covered separately, in
  * tests/unit/appConfigBrand.test.ts.
+ *
+ * The runner-image group reaches past the build workflows to every workflow,
+ * because a Linux job left on `ubuntu-latest` changes image with no commit.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1967,6 +1970,34 @@ describe('spent release counters are recorded mechanically', () => {
     const runs = (job.steps ?? []).map((step) => step.run ?? '').join('\n');
     expect(runs).toContain('scripts/checkPlayVersionCode.mjs');
     expect(runs).toContain('scripts/checkAppStoreBuild.mjs');
+  });
+});
+
+describe('Linux runner image', () => {
+  // Every Linux job names one pinned image rather than `ubuntu-latest`. GitHub
+  // moves that label to Ubuntu 26.04 over several weeks from 2026-10-19
+  // (actions/runner-images#14748), so until that finishes a release's build job
+  // and its E2E gate could each land on either image. Moving to a newer image is
+  // a one-label change in every workflow at once, after one dispatch of e2e.yml
+  // and build-android.yml on it; see the CI builds section of
+  // docs/developer-guide.md.
+  const pinnedUbuntuImage = 'ubuntu-24.04';
+  const workflowDirectory = `${repositoryRoot}.github/workflows`;
+  const linuxRunners = readdirSync(workflowDirectory)
+    .filter((fileName) => fileName.endsWith('.yml'))
+    .flatMap((fileName) => {
+      const workflow = parseYaml(readFileSync(join(workflowDirectory, fileName), 'utf8')) as {
+        jobs: Record<string, { 'runs-on'?: string }>;
+      };
+      return Object.entries(workflow.jobs)
+        .map(([jobName, job]) => ({ job: `${fileName} ${jobName}`, runner: job['runs-on'] ?? '' }))
+        .filter(({ runner }) => runner.startsWith('ubuntu'));
+    });
+
+  it('pins every Linux job to the same image, never ubuntu-latest', () => {
+    // Non-vacuous: ci.yml and e2e.yml alone hold more than ten Linux jobs.
+    expect(linuxRunners.length).toBeGreaterThan(10);
+    expect(linuxRunners.filter(({ runner }) => runner !== pinnedUbuntuImage)).toEqual([]);
   });
 });
 

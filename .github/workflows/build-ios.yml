@@ -1762,7 +1762,7 @@ jobs:
     name: Submit (App Review)
     needs: [device, submit-testflight]
     if: github.event_name != 'schedule' && inputs.submit == 'appstore' && inputs.crash_test != true && inputs.nse_probe != true
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: app-store-connect
     permissions:

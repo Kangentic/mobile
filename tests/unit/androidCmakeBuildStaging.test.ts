@@ -5,7 +5,7 @@
  * WHY THESE ASSERTIONS AND NOT A `.cxx/**` SCAN. The task this came from asked
  * for a test that every `metadata_generation_command.txt` carries the flag.
  * That tree only exists after a real Windows Gradle build: the unit tier runs on
- * ubuntu-latest with no `android/` checked out at all, and the one CI job that
+ * an Ubuntu runner with no `android/` checked out at all, and the one CI job that
  * does prebuild never invokes Gradle, so such a scan would match zero files and
  * pass having looked at nothing. It also stopped being a `.cxx/**` glob at all,
  * since the whole point is that the directory now lives outside the project.
