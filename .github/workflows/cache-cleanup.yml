@@ -87,7 +87,7 @@ concurrency:
 jobs:
   cleanup:
     name: Delete the closed PR's caches
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       # Scoped by EVENT, not by an input default. On a workflow_dispatch there is

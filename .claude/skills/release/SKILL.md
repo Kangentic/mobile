@@ -82,8 +82,16 @@ describe encrypted iOS push as verified until one has.
 
 All of these, and stop on any failure:
 
-- `git status --porcelain` is empty, and the local checkout is on `main` and up to date with
-  `origin/main`. A release is cut from `main`, never from a task branch.
+- `git status --porcelain` is empty, and the checkout sits exactly at `origin/main`: after
+  `git fetch origin --tags`, `git rev-parse HEAD origin/main` prints the same commit twice. A
+  release is cut from `main`'s content, never from unmerged task work. **In a board worktree, do
+  not check out `main`** (the main checkout holds it) **and do not create or switch a local
+  branch.** The worktree's own branch is the board's session identity, and `/pull-request` Step
+  1.5 forbids renaming it. If `HEAD` is behind, `git rebase origin/main` moves it forward.
+- `npm run check:install` passes. A board worktree starts with `node_modules` linked to the main
+  checkout's, which can hold an older `@kangentic/protocol` than `package.json` asks for (v1.2.0
+  found 0.20.0 against `^0.23.0`), and then typecheck fails in files the release never touched.
+  `npm install` fixes it; run it before `/pull-request`, not halfway through it.
 - `main`'s own CI is green: `gh run list --workflow ci.yml --branch main --limit 1`.
 - The platform's secrets exist (`gh secret list`):
   - **Android:** `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`,
@@ -113,17 +121,16 @@ All of these, and stop on any failure:
 
 ## Step 2a - Ask for the semver bump
 
-`version` in `app.config.ts` is the user-facing version name (`0.1.0` today) and is hand-managed.
-Ask with `AskUserQuestion`: **major / minor / patch / none**.
+`version` in `app.config.ts` is the user-facing version name (`1.2.0` as of 2026-10-19) and is
+hand-managed. Ask with `AskUserQuestion`: **major / minor / patch / none**.
 
 Guidance to give when asking, since the right answer depends on what landed since the last release:
 
-- **patch** - fixes and internal work only, no behaviour a user would notice. The default for a
-  routine internal build.
-- **minor** - new user-visible capability, backward compatible. The app is pre-1.0, so a minor bump
-  is the normal way to mark a real feature landing.
-- **major** - reserved. While pre-1.0 there is no compatibility promise to break, so `1.0.0` should
-  mean "first public release", not "big change". Do not spend it early.
+- **patch** - fixes and internal work only, no behaviour a user would notice.
+- **minor** - new user-visible capability, backward compatible. The normal bump for a release that
+  ships a feature (v1.1.0 and v1.2.0 were both minor).
+- **major** - reserved for a break users would feel, such as a phone that stops working with a
+  desktop it used to pair with. `1.0.0` was spent on the first public release (2026-10-08).
 - **none** - re-releasing the same version with a new build. Legitimate when the previous artifact
   was broken, and the only case where `version` stays put while `versionCode` still must increase.
   **Not valid for an App Store release once that version string is live:** Apple needs a new
@@ -142,21 +149,28 @@ CLI-wide and not Android-only), so nothing increments either one and both stores
 Each is an integer with **no relation to semver**: it increments on every single upload, including a
 `none` semver bump.
 
+**The normal path needs no store key.** Read the spent counters from the remote tags (below), take
+the next number after each, and let `Release counters (stores)` on the release PR ask both stores:
+it is a required check and runs the same two scripts with CI's secrets. That is how v1.2.0 was
+resolved (vc17 after `android-vc16`, b19 after `ios-b18`). A session normally holds neither key,
+and auto mode refuses the Play service-account key outright, so do not plan a step around one.
+
 **Android** - `android.versionCode`:
 
-1. Read the local value from `app.config.ts`.
-2. Ask Play what is already spent:
+1. Read the local value from `app.config.ts` and the highest `android-vc*` tag.
+2. The next code is `max(local, highest tag) + 1`. Using local+1 alone is wrong: a release can have
+   been cut from another machine.
+3. Only with the key on hand, ask Play directly:
    `node scripts/checkPlayVersionCode.mjs --key <path to play service account json> --package com.kangentic.mobile --version-code <local value>`
-3. The next code is `max(local, highest on any Play track) + 1`. Using local+1 alone is wrong: a
-   release can have been cut from another machine.
 
 **iOS** - `ios.buildNumber`:
 
-1. Read the local value from `app.config.ts`.
-2. Ask App Store Connect:
+1. Read the local value from `app.config.ts` and the highest `ios-b*` tag.
+2. Apple requires the build number to be unique **per version string**, not globally increasing, so
+   after a semver bump it may legally restart. In practice it has kept increasing across versions
+   (b18 was 1.1.0, b19 is 1.2.0), and continuing from the highest tag is always safe.
+3. Only with the key on hand, ask App Store Connect directly:
    `node scripts/checkAppStoreBuild.mjs --key <AuthKey.p8> --key-id <id> --issuer-id <id> --bundle-id com.kangentic.mobile --version <version> --build-number <local value>`
-3. Apple requires the build number to be unique **per version string**, not globally increasing, so
-   after a semver bump it may legally restart. Do not blindly take the global max.
 
 Either key lives outside the repo; see the credential inventory in `docs/developer-guide.md`. The
 workflows run the matching check themselves before building, so this step is about telling the user
@@ -200,14 +214,19 @@ under it.
 
 **`main` is protected, so the bump cannot be pushed directly.** This is the step people try to skip.
 
-1. Branch: `release/v<version>-<vc|b><newNumber>`.
+1. **Stay on the branch you are on.** Never `git switch -c` a release branch locally: the remote
+   name is `/pull-request`'s job (its Step 1.5), and it pushes with `git push origin HEAD:<name>`.
+   v1.2.0 created `release/v1.2.0-vc17-b19` locally, then needed a switch back and a
+   `git merge --ff-only`, which stopped for a permission prompt mid-release.
 2. Edit only the counter for the platform being released: `android.versionCode` for Android,
    `ios.buildNumber` for iOS. Bumping both when releasing one spends a number for nothing, and the
    two are independent. **The default is to release both platforms together** so the stores never
-   drift a version apart, and then both counters move in this one PR. Name the branch
-   `release/v<version>-vc<n>-b<n>` in that case.
-3. `/pull-request` to open it and drive the checks green. `tests/unit/appConfigBrand.test.ts` guards
-   the field's shape, and the full gate including `E2E Tests (Maestro)` still applies.
+   drift a version apart, and then both counters move in this one PR.
+3. `/pull-request v<version>-vc<n>-b<n>` (or `-vc<n>` / `-b<n>` for one platform) to open it and
+   drive the checks green. With a `chore(release): cut v<version> ...` commit, its Step 1.5 names
+   the branch `chore/v<version>-vc<n>-b<n>`. Releases up to v1.2.0 used a `release/` prefix;
+   nothing keys on it. `tests/unit/appConfigBrand.test.ts` guards the field's shape, and the full
+   gate including `E2E Tests (Maestro)` still applies.
 4. `/merge-pull-request` to land it.
 
 **Never `--admin` past a red check to get a release out.** The gate exists precisely for the build
@@ -265,8 +284,13 @@ gh workflow run build-ios.yml --ref main -f target=device -f submit=<none|testfl
   this.** If `eas submit` is the thing that failed, this is the workaround, not a parallel attempt at
   the same thing.
 
-Watch either with `gh run watch`. Measured: roughly 20 to 30 minutes for Android, about **11 minutes**
-for iOS (the `xcodebuild archive` step is 8.5 of those and everything else is noise).
+Dispatch both back to back; they run in parallel. Measured on v1.2.0 (2026-10-19, both dispatched
+at 00:51 UTC): the Android `Build (production)` job took **29 minutes** and `Submit (Google Play)`
+1m25s; the iOS `Device (signed .ipa)` job took **17 minutes** (an older note here said 11),
+`Submit (TestFlight)` 7.5 minutes including Apple's processing, and `Submit (App Review)` 16
+seconds. iOS took 37 minutes from dispatch to WAITING_FOR_REVIEW, about 12 of them spent waiting
+for the session to notice a pending gate (8 minutes at the first, 3.5 at the second; Android's one
+gate waited 6.7), on ten-minute `gh run watch` loops. That waste is what Step 5's poller removes.
 
 ## Step 5 - The approval gates
 
@@ -337,15 +361,21 @@ survives, but stage 2 then has to be re-run or submitted by hand with Add for Re
 The build job already fails on an unsigned artifact, and the submit job re-verifies what it
 downloaded. On top of that:
 
-**Android:** `node scripts/checkPlayVersionCode.mjs ... --version-code <the code just released>` must
-now **fail** with "already released on the <track> track". If it still reports the code as free, the
-upload did not land.
+**Android:** a green `Submit (Google Play)` plus the `android-vc<n>` tag on the remote
+(`gh api repos/Kangentic/mobile/git/matching-refs/tags/android-vc<n>`). The tag step runs only
+after the upload step has committed the release, so **a present tag proves the release landed.
+A missing tag proves nothing**: that step is `continue-on-error`, so read the submit job instead.
+With the Play key on hand, `node scripts/checkPlayVersionCode.mjs ... --version-code <the code just
+released>` must now **fail** with "already released on the <track> track"; if it still reports the
+code as free, the upload did not land.
 
 **iOS:** usually nothing to do by hand. `build-ios.yml`'s submit job already runs
 `checkAppStoreBuild.mjs --await-processing`, which blocks until Apple reaches a terminal state and
 fails the job if the build was rejected, and it skips its "verdict was not checked" warning only
 when that ran. A green `Submit (TestFlight)` with that warning skipped means Apple **accepted** the
 build, which is stronger evidence than any counter re-check. Proven on v0.2.0 build 4, 2026-07-28.
+The `ios-b<n>` tag on the remote follows the same rule as Android's: present means accepted, absent
+means read the job.
 
 If you do re-check by hand, `node scripts/checkAppStoreBuild.mjs ... --build-number <the number just
 released>` must now **fail** saying the build already exists. Apple's processing takes 5 to 30

@@ -297,7 +297,8 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
 store/screenshots/            # Committed Play + App Store listing images, one set per shelf
 store/whatsnew/               # Release notes (whatsnew-<locale>, 500-char cap) that
                               #   build-android.yml sends with every Play upload; the same
-                              #   text goes into App Store Connect's What's New by hand
+                              #   file fills the App Store version's What's New (stage 1 of
+                              #   `build-ios.yml -f submit=appstore`), so nothing is pasted
 ```
 
 ## Commands

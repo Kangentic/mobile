@@ -150,7 +150,7 @@ concurrency:
 jobs:
   lint:
     name: Lint (ESLint)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -165,7 +165,7 @@ jobs:
 
   typecheck:
     name: Type check (tsc)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -187,7 +187,7 @@ jobs:
   # same shape the component tier has below.
   unit:
     name: Unit Tests (Vitest)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -197,7 +197,7 @@ jobs:
 
   component-shards:
     name: Component Tests (${{ matrix.shardIndex }}/${{ matrix.shardTotal }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -214,7 +214,7 @@ jobs:
     name: Component Tests (Jest)
     needs: [component-shards]
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Gate on shard results
@@ -230,7 +230,7 @@ jobs:
   # rather than partway into a native build is nearly free.
   native-config:
     name: Native config (prebuild)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -324,7 +324,7 @@ jobs:
             exit 1
           fi
 
-          # Parsed as text, not with plutil: this job runs on ubuntu-latest and
+          # Parsed as text, not with plutil: this job runs on Ubuntu and
           # plutil is macOS-only. The generated entitlements are an XML plist,
           # so the array order is the document order.
           if ! grep -q 'com.kangentic.mobile.shared' "$entitlements"; then
@@ -743,7 +743,7 @@ jobs:
   release-counters:
     name: Release counters (stores)
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7

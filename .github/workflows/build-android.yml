@@ -85,7 +85,7 @@ jobs:
   # runs on a PR would deadlock every PR.
   plan:
     name: Plan (preflight)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Was 5. The version-code preflight below needs node_modules to run
     # `expo config`, and a cold node_modules cache pays an npm ci here.
     timeout-minutes: 15
@@ -201,7 +201,7 @@ jobs:
     # real run.
     name: Build (${{ needs.plan.outputs.profile }})
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       BUILD_PROFILE: ${{ needs.plan.outputs.profile }}
@@ -618,7 +618,7 @@ jobs:
     # upload, and a skipped submit is a recoverable mistake where a submitted
     # crash-test build is not.
     if: github.event_name == 'workflow_dispatch' && inputs.submit_track != 'none' && inputs.crash_test != true
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: google-play
     # Narrower than it looks: the workflow is `contents: read` at the top level,
     # and this raises it for THIS job only, so the tag-the-spent-version-code

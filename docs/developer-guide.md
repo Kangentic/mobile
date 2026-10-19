@@ -762,10 +762,22 @@ The build and test workflows in `.github/workflows/` (alongside `cla.yml`, the C
 
 | Workflow | Trigger | Runner | What it does |
 |---|---|---|---|
-| `ci.yml` | every PR, push to `main` | `ubuntu-latest` | lint (plus `sync:branding:check` for brand-asset drift), typecheck, the unit tier (unsharded) and the sharded component tier, native config, and the release-counter preflight on PRs |
-| `e2e.yml` (workflow name: `Emulator`) | every PR, push to `main` | `ubuntu-latest` | builds the e2e APK, runs `.maestro/smoke.yaml` (the required gate) and `.maestro/paired` (advisory) on separate emulators |
-| `build-android.yml` | `workflow_dispatch`, `v*` tags | `ubuntu-latest` | signed APK/AAB, optional Play submit |
-| `build-ios.yml` | `workflow_dispatch` | `macos-latest` | unsigned simulator compile check, or a signed `.ipa` with an optional TestFlight upload. `-f screenshots=true` instead captures the App Store 6.9-inch listing frames on a booted simulator (experimental, ~45 min per attempt) |
+| `ci.yml` | every PR, push to `main` | `ubuntu-24.04` | lint (plus `sync:branding:check` for brand-asset drift), typecheck, the unit tier (unsharded) and the sharded component tier, native config, and the release-counter preflight on PRs |
+| `e2e.yml` (workflow name: `Emulator`) | every PR, push to `main` | `ubuntu-24.04` | builds the e2e APK, runs `.maestro/smoke.yaml` (the required gate) and `.maestro/paired` (advisory) on separate emulators |
+| `build-android.yml` | `workflow_dispatch`, `v*` tags | `ubuntu-24.04` | signed APK/AAB, optional Play submit |
+| `build-ios.yml` | `workflow_dispatch` | `macos-latest` | unsigned simulator compile check, or a signed `.ipa` with an optional TestFlight upload, or (`-f submit=appstore`) the upload plus the two App Store stages. `-f screenshots=true` instead captures the App Store 6.9-inch listing frames on a booted simulator (experimental, ~45 min per attempt) |
+| `app-store-check.yml` | `workflow_dispatch` | `ubuntu-24.04` | read-only preflight for `submit=appstore` (`prepareAppStoreRelease.mjs --mode check`); writes nothing |
+
+**Every Linux job is pinned to `ubuntu-24.04`, never `ubuntu-latest`** (2026-10-19). GitHub moves
+`ubuntu-latest` to Ubuntu 26.04 over several weeks from 2026-10-19 to 2026-11-19
+([actions/runner-images#14748](https://github.com/actions/runner-images/issues/14748)), and while
+that rolls out a release's build job and its E2E gate could each land on a different image with no
+commit to show for it. `tests/unit/buildWorkflow.test.ts` fails on any Linux job that is not on the
+pinned label. To move to a newer image: dispatch `e2e.yml` and `build-android.yml` once on a branch
+that names it, and if both are green, change the label in every workflow and the test together.
+The macOS jobs stay on `macos-latest`: no migration of that label is announced, and pinning it
+would not hold Xcode still anyway, since `build-ios.yml` builds with the image's default Xcode and
+the image changes that default within a macOS version.
 
 ### What each check on a PR means
 
@@ -1563,6 +1575,11 @@ where you would guess:
 So the archive is 76% of the run and everything else is noise. The CocoaPods cache was a miss on this
 first run and will not be again, but at 46s it was never the lever. If iOS build time ever needs
 attacking, it is the archive or nothing.
+
+**That 11 minutes is out of date** (re-measured 2026-10-19, the v1.2.0 build 19 release run
+39182661900). The device job took **17m 15s**, and `xcodebuild archive` alone took **14m 33s**, or
+84% of it. Everything before the archive took under two minutes, `pod install` 42s of that. So the
+conclusion stands, and the archive has grown: plan a release around 17 minutes for iOS, not 11.
 
 ## Testing
 
