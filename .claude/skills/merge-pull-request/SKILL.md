@@ -64,10 +64,17 @@ stored `pr_number` first, falling back to the head branch only when there is no 
    task) and take its `pr_number`. Record the task's ID as `<taskId>` for the board refresh in
    Step 3. If no `pr_number`, fall back to
    `gh pr list --head <branch> --state open --json number`.
-3. `gh pr view <pr> --json number,url,state,mergeable,mergeStateStatus,statusCheckRollup,headRefName`.
+3. `gh pr view <pr> --json number,url,state,mergeable,mergeStateStatus,statusCheckRollup,headRefName,headRefOid`.
    Record `<prHead>` = `headRefName` (the PR's remote head branch, the push and merge target).
 4. If no PR resolves either way, stop and report that the Testing column should have created one
    (`/pull-request` first). Do not create a PR here.
+5. **If `<pr>` already reads `MERGED`, check it is THIS worktree's work** before carrying on. It
+   is when `HEAD` equals its `headRefOid` (merged, realign not yet run) or
+   `git merge-base --is-ancestor HEAD origin/<sourceBranch>` exits 0 (already realigned). If
+   neither holds, the stored number is an earlier PR on this task and the commits here are not on
+   `<sourceBranch>`: stop and report that the task's `prNumber` names a finished PR, with no
+   outcome line. Carrying on would print `PR: merged`, and Done would remove a worktree whose work
+   never landed.
 
 Every later `gh pr` command targets `<pr>` or `<prHead>`; the local `<branch>` is for local git
 only.
@@ -210,8 +217,8 @@ they drift):
     the ahead case, print no line. The row checks again at every turn end until it runs, so the
     turn that finishes the reconciliation ends on `PR: merged` instead.
 - Every other stop prints no outcome line, and the card waits in Merge for a person: the main repo
-  and detached-HEAD pre-flight stops, a failed `gh auth status`, no PR resolved in Step 0, a Step
-  2 rebase that aborted, a required check that is red, pending or missing, a merge refused for
+  and detached-HEAD pre-flight stops, a failed `gh auth status`, no PR resolved in Step 0, a
+  stored PR that merged without this worktree's commits (Step 0.5), a Step 2 rebase that aborted, a required check that is red, pending or missing, a merge refused for
   anything but the missing review, and the realign and Step 4 stops above.
 
 The `PR:` prefix marks a pull request outcome, shared with Testing's `PR: ready to merge`. Code

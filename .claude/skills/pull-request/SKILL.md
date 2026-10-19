@@ -141,7 +141,11 @@ local branch.
    leading/trailing/consecutive hyphens). If `$ARGUMENTS` supplied a name, prefer it.
 3. `<branch>` = `<type>/<desc>`.
 4. **Resuming:** if the task already has a PR (`task.pr_number` set), reuse that existing remote
-   name as `<branch>`.
+   name as `<branch>`, but only when `gh pr view <pr_number> --json state,headRefName` reads
+   `OPEN`. A `MERGED` or `CLOSED` one means this is a **second PR on the task** (a release task's
+   follow-up, for one): its branch is usually deleted, and pushing to it would bury the new work
+   under a finished PR. Compute a fresh `<branch>` with 1 to 3, and if it equals that PR's
+   `headRefName`, add a suffix. Step 5b then has to move the task's stored number.
 
 ## Step 2 - Fetch latest source branch
 
@@ -205,6 +209,11 @@ If PR creation fails because one already exists, `gh pr view <branch>` and proce
 3. Call `kangentic_link_pr` with the task ID and PR number/URL. This is required, not
    best-effort: `<branch>` (the PR head) differs from the worktree's local branch by design, so
    the board's branch-based auto-detection will not find this PR otherwise.
+4. **A second PR on the task** (Step 1.5.4 found the stored one `MERGED` or `CLOSED`): call
+   `kangentic_update_task` with the new `prNumber` and `prUrl` BEFORE step 3, then call
+   `kangentic_link_pr` with the task ID alone. `kangentic_link_pr` searches the task's stored
+   number first, so without the update it re-links the finished PR even when given the new branch
+   (task #103, PRs #109 then #110), and `/merge-pull-request` then resolves the finished PR too.
 
 If the `kangentic` MCP is unavailable, do not abort: keep going with the PR work, and retry the
 link once it reconnects. If it never returns this run, report the PR number prominently.
