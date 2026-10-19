@@ -1681,9 +1681,11 @@ jobs:
       # production release reaches every user at 100%, every time). Creates or
       # updates the App Store version, attaches this build, fills What's New
       # from store/whatsnew/, sets it to release automatically after approval,
-      # and cancels any planned 7-day phased release. It reports, without
-      # failing on, missing review notes or screenshots: fixing those is what
-      # the gap before submit-app-review's approval is for.
+      # cancels any planned 7-day phased release, and copies any App Review
+      # Information field the version lacks from the newest version that has it
+      # complete. It reports, without failing on, review notes or screenshots
+      # still missing after that: fixing those is what the gap before
+      # submit-app-review's approval is for.
       #
       # Deliberately AFTER the tag step, never between it and the wait step.
       # The tag step has no `if: always()`, so a failure here placed before it

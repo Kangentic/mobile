@@ -1396,7 +1396,10 @@ on 2026-10-15 that a production release reaches every user at 100%, every time. 
    after the spent-build-number tag so a failure here cannot skip the tag. It creates or updates the App Store version, attaches the
    build, fills What's New from `store/whatsnew/whatsnew-<locale>`, sets `releaseType:
    AFTER_APPROVAL` (live as soon as App Review approves) and cancels any planned 7-day phased
-   release. It then reports, without failing, whether the App Review notes and contact details are
+   release. When the version's App Review Information is missing or incomplete, it copies each
+   field the version lacks (contact details, notes, demo account) from the newest other iOS
+   version that has it complete, never overwriting a field already set and logging field names
+   only. It then reports, without failing, whether the App Review notes and contact details are
    present and how many screenshots each localization has. The gap before the next approval is
    where listing screenshots get changed by hand; the script never touches them.
 2. **Submit**, the `submit-app-review` job (`Submit (App Review)`, Ubuntu, no xcrun). It re-applies
@@ -1410,8 +1413,9 @@ upload but cannot reach the API, so the `device` job refuses `appstore` without 
 the archive. Both active team keys were on App Manager when checked in Users and Access on
 2026-10-15, so whichever one `ASC_KEY_ID` names qualifies. **Neither stage has run against Apple
 yet** (2026-10-15). One thing only the first run can answer: whether a version created through the
-API inherits the previous version's screenshots and App Review Information. The stage-1 report
-shows it.
+API inherits the previous version's screenshots. The stage-1 report shows it. Apple does not
+document whether App Review Information is inherited either, which is why stage 1 carries it over
+itself (2026-10-18) rather than leaving a release to stop at stage 2 for a human to retype it.
 
 **`app-store-check.yml` is the read-only preflight for that path.** `gh workflow run
 app-store-check.yml --ref main` (add `-f version=1.2.0` to pick a version) runs the same script

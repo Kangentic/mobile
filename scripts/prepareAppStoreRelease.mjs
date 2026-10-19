@@ -9,7 +9,9 @@
  *   --mode prepare  runs once Apple has accepted the build. It creates or updates
  *                   the App Store version for this release, attaches the build,
  *                   fills What's New from store/whatsnew/, sets releaseType
- *                   AFTER_APPROVAL and cancels any planned phased release.
+ *                   AFTER_APPROVAL, cancels any planned phased release, and
+ *                   carries the App Review Information over from the newest
+ *                   version that has it complete when this one lacks it.
  *   --mode submit   runs after the second approval. It re-applies those
  *                   guarantees, refuses if the review notes or screenshots are
  *                   missing, and submits the version for App Review.
@@ -245,6 +247,18 @@ function summarizeReviewDetail(attributes) {
 }
 
 /**
+ * Every iOS version, with the same `include`s as a single-version read. 200 is
+ * the API's page maximum; the order Apple lists versions in is not documented,
+ * so a caller looking for the newest sorts by createdDate itself.
+ */
+function versionsListPath(appId) {
+  return (
+    `/apps/${appId}/appStoreVersions?filter[platform]=IOS` +
+    '&include=build,appStoreVersionPhasedRelease,appStoreReviewDetail&limit=200'
+  );
+}
+
+/**
  * Reads this release's App Store version, with the build, phased release and
  * review detail it links to, or null when there is none. Read through `include`
  * rather than the phased release's own endpoint, because Apple does not document
@@ -290,6 +304,10 @@ function parseVersionResource(resource, included) {
         }
       : null,
     reviewDetail: reviewDetail ? summarizeReviewDetail(reviewDetail.attributes) : null,
+    reviewDetailId: reviewLinkage?.id ?? null,
+    // The raw attributes, held only so stage 1 can copy them onto a new version.
+    // Never logged or reported: the notes carry the demo pairing code.
+    reviewDetailAttributes: reviewDetail?.attributes ?? null,
   };
 }
 
@@ -420,6 +438,85 @@ async function enforceFullRelease(request, version, buildId) {
   }
 
   return changes;
+}
+
+/**
+ * The App Review Information fields a new version takes from an earlier one.
+ * The contact details and the notes are what stage 2 refuses without; the demo
+ * account fields come along so the copy matches its source.
+ */
+const REVIEW_DETAIL_FIELDS = [
+  'contactFirstName',
+  'contactLastName',
+  'contactPhone',
+  'contactEmail',
+  'demoAccountName',
+  'demoAccountPassword',
+  'demoAccountRequired',
+  'notes',
+];
+
+function isBlankField(value) {
+  return value === undefined || value === null || (typeof value === 'string' && value.trim().length === 0);
+}
+
+function hasCompleteReviewDetail(version) {
+  return Boolean(version.reviewDetail?.hasContact && version.reviewDetail?.hasNotes);
+}
+
+/**
+ * Apple does not document whether a version created through the API inherits
+ * the previous version's App Review Information, and without it stage 2
+ * refuses, which would stop a release for a human to retype details App Store
+ * Connect already holds. So every field this version lacks is copied from the
+ * newest other iOS version whose details are complete. A field already set is
+ * never overwritten, and only field names reach the log.
+ */
+async function carryOverReviewDetail(request, appId, version) {
+  if (hasCompleteReviewDetail(version)) return [];
+
+  const response = await callApi(request, 'GET', versionsListPath(appId), undefined, 'list the App Store versions');
+  const included = response.included ?? [];
+  const source = (response.data ?? [])
+    .map((resource) => parseVersionResource(resource, included))
+    .filter((candidate) => candidate.id !== version.id && hasCompleteReviewDetail(candidate))
+    .sort((first, second) => second.createdDate.localeCompare(first.createdDate))[0];
+  if (!source) return [];
+
+  const current = version.reviewDetailAttributes ?? {};
+  const attributes = Object.fromEntries(
+    REVIEW_DETAIL_FIELDS.filter(
+      (field) => isBlankField(current[field]) && !isBlankField(source.reviewDetailAttributes[field])
+    ).map((field) => [field, source.reviewDetailAttributes[field]])
+  );
+  const copiedFields = Object.keys(attributes);
+  if (copiedFields.length === 0) return [];
+
+  const purpose = `carry the App Review Information over from version ${source.versionString}`;
+  if (version.reviewDetailId) {
+    await callApi(
+      request,
+      'PATCH',
+      `/appStoreReviewDetails/${version.reviewDetailId}`,
+      { data: { type: 'appStoreReviewDetails', id: version.reviewDetailId, attributes } },
+      purpose
+    );
+  } else {
+    await callApi(
+      request,
+      'POST',
+      '/appStoreReviewDetails',
+      {
+        data: {
+          type: 'appStoreReviewDetails',
+          attributes,
+          relationships: { appStoreVersion: { data: { type: 'appStoreVersions', id: version.id } } },
+        },
+      },
+      purpose
+    );
+  }
+  return [`App Review Information carried over from version ${source.versionString} (${copiedFields.join(', ')})`];
 }
 
 async function readLocalizations(request, versionId) {
@@ -573,9 +670,10 @@ function alreadyDoneReport(versionString, buildNumber, state) {
 
 /**
  * Stage 1. Creates or updates the version, attaches the build, fills What's
- * New, and enforces the full-release settings. Never fails on missing review
- * notes or screenshots: it reports them, because fixing them is exactly what the
- * gap before the second approval is for.
+ * New, enforces the full-release settings, and carries over App Review
+ * Information the version lacks. Never fails on missing review notes or
+ * screenshots: it reports them, because fixing them is exactly what the gap
+ * before the second approval is for.
  *
  * @param {{
  *   request: AppStoreConnectRequest,
@@ -615,6 +713,7 @@ export async function prepareAppStoreRelease({
   }
 
   const changes = await enforceFullRelease(request, version, buildId);
+  changes.push(...(await carryOverReviewDetail(request, appId, version)));
 
   // Every locale is checked before any is written, so a missing file fails the
   // stage without leaving half the localizations updated. Trailing whitespace is
@@ -864,17 +963,9 @@ export async function checkAppStoreRelease({ request, bundleId, versionString, l
   const appId = await findAppId(request, bundleId);
   log(`App found for ${bundleId}.`);
 
-  // 200 is the API's page maximum. The order Apple lists versions in is not
-  // documented, so the newest is found by sorting below, which only works if it
-  // is on the page at all.
-  const response = await callApi(
-    request,
-    'GET',
-    `/apps/${appId}/appStoreVersions?filter[platform]=IOS` +
-      '&include=build,appStoreVersionPhasedRelease,appStoreReviewDetail&limit=200',
-    undefined,
-    'list the App Store versions'
-  );
+  // The newest is found by sorting below, which only works if it is on the
+  // page at all (see versionsListPath).
+  const response = await callApi(request, 'GET', versionsListPath(appId), undefined, 'list the App Store versions');
   const included = response.included ?? [];
   const versions = (response.data ?? []).map((resource) => parseVersionResource(resource, included));
   const unreleased = versions.filter((version) => UNRELEASED_VERSION_STATES.has(version.state));
