@@ -285,6 +285,8 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   `build-ios.yml -f submit=appstore`: prepare, then submit; plus the
                   #   read-only `check` mode that app-store-check.yml runs), storeScreenshots.mjs
                   #   (listing captures, driven by /store-screenshots),
+                  #   waitForReleaseGate.mjs (read-only: polls a release run until a gate
+                  #   waits or the run ends, so /release is woken once per gate),
                   #   build-review-pack.mjs (gathers the /code-review diff once into a
                   #   pack in the session scratchpad that every finder reads instead of
                   #   re-gathering, and prints the correctness shards; kept in step with
