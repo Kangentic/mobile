@@ -323,7 +323,9 @@ between a dispatch and something users receive.
    It only reads, and it exits with a `GATE ...` line when a gate is pending, `RUN-COMPLETED ...`
    with every job's result when the run ends (a failed build included), or, with exit 1,
    `POLL-FAILED ...` after ten failed polls in a row (`gh` signed out, a wrong run id), so the
-   session is woken once per gate. No `autoMode.allow` entry in `.claude/settings.json` names it
+   session is woken once per gate. On `RUN-COMPLETED` there is no gate to approve: read the job
+   that failed and report it. On `POLL-FAILED`, fix what it names (`gh auth status`, the run id
+   from item 1) and start it again. No `autoMode.allow` entry in `.claude/settings.json` names it
    yet, so auto mode judges it like any other command. If auto mode refuses it, fall back to a
    foreground `gh run watch <run id> --interval 60 --compact` with the Bash timeout at 600000,
    which serves as a ten-minute wait. Then read the gate:
