@@ -222,10 +222,13 @@ under it.
    `ios.buildNumber` for iOS. Bumping both when releasing one spends a number for nothing, and the
    two are independent. **The default is to release both platforms together** so the stores never
    drift a version apart, and then both counters move in this one PR.
-3. `/pull-request v<version>-vc<n>-b<n>` (or `-vc<n>` / `-b<n>` for one platform) to open it and
-   drive the checks green. With a `chore(release): cut v<version> ...` commit, its Step 1.5 names
-   the branch `chore/v<version>-vc<n>-b<n>`. Releases up to v1.2.0 used a `release/` prefix;
-   nothing keys on it. `tests/unit/appConfigBrand.test.ts` guards the field's shape, and the full
+3. `/pull-request v<major>-<minor>-<patch>-vc<n>-b<n>` (drop `-vc<n>` or `-b<n>` for one platform)
+   to open it and drive the checks green. Its Step 1.5 slugs the name to `[a-z0-9-]`, so write the
+   version with hyphens, as `v1-3-0`, rather than leave the dots to its slugging. With a
+   `chore(release): cut v<version> ...` commit the branch comes out as `chore/v1-3-0-vc18-b20`.
+   Releases up to v1.2.0 used a `release/` prefix; nothing keys on it. **Any follow-up after
+   the release PR is a second PR on the task:** `/pull-request` Step 1.5.4 and 5b open a fresh PR
+   and move the task's stored number, and without that the board resolves the merged release PR. `tests/unit/appConfigBrand.test.ts` guards the field's shape, and the full
    gate including `E2E Tests (Maestro)` still applies.
 4. `/merge-pull-request` to land it.
 
