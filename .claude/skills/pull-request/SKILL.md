@@ -206,14 +206,15 @@ If PR creation fails because one already exists, `gh pr view <branch>` and proce
 
 1. Extract the PR URL and number from the `gh pr create` (or `gh pr view`) output.
 2. Find the task with `kangentic_get_current_task` (pass the worktree cwd + the local branch).
-3. Call `kangentic_link_pr` with the task ID and PR number/URL. This is required, not
-   best-effort: `<branch>` (the PR head) differs from the worktree's local branch by design, so
-   the board's branch-based auto-detection will not find this PR otherwise.
-4. **A second PR on the task** (Step 1.5.4 found the stored one `MERGED` or `CLOSED`): call
-   `kangentic_update_task` with the new `prNumber` and `prUrl` BEFORE step 3, then call
-   `kangentic_link_pr` with the task ID alone. `kangentic_link_pr` searches the task's stored
-   number first, so without the update it re-links the finished PR even when given the new branch
-   (task #103, PRs #109 then #110), and `/merge-pull-request` then resolves the finished PR too.
+3. Link it, by whether this is the task's first PR. Linking is required, not best-effort:
+   `<branch>` (the PR head) differs from the worktree's local branch by design, so the board's
+   branch-based auto-detection will not find this PR otherwise.
+   - **The task's first PR:** call `kangentic_link_pr` with the task ID and PR number/URL.
+   - **A second PR on the task** (Step 1.5.4 found the stored one `MERGED` or `CLOSED`): first
+     call `kangentic_update_task` with the new `prNumber` and `prUrl`, then `kangentic_link_pr`
+     with the task ID alone. `kangentic_link_pr` searches the task's stored number first, so
+     without the update it re-links the finished PR even when given the new branch (task #103,
+     PRs #109 then #110), and `/merge-pull-request` then resolves the finished PR too.
 
 If the `kangentic` MCP is unavailable, do not abort: keep going with the PR work, and retry the
 link once it reconnects. If it never returns this run, report the PR number prominently.

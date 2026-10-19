@@ -176,7 +176,8 @@ Either key lives outside the repo; see the credential inventory in `docs/develop
 workflows run the matching check themselves before building, so this step is about telling the user
 the number in advance, not about enforcement.
 
-Report both the local and the store-side numbers before changing anything.
+Report the local value, the highest tag and the next number for each counter before changing
+anything, plus the store-side numbers when a key is on hand.
 
 **Read the tags, not the comments.** Every successful submit now records what it spent:
 `git tag --list 'android-vc*'` and `git tag --list 'ios-b*'`. Those are written by the submit jobs
@@ -228,8 +229,9 @@ under it.
    `chore(release): cut v<version> ...` commit the branch comes out as `chore/v1-3-0-vc18-b20`.
    Releases up to v1.2.0 used a `release/` prefix; nothing keys on it. **Any follow-up after
    the release PR is a second PR on the task:** `/pull-request` Step 1.5.4 and 5b open a fresh PR
-   and move the task's stored number, and without that the board resolves the merged release PR. `tests/unit/appConfigBrand.test.ts` guards the field's shape, and the full
-   gate including `E2E Tests (Maestro)` still applies.
+   and move the task's stored number, and without that the board resolves the merged release PR.
+   `tests/unit/appConfigBrand.test.ts` guards the field's shape, and the full gate including
+   `E2E Tests (Maestro)` still applies.
 4. `/merge-pull-request` to land it.
 
 **Never `--admin` past a red check to get a release out.** The gate exists precisely for the build
@@ -314,13 +316,17 @@ between a dispatch and something users receive.
 1. Find the run you dispatched:
    `gh run list --workflow <build-android.yml|build-ios.yml> --branch main --limit 1 --json databaseId,createdAt,status`.
    Check `createdAt` is after your dispatch, so you approve the run you started.
-2. Wait until the gate is pending (about 20 to 30 minutes of build first). Run
-   `node scripts/waitForReleaseGate.mjs <run id>` in the background, once per run: it only reads,
-   and exits with a `GATE ...` line when a gate is pending or `RUN-COMPLETED ...` with every job's
-   result when the run ends (a failed build included), so the session is woken once. If auto mode
-   refuses it, the `autoMode.allow` waiting rule in `.claude/settings.json` is missing; fall back to
-   a foreground `gh run watch <run id> --interval 60 --compact` with the Bash timeout at 600000,
-   which serves as a ten-minute wait, then read the gate. Then read it:
+2. Wait until the gate is pending (about 30 minutes of build first for Android, about 17 for iOS).
+   Run `node scripts/waitForReleaseGate.mjs <run id>` in the background, **once per gate**: it
+   exits at the first pending gate, so an iOS App Store run needs a second one, started after the
+   first approval returns, to wake on `Submit (App Review)` (both gates read `app-store-connect`).
+   It only reads, and it exits with a `GATE ...` line when a gate is pending, `RUN-COMPLETED ...`
+   with every job's result when the run ends (a failed build included), or, with exit 1,
+   `POLL-FAILED ...` after ten failed polls in a row (`gh` signed out, a wrong run id), so the
+   session is woken once per gate. No `autoMode.allow` entry in `.claude/settings.json` names it
+   yet, so auto mode judges it like any other command. If auto mode refuses it, fall back to a
+   foreground `gh run watch <run id> --interval 60 --compact` with the Bash timeout at 600000,
+   which serves as a ten-minute wait. Then read the gate:
    `gh api repos/Kangentic/mobile/actions/runs/<run id>/pending_deployments`. Approve only an entry
    whose `environment.name` is the gate you expect and whose `current_user_can_approve` is `true`.
    Take the environment id from this response every time. Never write one down or commit one.
@@ -349,11 +355,12 @@ finished job's log through the API instead: take the job id from
 `gh run view <run id> --json jobs --jq "[.jobs[] | {name, databaseId}]"`, then
 `gh api repos/Kangentic/mobile/actions/jobs/<job id>/logs`, and look for the lines after
 `--mode prepare`. The report covers the review notes, the contact details, and the screenshot
-count per localization. Remind the user that listing screenshots can be changed in App Store Connect now,
-before stage 2. **Do not dispatch another `build-ios.yml -f target=device` run on `main` while the
-second gate waits**, and tell the user the same: the workflow's concurrency group cancels an
-in-progress run, so a second dispatch cancels the one parked at `Submit (App Review)`. Its prepared version
-survives, but stage 2 then has to be re-run or submitted by hand with Add for Review.
+count per localization. Remind the user that listing screenshots can be changed in App Store
+Connect now, before stage 2. **Do not dispatch another `build-ios.yml -f target=device` run on
+`main` while the second gate waits**, and tell the user the same: the workflow's concurrency
+group cancels an in-progress run, so a second dispatch cancels the one parked at
+`Submit (App Review)`. Its prepared version survives, but stage 2 then has to be re-run or
+submitted by hand with Add for Review.
 - **"Approve all gates":** approve stage 2 once stage 1 is green and its report shows nothing
   missing. If something is missing, stop and tell the user instead; stage 2 would refuse anyway.
 - **"Uploads only":** approve `google-play` and the first `app-store-connect` gate, then tell the

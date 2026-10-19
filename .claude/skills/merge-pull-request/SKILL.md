@@ -218,8 +218,9 @@ they drift):
     turn that finishes the reconciliation ends on `PR: merged` instead.
 - Every other stop prints no outcome line, and the card waits in Merge for a person: the main repo
   and detached-HEAD pre-flight stops, a failed `gh auth status`, no PR resolved in Step 0, a
-  stored PR that merged without this worktree's commits (Step 0.5), a Step 2 rebase that aborted, a required check that is red, pending or missing, a merge refused for
-  anything but the missing review, and the realign and Step 4 stops above.
+  stored PR that merged without this worktree's commits (Step 0, item 5), a Step 2 rebase that
+  aborted, a required check that is red, pending or missing, a merge refused for anything but the
+  missing review, and the realign and Step 4 stops above.
 
 The `PR:` prefix marks a pull request outcome, shared with Testing's `PR: ready to merge`. Code
 Review ends on `Verdict: Ready`.
