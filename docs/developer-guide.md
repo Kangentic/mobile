@@ -1450,7 +1450,11 @@ deprecated in API 4.5, so this check is where its removal would surface first. `
 before every App Store release.
 
 `/release` drives the whole flow and can approve the gates itself when the maintainer grants it
-for that release.
+for that release. To learn that a gate is waiting without a polling loop, it runs
+`node scripts/waitForReleaseGate.mjs <run id> [interval seconds]`, which only reads the run, its
+jobs and its `pending_deployments`, and exits with a `GATE ...` line when one is pending or a
+`RUN-COMPLETED ...` line, with every job's result, when the run ends. The approval itself stays a
+separate, deliberate call.
 
 If that environment is ever deleted, **recreate it with a required reviewer before dispatching**.
 GitHub silently auto-creates a missing environment with no protection rules, which would turn the
