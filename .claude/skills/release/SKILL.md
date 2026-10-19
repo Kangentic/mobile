@@ -45,7 +45,7 @@ Then check the resolved release against the table below and **stop with an expla
 blocked.**
 
 **Every row is a claim about external state, so treat it as evidence with an age, not as fact.**
-The table was last revised **2026-10-15**, and each row carries its own date. This matters
+The table was last revised **2026-10-19**, and each row carries its own date. This matters
 because it has already been wrong three times in ways that cost real time: it asserted the Play
 API path was proven when nothing had ever exercised it, it listed data safety as unfilled after
 it had been submitted, and it still called both production paths blocked weeks after both apps
@@ -61,10 +61,10 @@ wastes a 20 minute build and can leave a dangling Play edit.
 | android + internal | **Works** | - |
 | android + closed (alpha) | **Not exercised** (2026-10-07) | Production access means the closed-test gate was passed, but this workflow has never submitted to `alpha`. The `plan` job requires `-f rollout=...` for it. Treat a first dispatch here the way the production row below treats its first one. |
 | android + open (beta) | **Not exercised** (2026-10-07) | Same as closed. |
-| android + production | **Works** (2026-10-07; full-release default since 2026-10-15) | The app is live in production and production access is granted (maintainer, 2026-10-07). Dispatch `-f submit_track=production` with **no rollout**: a full `completed` release to every user, by maintainer decision (2026-10-15). **v1.0.0 (vc15) is the first release this workflow submitted to production itself**; it and v1.1.0 went out as staged rollouts under the old rule and were widened to 100% by hand (v1.1.0 was at 100% by 2026-10-15). Three Console preconditions, all invisible to the Play API: the service account needs **Release to production** under Users and permissions (its July grant was testing tracks only); Publishing overview must hold **no unsent changes**, or the commit fails with "Changes cannot be sent for review automatically"; and **Managed publishing must be off** (it was, checked 2026-10-15), or a committed release waits for a manual Publish. So upload new listing images AFTER the release commits, not before. Either commit failure: fix it, then re-run `submit-play` alone. |
+| android + production | **Works** (2026-10-07; full release proven 2026-10-19) | The app is live in production and production access is granted (maintainer, 2026-10-07). Dispatch `-f submit_track=production` with **no rollout**: a full `completed` release to every user, by maintainer decision (2026-10-15). **v1.0.0 (vc15) is the first release this workflow submitted to production itself**; it and v1.1.0 went out as staged rollouts under the old rule and were widened to 100% by hand (v1.1.0 was at 100% by 2026-10-15). **v1.2.0 (vc17) is the first full `completed` release it submitted** (2026-10-19, run 39182659113, `Submit (Google Play)` in 1m25s, tagged `android-vc17`). Three Console preconditions, all invisible to the Play API: the service account needs **Release to production** under Users and permissions (its July grant was testing tracks only); Publishing overview must hold **no unsent changes**, or the commit fails with "Changes cannot be sent for review automatically"; and **Managed publishing must be off** (it was, checked 2026-10-15), or a committed release waits for a manual Publish. So upload new listing images AFTER the release commits, not before. Either commit failure: fix it, then re-run `submit-play` alone. |
 | ios + TestFlight internal | **Works** | Needs `ASC_API_KEY_BASE64` + `ASC_KEY_ID` + `ASC_ISSUER_ID`, or `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD`, as GitHub secrets. Check with `gh secret list` before promising it. |
 | ios + TestFlight external | **Unverified since 2026-07-28** | Then: needs a Beta App Review plus a beta description, feedback email, and test information. Not revisited since; check App Store Connect. |
-| ios + App Store | **Upload works** (2026-10-07); **the API prepare and submit are unexercised** (2026-10-15) | The app is live on the App Store (maintainer, 2026-10-07). Dispatch `-f target=device -f submit=appstore`. Two stages, each behind its own approval of `app-store-connect`. **Stage 1**, at the end of `Submit (TestFlight)`, creates or updates the App Store version, attaches the build, fills What's New from `store/whatsnew/whatsnew-<locale>`, sets **release automatically after approval** and cancels any planned **7-day phased release**, then reports the review notes, contact details and screenshot counts. **Stage 2**, `Submit (App Review)`, re-applies those settings, refuses without review notes or screenshots, and submits. Nothing has exercised either stage against Apple yet, so say so until the first run reaches WAITING_FOR_REVIEW. It is low-risk: rejecting the second gate leaves a draft version, which can still be submitted by hand with Add for Review. **Needs the ASC API key on the App Manager role**; stage 1 answers a 403 with exactly that. Both active team keys were App Manager when checked (2026-10-15), so this should hold unless the key is replaced. Also unverified: whether a version created through the API inherits the previous version's screenshots. The stage-1 report shows it. App Review Information (the notes carry the reviewer demo pairing code) no longer depends on inheritance: since 2026-10-18 stage 1 copies any field the new version lacks from the newest version that has it complete, and the report names the fields it copied (`Changed: App Review Information carried over from version ...`). **Screenshots stay manual:** when a release needs new ones, upload them between the two approvals. Seven 6.9-inch frames at 1320x2868 are tracked in `store/screenshots/ios/iphone-6.9/`, against an Apple minimum of **one** (10 is the cap, and only the first 3 reach install sheets). Upload via Media Manager targeting 6.9", the source slot every smaller iPhone size is derived from. `ITSAppUsesNonExemptEncryption` is `false` as a reasoned default, not a verified legal conclusion; see the comment in `app.config.ts`. |
+| ios + App Store | **Works end to end** (2026-10-19: v1.2.0 build 19 reached WAITING_FOR_REVIEW through both stages, run 39182661900) | The app is live on the App Store (maintainer, 2026-10-07). Dispatch `-f target=device -f submit=appstore`. Two stages, each behind its own approval of `app-store-connect`. **Stage 1**, at the end of `Submit (TestFlight)`, creates or updates the App Store version, attaches the build, fills What's New from `store/whatsnew/whatsnew-<locale>`, sets **release automatically after approval** and cancels any planned **7-day phased release**, then reports the review notes, contact details and screenshot counts. **Stage 2**, `Submit (App Review)`, re-applies those settings, refuses without review notes or screenshots, and submits. Rejecting the second gate leaves a draft version, which can still be submitted by hand with Add for Review. **Needs the ASC API key on the App Manager role**; stage 1 answers a 403 with exactly that. Both active team keys were App Manager when checked (2026-10-15), so this should hold unless the key is replaced. A version created through the API **inherits** the previous version's screenshots and App Review Information (the notes carry the reviewer demo pairing code): 1.2.0 arrived with 7 screenshots, contact details and notes, and stage 1's carry-over (since 2026-10-18) found nothing to copy. The carry-over stays as a safety net; when it does copy, the report names the fields (`Changed: App Review Information carried over from version ...`). **Screenshots stay manual:** when a release needs new ones, upload them between the two approvals. Seven 6.9-inch frames at 1320x2868 are tracked in `store/screenshots/ios/iphone-6.9/`, against an Apple minimum of **one** (10 is the cap, and only the first 3 reach install sheets). Upload via Media Manager targeting 6.9", the source slot every smaller iPhone size is derived from. `ITSAppUsesNonExemptEncryption` is `false` as a reasoned default, not a verified legal conclusion; see the comment in `app.config.ts`. |
 
 If the user insists on a blocked path after being told, say plainly that it cannot be done and stop.
 Do not attempt a workaround.
@@ -287,7 +287,13 @@ between a dispatch and something users receive.
 1. Find the run you dispatched:
    `gh run list --workflow <build-android.yml|build-ios.yml> --branch main --limit 1 --json databaseId,createdAt,status`.
    Check `createdAt` is after your dispatch, so you approve the run you started.
-2. Wait until the gate is pending (about 20 to 30 minutes of build first), then read it:
+2. Wait until the gate is pending (about 20 to 30 minutes of build first). Run
+   `node scripts/waitForReleaseGate.mjs <run id>` in the background, once per run: it only reads,
+   and exits with a `GATE ...` line when a gate is pending or `RUN-COMPLETED ...` with every job's
+   result when the run ends (a failed build included), so the session is woken once. If auto mode
+   refuses it, the `autoMode.allow` waiting rule in `.claude/settings.json` is missing; fall back to
+   a foreground `gh run watch <run id> --interval 60 --compact` with the Bash timeout at 600000,
+   which serves as a ten-minute wait, then read the gate. Then read it:
    `gh api repos/Kangentic/mobile/actions/runs/<run id>/pending_deployments`. Approve only an entry
    whose `environment.name` is the gate you expect and whose `current_user_can_approve` is `true`.
    Take the environment id from this response every time. Never write one down or commit one.
@@ -303,15 +309,20 @@ same limits as this step: this release's permission, this run, these two environ
 rejection. The rule is not a permission in itself: without the user's yes for this release, do
 not make the call.
 
-The approval call was first written on 2026-10-15 and has not been exercised yet. The rules
-permit it: each environment's required reviewer is the maintainer's own account, self-review is
-not prevented, and `gh` is signed in as that account. If the call is refused, check those three
-with `gh api repos/Kangentic/mobile/environments` and `gh api user`, then hand the gate to the
-user.
+The approval call works: it approved all three gates of v1.2.0 on 2026-10-19 (`google-play`
+and both `app-store-connect` gates), and auto mode allowed it under the rule above. It relies on
+each environment's required reviewer being the maintainer's own account, self-review not being
+prevented, and `gh` being signed in as that account. If the call is ever refused, check those
+three with `gh api repos/Kangentic/mobile/environments` and `gh api user`, then hand the gate to
+the user.
 
-**Between the two iOS App Store gates:** relay stage 1's report from the `Submit (TestFlight)` job
-summary. It covers the review notes, the contact details, and the screenshot count per
-localization. Remind the user that listing screenshots can be changed in App Store Connect now,
+**Between the two iOS App Store gates:** relay stage 1's report from the `Submit (TestFlight)` job.
+`gh run view --log` refuses while the run is still waiting at the second gate, so read the
+finished job's log through the API instead: take the job id from
+`gh run view <run id> --json jobs --jq "[.jobs[] | {name, databaseId}]"`, then
+`gh api repos/Kangentic/mobile/actions/jobs/<job id>/logs`, and look for the lines after
+`--mode prepare`. The report covers the review notes, the contact details, and the screenshot
+count per localization. Remind the user that listing screenshots can be changed in App Store Connect now,
 before stage 2. **Do not dispatch another `build-ios.yml -f target=device` run on `main` while the
 second gate waits**, and tell the user the same: the workflow's concurrency group cancels an
 in-progress run, so a second dispatch cancels the one parked at `Submit (App Review)`. Its prepared version

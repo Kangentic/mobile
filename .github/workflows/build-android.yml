@@ -674,6 +674,10 @@ jobs:
       # production release ships with a blank "What's new". Files are named
       # whatsnew-<BCP 47 locale>; Play caps each at 500 characters, which
       # tests/unit/buildWorkflow.test.ts checks before a build can spend time.
+      #
+      # `tracks`, not `track`: v1 warns that `track` will be removed, refuses
+      # the two together, and reads either one value as a one-track list. Never
+      # leave it empty: an empty `tracks` falls back to production.
       - name: Upload to Google Play (staged rollout)
         if: inputs.rollout != ''
         uses: r0adkll/upload-google-play@v1
@@ -681,7 +685,7 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: com.kangentic.mobile
           releaseFiles: artifact/*
-          track: ${{ inputs.submit_track }}
+          tracks: ${{ inputs.submit_track }}
           status: inProgress
           userFraction: ${{ inputs.rollout }}
           whatsNewDirectory: store/whatsnew
@@ -693,7 +697,7 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: com.kangentic.mobile
           releaseFiles: artifact/*
-          track: ${{ inputs.submit_track }}
+          tracks: ${{ inputs.submit_track }}
           status: completed
           whatsNewDirectory: store/whatsnew
 
