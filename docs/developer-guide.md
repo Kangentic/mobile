@@ -383,8 +383,9 @@ which needs a booted simulator and so cannot be captured from Windows.
 
 Agent sessions in this repo get MCP tools from two different mechanisms. `.mcp.json` wires three
 servers: `context7` (library documentation lookup, a remote HTTP server at
-`https://mcp.context7.com/mcp`, no API key or other setup needed), `firebase` (the Firebase
-CLI's built-in `firebase mcp` server), and `sentry` (a remote HTTP server at
+`https://mcp.context7.com/mcp`; the entry sends `CONTEXT7_API_KEY` as a Bearer token when that
+variable is set, for Context7's higher rate limit, and works anonymously without it), `firebase`
+(the Firebase CLI's built-in `firebase mcp` server), and `sentry` (a remote HTTP server at
 `https://mcp.sentry.dev/mcp/kangentic/mobile`, scoped to the one project rather than the
 org so it brings fewer discovery tools into context; needs a one-time OAuth via `/mcp`).
 Separately, `.claude/settings.json`'s `enabledPlugins` turns on the official Expo plugin, enabled
