@@ -2,7 +2,7 @@ import React from 'react';
 import { render, screen } from '@testing-library/react-native';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import type { TestInstance } from 'test-renderer';
-import { CircleCheckBig, Layers, SquareCode } from 'lucide-react-native';
+import { CircleCheckBig, Layers, Pause, SquareCode } from 'lucide-react-native';
 import { ThemeProvider } from '@/components';
 import { darkTerminalTheme } from '@/components/theme/tokens';
 import { COLUMN_STRIP_HEIGHT, ColumnStrip, type ColumnStripProps } from '@/components/board/ColumnStrip';
@@ -127,21 +127,21 @@ describe('ColumnStrip', () => {
       expect(screen.getByTestId(`${STRIP_TEST_ID}-project`)).toHaveTextContent('storefront-web');
       expect(screen.queryByTestId(`${STRIP_TEST_ID}-workflow`)).toBeNull();
       expect(screen.queryByTestId(`${STRIP_TEST_ID}-workflow-name`)).toBeNull();
-      expect(screen.queryByTestId(`${STRIP_TEST_ID}-workflow-paused`)).toBeNull();
     });
 
     /**
-     * Mutation seen failing: inverting the pause condition (`!workflow.paused`):
-     * the pause mark drew on the running workflow (`queryByTestId` returned the
-     * pause glyph's wrapper where null was expected).
+     * The desktop dropped the pause glyph from both of its workflow strips
+     * (kangentic #877, signed off 2026-10-21: "at 11px it read as stray bars"),
+     * and this band follows it. A paused workflow is still spoken (the label
+     * test below), and a paused task in To Do says Paused in its footer.
+     *
+     * Seen failing against the strip that still drew it: "expected length 0,
+     * received 1" for the Pause glyph under the paused workflow's band.
      */
-    it('marks a paused workflow with the pause glyph and a running one without', async () => {
-      await renderStrip({ workflow: RUNNING_WORKFLOW });
-      expect(screen.queryByTestId(`${STRIP_TEST_ID}-workflow-paused`)).toBeNull();
-      await screen.unmount();
-
+    it('draws no pause glyph for a paused workflow, as the desktop strip draws none', async () => {
       await renderStrip({ workflow: PAUSED_WORKFLOW });
-      expect(screen.getByTestId(`${STRIP_TEST_ID}-workflow-paused`)).toBeTruthy();
+      expect(lucideGlyphs(screen.getByTestId(`${STRIP_TEST_ID}-workflow`), Pause)).toHaveLength(0);
+      expect(screen.getByTestId(`${STRIP_TEST_ID}-workflow-name`)).toHaveTextContent('Ship the checkout');
     });
 
     /**

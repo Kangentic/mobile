@@ -14,7 +14,7 @@ import {
   colorForTextRole,
   type AgentStatusKind,
 } from '@/components';
-import { AutomationsDisabledStrip } from './CardStrip';
+import { AutomationsDisabledStrip, CardStripBleed } from './CardStrip';
 import { cardStatusFooter } from './CardStatusFooter';
 import type { CardSessionDisplay } from './cardSessionDisplay';
 import { ColumnStrip, type StripWorkflow } from './ColumnStrip';
@@ -49,7 +49,7 @@ function prGlyph(glyph: PrChipGlyph, color: string): React.JSX.Element {
 }
 
 export interface TaskCardProps {
-  /** Base testID; sub-parts key off it as `${testID}-status`, `-display-id`, `-pr`, `-snippet`, `-wait`, `-usage`, `-status-bar`, `-column` (whose own parts include `-column-project`), `-automations-disabled` (whose own part is `-automations-disabled-icon`). */
+  /** Base testID; sub-parts key off it as `${testID}-status`, `-display-id`, `-pr`, `-snippet`, `-wait`, `-usage`, `-status-bar`, `-strips` (the bleed around the strips below), `-column` (whose own parts include `-column-project`), `-automations-disabled` (whose own part is `-automations-disabled-icon`). */
   testID: string;
   task: BoardTaskWire;
   /** The title row's status icon. The desktop draws one only for a running session, so callers pass null for every other `sessionDisplay`. */
@@ -112,11 +112,12 @@ export interface TaskCardProps {
   waiting?: WorkflowWaitingFooter | null;
   /**
    * The task's column automations are disabled (protocol 0.22.0): the
-   * desktop's "Automations disabled" strip, in the band's slot. Drawn only when
-   * no `columnStrip` is passed, as one slot holds one band. The board is where
-   * it can show: a workflow task never carries the switch, and the Agents feed
-   * always draws its own band, where the desktop's Agent Monitor shows no
-   * strip either.
+   * desktop's "Automations disabled" strip across the top of the card. With a
+   * `columnStrip` it stacks above that band, as the desktop's Agent Monitor
+   * card stacks it above its project strip (kangentic #877), so a held Agents
+   * card is one strip taller than its neighbours, as the desktop's is. The
+   * flag alone decides, as on the desktop: a workflow task never carries it,
+   * since joining a workflow clears it.
    */
   automationsDisabled?: boolean;
   /**
@@ -137,7 +138,9 @@ export interface TaskCardProps {
  * line, the labels row, and the footer (the usage bar, or the session's state
  * as the desktop card's footer shows it: Queued, Paused, a step) - the two screens render
  * nearly identical cards. The Agents feed adds one thing: the band across the
- * top naming the project, the wait time and the column's step track.
+ * top naming the project, the wait time and the column's step track. A held
+ * task wears the automations strip on either screen, above the band if the
+ * card has one.
  */
 export function TaskCard({
   testID,
@@ -181,24 +184,29 @@ export function TaskCard({
 
   return (
     <Card testID={testID} onPress={onPress} onLongPress={onLongPress}>
-      {/* Outside the Stack on purpose: the band sets its own 8 below it
-          (the desktop's gap), and the Stack's xs would add to that. */}
-      {columnStrip ? (
-        <ColumnStrip
-          column={columnStrip.column}
-          track={columnStrip.track}
-          projectName={columnStrip.projectName}
-          workflow={columnStrip.workflow ?? null}
-          waitingSinceMs={columnStrip.waitingSinceMs}
-          waitTestID={`${testID}-wait`}
-          testID={`${testID}-column`}
-        />
-      ) : automationsDisabled ? (
-        <AutomationsDisabledStrip testID={`${testID}-automations-disabled`} />
+      {/* Outside the Stack on purpose: the bleed sets its own 8 below the
+          strips (the desktop's gap), and the Stack's xs would add to that.
+          The automations strip goes on top, as the desktop's Agent Monitor
+          card stacks it above its project strip (kangentic #877). */}
+      {automationsDisabled || columnStrip ? (
+        <CardStripBleed testID={`${testID}-strips`}>
+          {automationsDisabled ? <AutomationsDisabledStrip testID={`${testID}-automations-disabled`} /> : null}
+          {columnStrip ? (
+            <ColumnStrip
+              column={columnStrip.column}
+              track={columnStrip.track}
+              projectName={columnStrip.projectName}
+              workflow={columnStrip.workflow ?? null}
+              waitingSinceMs={columnStrip.waitingSinceMs}
+              waitTestID={`${testID}-wait`}
+              testID={`${testID}-column`}
+            />
+          ) : null}
+        </CardStripBleed>
       ) : null}
-      {/* AFTER the strip: later siblings paint on top, and the strip's fill is
-          opaque, so an overlay ahead of it would tint every part of the card
-          except the band. Still ahead of the Stack, so the text reads over the
+      {/* AFTER the strips: later siblings paint on top, and a strip's fill is
+          opaque, so an overlay ahead of them would tint every part of the card
+          except the strips. Still ahead of the Stack, so the text reads over the
           tint as it always has. */}
       {overlay}
       <Stack gap="xs">

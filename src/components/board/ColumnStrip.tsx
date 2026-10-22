@@ -1,6 +1,6 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
-import { Folder, Pause } from 'lucide-react-native';
+import { Folder } from 'lucide-react-native';
 import type { BoardColumnWire } from '@kangentic/protocol';
 import { Text, useTheme } from '@/components';
 import { CARD_STRIP_GROUP_GAP, CARD_STRIP_HEIGHT, CardStrip } from './CardStrip';
@@ -14,8 +14,9 @@ import { WorkflowGlyph } from './WorkflowGlyph';
  * The band's contents and track are the desktop's own measurements, copied 1:1
  * from the workflow card strip (kangentic #732, WorkflowStrip.tsx /
  * WorkflowCanvasCard.tsx), and the project half is #732's project row. Its
- * frame is the shared CardStrip's. They are deliberately literal rather than
- * spacing tokens: the token scale has no 5 or 10, and rounding to it is
+ * look is the shared CardStrip's, and its place on the card is the
+ * CardStripBleed the card wraps it in. They are deliberately literal rather
+ * than spacing tokens: the token scale has no 5 or 10, and rounding to it is
  * exactly the drift this component exists to avoid.
  *
  * The track is the one the desktop approved on 2026-10-07 (#732's design
@@ -28,10 +29,9 @@ import { WorkflowGlyph } from './WorkflowGlyph';
 export const COLUMN_STRIP_HEIGHT = CARD_STRIP_HEIGHT;
 const PROJECT_ICON_SIZE = 12;
 const PROJECT_ICON_GAP = 6;
-/** The desktop board strip's workflow label (WorkflowTaskCardBody.tsx): a 12 glyph, a 5 gap, and an 11 pause glyph when paused. */
+/** The desktop board strip's workflow label (WorkflowTaskCardBody.tsx): a 12 glyph and a 5 gap. */
 const WORKFLOW_ICON_SIZE = 12;
 const WORKFLOW_LABEL_GAP = 5;
-const WORKFLOW_PAUSE_SIZE = 11;
 const GLYPH_SIZE = 12;
 const GLYPH_STROKE = 1.75;
 /** The Board chip bar's and session header's dot (ColumnChipBar, TaskHeader), so the fallback is one shape everywhere. */
@@ -59,10 +59,15 @@ export interface ColumnStripProps {
   projectName: string | null;
   /**
    * The task's workflow, which takes the left side in place of the project
-   * (design screen 1, decision A1): the workflow's glyph in its color, its
-   * name, and the desktop's pause glyph while it is paused. The project is then
-   * only spoken. Absent or null for an ordinary task, and in the workflow view,
-   * whose cards name their project as the desktop's canvas does.
+   * (design screen 1, decision A1): the workflow's glyph in its color and its
+   * name. The project is then only spoken. Absent or null for an ordinary task,
+   * and in the workflow view, whose cards name their project as the desktop's
+   * canvas does.
+   *
+   * No pause glyph while the workflow is paused, as the desktop draws none on
+   * either of its cards since kangentic #877 (signed off 2026-10-21: at 11 px
+   * it read as stray bars). A paused workflow is still spoken here, and a
+   * paused task in To Do says Paused in its footer.
    */
   workflow?: StripWorkflow | null;
   /**
@@ -88,7 +93,7 @@ export interface ColumnStripProps {
 }
 
 /**
- * The Agents row's top band, the card's status line: where the task lives on
+ * The Agents row's column band, the card's status line: where the task lives on
  * the left (the project); how long it has waited on you, then where it is in
  * the flow, on the right (the wait time, then the step track with its current
  * step marked by the column's own icon). The desktop's rule for its strip
@@ -112,6 +117,13 @@ export interface ColumnStripProps {
  * row by the band's height the moment the board landed and shift every card
  * below it, which is the movement the row's fixed snippet slot already exists
  * to prevent. The desktop never drops its strip either.
+ *
+ * A held task's card (column automations disabled) stacks the automations
+ * strip above this band, as the desktop's Agent Monitor card does (kangentic
+ * #877), so it is one strip taller than its neighbours. That height follows the
+ * switch, which a person flips, and the board row, which arrives with the
+ * labels row and the PR chip the stand-in lacks too. Nothing the agent streams
+ * moves it.
  *
  * It drops the marker on "no column resolves", never on a session swap: a
  * column move IS a swap, and that is precisely when the new column should show.
@@ -140,11 +152,6 @@ export const ColumnStrip = React.memo(function ColumnStrip({
           <Text variant="caption" color="secondary" numberOfLines={1} style={styles.projectName} testID={`${testID}-workflow-name`}>
             {workflow.title}
           </Text>
-          {workflow.paused ? (
-            <View testID={`${testID}-workflow-paused`}>
-              <Pause size={WORKFLOW_PAUSE_SIZE} color={theme.colors.textMuted} />
-            </View>
-          ) : null}
         </View>
       ) : projectName !== null ? (
         <View style={styles.project}>

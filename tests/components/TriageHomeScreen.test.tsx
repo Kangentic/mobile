@@ -461,6 +461,80 @@ describe('TriageHomeScreen', () => {
   });
 
   /**
+   * A held task (column automations disabled, protocol 0.22.0) wears the
+   * Board's "Automations disabled" strip on the feed too, stacked above the
+   * card's band, as the desktop's Agent Monitor card stacks it (kangentic
+   * #877). Only `true` draws it: null is a desktop older than the field.
+   *
+   * Seen failing against rows that did not pass the switch to the card: each
+   * `true` case read "Expected: true, Received: false" (the band drew, the
+   * strip did not), on both the session row and the sessionless one.
+   */
+  describe('the automations strip', () => {
+    function setTaskOne(fields: Partial<BoardTaskWire>): void {
+      useBoardStore.setState((state) => {
+        const board = state.boardsByProjectId['project-1'];
+        if (board === undefined) throw new Error('seedStores did not seed project-1');
+        return {
+          boardsByProjectId: {
+            ...state.boardsByProjectId,
+            'project-1': { ...board, tasksById: { 'task-1': { ...board.tasksById['task-1'], ...fields } } },
+          },
+        };
+      });
+    }
+
+    it.each([
+      { automationsDisabled: true, drawn: true },
+      { automationsDisabled: false, drawn: false },
+      { automationsDisabled: null, drawn: false },
+    ])("stacks the strip above a session card's band when the switch reads $automationsDisabled: $drawn", async ({ automationsDisabled, drawn }) => {
+      setTaskOne({ automations_disabled: automationsDisabled });
+      await renderHome();
+      await act(async () => {});
+
+      expect(screen.getByTestId('activity-row-sess-1-column-project')).toHaveTextContent('Alpha');
+      expect(screen.queryByTestId('activity-row-sess-1-automations-disabled') !== null).toBe(drawn);
+    });
+
+    /**
+     * A session whose task is not on the board yet gets a stand-in task that
+     * cannot tell whether column automations are held, so its card draws no
+     * strip: only a located task's switch is ever read.
+     *
+     * Seen failing with the row's prop mutated to
+     * `locatedTask === null || locatedTask.automations_disabled === true`:
+     * "expect(received).toBeNull()" on the strip, which drew. Only this case
+     * failed; the it.each cases above and below still passed, since each
+     * seeds a located task.
+     */
+    it('draws no strip on the fallback card, whose stand-in task cannot tell', async () => {
+      useBoardStore.setState((state) => ({
+        boardsByProjectId: { ...state.boardsByProjectId, 'project-1': { ...state.boardsByProjectId['project-1'], tasksById: {} } },
+      }));
+      await renderHome();
+      await act(async () => {});
+
+      // The card rendered (its band is drawn) and it is the stand-in's.
+      expect(screen.getByText('Untitled task')).toBeTruthy();
+      expect(screen.getByTestId('activity-row-sess-1-column-project')).toHaveTextContent('Alpha');
+      expect(screen.queryByTestId('activity-row-sess-1-automations-disabled')).toBeNull();
+    });
+
+    it.each([
+      { automationsDisabled: true, drawn: true },
+      { automationsDisabled: false, drawn: false },
+    ])("stacks it on a paused card with no session when the switch reads $automationsDisabled: $drawn", async ({ automationsDisabled, drawn }) => {
+      useActivityStore.getState().reset();
+      setTaskOne({ session_id: null, resumable: true, automations_disabled: automationsDisabled });
+      await renderHome();
+
+      expect(screen.getByTestId('task-row-task-1-column-project')).toHaveTextContent('Alpha');
+      expect(screen.queryByTestId('task-row-task-1-automations-disabled') !== null).toBe(drawn);
+    });
+  });
+
+  /**
    * The desktop Agent Monitor's groups, with Queued as its own section: Idle
    * (waiting on you), Active, Queued, then Paused for suspended sessions only.
    * The queued and paused entries are seeded idle-and-live, so nothing about
