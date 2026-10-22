@@ -1,6 +1,8 @@
 import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import { ThemeProvider } from '@/components';
+import { darkTerminalTheme } from '@/components/theme/tokens';
 import { CommandTerminalRow } from '@/screens/home/CommandTerminalRow';
 import { useActivityStore, type SessionActivityEntry } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
@@ -85,6 +87,30 @@ describe('CommandTerminalRow', () => {
       await renderRow();
 
       expect(screen.getByTestId(`${ROW}-band-project`)).toHaveTextContent('Alpha');
+    });
+
+    /**
+     * The band is flush to the card's edges, as a task card's is: the card pads
+     * its content by md and the CardStripBleed around the band cancels it, so
+     * the band itself carries no margin of its own.
+     *
+     * Seen failing with the CardStripBleed swapped for a plain View: the bleed
+     * lost its margins ("Expected: -12, Received: undefined" on marginTop).
+     */
+    it('sits in the bleed that cancels the card padding, carrying no margin of its own', async () => {
+      snapshotTerminal({ activity: { state: 'thinking', reason: null } });
+      await renderRow();
+
+      // A bleed that lost its style flattens to undefined, so read through `?.` to fail as a value mismatch.
+      const bleed = StyleSheet.flatten(screen.getByTestId(`${ROW}-strips`).props.style as StyleProp<ViewStyle>) as ViewStyle | undefined;
+      expect(bleed?.marginTop).toBe(-darkTerminalTheme.spacing.md);
+      expect(bleed?.marginHorizontal).toBe(-darkTerminalTheme.spacing.md);
+
+      const band = screen.getByTestId(`${ROW}-band`);
+      const bandStyle = StyleSheet.flatten(band.props.style as StyleProp<ViewStyle>) as ViewStyle;
+      expect(bandStyle.marginTop).toBeUndefined();
+      expect(bandStyle.marginHorizontal).toBeUndefined();
+      expect(band.parent?.props.testID).toBe(`${ROW}-strips`);
     });
   });
 
