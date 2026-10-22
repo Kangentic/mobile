@@ -254,12 +254,3 @@ export function groupWorkflowMembers(input: WorkflowGroupingInput): WorkflowSect
       }),
     }));
 }
-
-/** What each task of a workflow is doing, for the view's counts. */
-export type WorkflowMemberActivity = 'idle' | 'active' | 'waiting' | 'done';
-
-export function workflowTally(activities: readonly WorkflowMemberActivity[]): Record<WorkflowMemberActivity, number> {
-  const tally: Record<WorkflowMemberActivity, number> = { idle: 0, active: 0, waiting: 0, done: 0 };
-  for (const activity of activities) tally[activity] += 1;
-  return tally;
-}

@@ -55,10 +55,12 @@ export function WorkflowStateChip({ state, testID }: { state: WorkflowStateName;
 }
 
 /**
- * The line every workflow names itself with below its title (design screen 6):
- * the state chip, then the desktop's count, "1 of 6" once started and "5 tasks"
- * before. The same two parts in the same order on the Workflows sheet and the
- * workflow view's header. The count is left out until it is known.
+ * The line a Workflows sheet row names its workflow with below its title
+ * (design screen 6): the state chip, then the desktop's count, "1 of 6" once
+ * started and "5 tasks" before, as the desktop's picker rows pair them. The
+ * count is left out until it is known. The workflow view's header carries
+ * neither (task #124): its Pause or Resume names the state, as the desktop's
+ * header buttons do, and its sections carry the counts.
  */
 export function WorkflowSummary({
   state,
