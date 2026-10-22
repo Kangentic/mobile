@@ -557,7 +557,8 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
   A stack trace, the exception type and message, app version, and the SDK's standard device and
   OS context. For a failure the app caught and handled, strictly less: which part of the app
   caught it (a fixed site label), the error's class name, the capability verb if one was
-  involved, and the stack frames - never the message, which is replaced by the site label
+  involved, the desktop's refusal code if it sent one (a fixed protocol label such as
+  `unknown-session`), and the stack frames - never the message, which is replaced by the site label
   before the SDK sees it (`reportHandledError` in `src/observability/crashReporting.ts`).
   That context is wider than model and OS version alone: it is the platform's normal
   diagnostic block, and includes things like battery level, free memory and storage, screen

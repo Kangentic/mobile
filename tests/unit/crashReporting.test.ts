@@ -656,8 +656,8 @@ describe('reportHandledError', () => {
     });
   }
 
-  function capabilityErrorLike(message: string, verb: string): Error {
-    return Object.assign(new Error(message), { name: 'CapabilityError', verb });
+  function capabilityErrorLike(message: string, verb: string, code?: unknown): Error {
+    return Object.assign(new Error(message), { name: 'CapabilityError', verb, ...(code !== undefined ? { code } : {}) });
   }
 
   it('does not call Sentry.captureException when the module never initialised', async () => {
@@ -731,6 +731,67 @@ describe('reportHandledError', () => {
 
     expect(capturedCall().context.tags).toEqual({ site: 'create-task', errorName: 'CapabilityError' });
     expect(capturedCallText()).not.toContain('rm -rf');
+  });
+
+  it('tags and fingerprints a refusal code when it is one of the protocol codes', async () => {
+    // Sentry MOBILE-C could not say which refusal fired: the door drops the
+    // desktop's text by design, so the code is the only thing that can.
+    const crashReporting = await loadInitialisedCrashReporting();
+
+    crashReporting.reportHandledError('composer-send', capabilityErrorLike('peer text', 'send-user-message', 'unknown-session'));
+
+    expect(capturedCall().context.tags).toEqual({
+      site: 'composer-send',
+      errorName: 'CapabilityError',
+      verb: 'send-user-message',
+      code: 'unknown-session',
+    });
+    expect(capturedCall().context.fingerprint).toEqual(['handled', 'composer-send', 'CapabilityError', 'send-user-message', 'unknown-session']);
+  });
+
+  it('adds no code tag to an uncoded refusal, and keeps its fingerprint exactly as before', async () => {
+    // Appending the code only when present is what keeps every existing
+    // handled issue (MOBILE-C included) grouped where it already is.
+    const crashReporting = await loadInitialisedCrashReporting();
+
+    crashReporting.reportHandledError('composer-send', capabilityErrorLike('peer text', 'send-user-message'));
+
+    expect(capturedCall().context.tags).toEqual({ site: 'composer-send', errorName: 'CapabilityError', verb: 'send-user-message' });
+    expect(capturedCall().context.fingerprint).toEqual(['handled', 'composer-send', 'CapabilityError', 'send-user-message']);
+  });
+
+  it.each([
+    ['an arbitrary peer string', 'rm -rf /'],
+    ['a numeric code, as fflate sets one', 3],
+    ['an inherited Object.prototype key', 'constructor'],
+  ])('omits the code tag when the field is %s rather than a protocol code', async (_label, code) => {
+    // The wire decoder accepts any string as `code`, and other errors carry a
+    // `code` field of their own, so only the protocol's closed list is tagged.
+    const crashReporting = await loadInitialisedCrashReporting();
+
+    crashReporting.reportHandledError('composer-send', capabilityErrorLike('peer text', 'send-user-message', code));
+
+    expect(capturedCall().context.tags).toEqual({ site: 'composer-send', errorName: 'CapabilityError', verb: 'send-user-message' });
+    expect(capturedCall().context.fingerprint).toEqual(['handled', 'composer-send', 'CapabilityError', 'send-user-message']);
+    expect(capturedCallText()).not.toContain('rm -rf');
+  });
+
+  it('tags every refusal code the installed protocol package exports', async () => {
+    // The door's list is checked against the CapabilityErrorCode union at
+    // compile time; this checks it against the package's runtime constants.
+    const protocol: Record<string, unknown> = await import('@kangentic/protocol');
+    const exportedCodes = Object.entries(protocol)
+      .filter(([exportName]) => exportName.endsWith('_ERROR_CODE'))
+      .map(([, value]) => value);
+    expect(exportedCodes.length).toBeGreaterThan(0);
+    const crashReporting = await loadInitialisedCrashReporting();
+
+    for (const code of exportedCodes) {
+      crashReporting.reportHandledError('composer-send', capabilityErrorLike('peer text', 'send-user-message', code));
+    }
+
+    const taggedCodes = sentryState.captureException.mock.calls.map((_call, index) => capturedCall(index).context.tags?.code);
+    expect(taggedCodes).toEqual(exportedCodes);
   });
 
   it('fingerprints on the site, class name and verb, never on the message', async () => {
@@ -848,6 +909,20 @@ describe('reportHandledError', () => {
     // cooldown, is suppressed - proving the two calls above were not simply
     // both let through regardless of key.
     crashReporting.reportHandledError('create-task', capabilityErrorLike('two again', 'read-diff'));
+    expect(sentryState.captureException).toHaveBeenCalledTimes(2);
+  });
+
+  it('keys the rate limit on the refusal code as well, so each refusal kind gets its own slot', async () => {
+    vi.useFakeTimers();
+    const crashReporting = await loadInitialisedCrashReporting();
+
+    crashReporting.reportHandledError('composer-send', capabilityErrorLike('one', 'send-user-message', 'unknown-session'));
+    expect(sentryState.captureException).toHaveBeenCalledTimes(1);
+
+    crashReporting.reportHandledError('composer-send', capabilityErrorLike('two', 'send-user-message', 'unsupported-verb'));
+    expect(sentryState.captureException).toHaveBeenCalledTimes(2);
+
+    crashReporting.reportHandledError('composer-send', capabilityErrorLike('one again', 'send-user-message', 'unknown-session'));
     expect(sentryState.captureException).toHaveBeenCalledTimes(2);
   });
 

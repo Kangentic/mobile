@@ -3123,8 +3123,8 @@ per month, 30-day retention, one seat. Nothing is sampled down, because at this 
 every error is worth having. Volume is controlled instead by not generating noise -
 `ignoreErrors` drops expected transport churn (a phone loses its socket constantly), tracing and
 session tracking are off, Session Replay is absent, and the handled-error door
-(`reportHandledError`) reports at most one event per site, class and verb per minute and ten per
-launch, so a retry loop cannot drain the month either. Two server-side backstops are worth
+(`reportHandledError`) reports at most one event per site, class, verb and refusal code per minute
+and ten per launch, so a retry loop cannot drain the month either. Two server-side backstops are worth
 setting once in the Sentry UI and are not expressible in code:
 
 1. **Spike Protection**, per project, so one user in a crash loop cannot drain the month.

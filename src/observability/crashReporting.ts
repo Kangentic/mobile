@@ -1,5 +1,5 @@
 import * as Sentry from '@sentry/react-native';
-import { isCapabilityVerb, type CapabilityVerb } from '@kangentic/protocol';
+import { isCapabilityVerb, type CapabilityErrorCode, type CapabilityVerb } from '@kangentic/protocol';
 import { allowlistBreadcrumb, scrubEvent } from './scrubEvent';
 
 /**
@@ -212,10 +212,11 @@ export type HandledErrorSite =
 const HANDLED_ERROR_EXCLUDED_NAMES: ReadonlySet<string> = new Set(['NotConnectedError', 'ChannelDisconnectedError']);
 
 /**
- * A retry loop must not burn the free tier: at most one report per site and
- * class per minute, and ten per launch. Server-side Spike Protection is the
- * backstop for a fleet-wide bug (docs/developer-guide.md). Counts read out
- * of Sentry for a handled site are therefore lower bounds.
+ * A retry loop must not burn the free tier: at most one report per site,
+ * class, verb and refusal code (the fingerprint) per minute, and ten per
+ * launch. Server-side Spike Protection is the backstop for a fleet-wide bug
+ * (docs/developer-guide.md). Counts read out of Sentry for a handled site are
+ * therefore lower bounds.
  */
 const HANDLED_REPORT_COOLDOWN_MS = 60_000;
 const HANDLED_REPORTS_PER_KEY_PER_LAUNCH = 10;
@@ -227,9 +228,33 @@ const FRAME_LINE_PATTERN = /^\s+at\s/;
 const handledReportLastAtMs = new Map<string, number>();
 const handledReportCounts = new Map<string, number>();
 
+/**
+ * The protocol's refusal codes, the closed list a `code` tag may carry. A
+ * record rather than a set so the compiler holds it to the union both ways: a
+ * code the package adds or drops is a type error here until it is reviewed.
+ * Checked at runtime because the wire decoder accepts any string as `code`, so
+ * a CapabilityError's `code` is whatever the peer sent, and other errors carry
+ * a `code` of their own (fflate's numbers, a Keychain error's string).
+ */
+const CAPABILITY_ERROR_CODES = {
+  'unsupported-verb': true,
+  'response-too-large': true,
+  'unknown-project': true,
+  'unknown-session': true,
+  'command-terminal-limit': true,
+  'not-command-terminal': true,
+  'agent-unavailable': true,
+  'command-terminal-start-failed': true,
+} as const satisfies Record<CapabilityErrorCode, true>;
+
+function isCapabilityErrorCode(candidate: unknown): candidate is CapabilityErrorCode {
+  return typeof candidate === 'string' && Object.prototype.hasOwnProperty.call(CAPABILITY_ERROR_CODES, candidate);
+}
+
 interface HandledErrorShape {
   errorName: string;
   verb: CapabilityVerb | null;
+  code: CapabilityErrorCode | null;
   message: string;
   frames: string | null;
 }
@@ -251,16 +276,17 @@ function frameLinesOnly(stack: string | undefined, message: string): string | nu
 }
 
 function describeHandledError(error: unknown): HandledErrorShape {
-  if (!(error instanceof Error)) return { errorName: 'NonError', verb: null, message: '', frames: null };
+  if (!(error instanceof Error)) return { errorName: 'NonError', verb: null, code: null, message: '', frames: null };
   const errorName = SAFE_ERROR_NAME_PATTERN.test(error.name) ? error.name : 'Error';
   // Duck-typed rather than `instanceof CapabilityError`: importing src/channel
   // here would pull the channel/transport module graph into index.js's first
   // import (see HANDLED_ERROR_EXCLUDED_NAMES above - the cost is that graph,
   // not `@kangentic/protocol`, which this file already imports), and the verb
-  // is validated against the protocol's closed list either way.
-  const verbCandidate: unknown = (error as Error & { verb?: unknown }).verb;
+  // and code are validated against the protocol's closed lists either way.
+  const { verb: verbCandidate, code: codeCandidate } = error as Error & { verb?: unknown; code?: unknown };
   const verb = typeof verbCandidate === 'string' && isCapabilityVerb(verbCandidate) ? verbCandidate : null;
-  return { errorName, verb, message: error.message, frames: frameLinesOnly(error.stack, error.message) };
+  const code = isCapabilityErrorCode(codeCandidate) ? codeCandidate : null;
+  return { errorName, verb, code, message: error.message, frames: frameLinesOnly(error.stack, error.message) };
 }
 
 /**
@@ -270,13 +296,16 @@ function describeHandledError(error: unknown): HandledErrorShape {
  *
  * What leaves the device is a synthetic Error - message `handled at <site>`,
  * the original's class name, the original's stack FRAMES - with the tags
- * `site`, `errorName`, and `verb` (only when the field is one of the
- * protocol's ten literals), fingerprinted on those three so grouping is by
- * site and kind, never by message. The original object, its message and its
- * `cause` chain never reach the SDK: a CapabilityError's peer-supplied text,
- * a Keychain error's detail, or a relay-transport string cannot ride out
- * through here. scrubEvent re-asserts that on any event tagged `site`, as a
- * second line of defence.
+ * `site`, `errorName`, `verb` (only when the field is one of the protocol's
+ * verbs) and `code` (only when it is one of the protocol's refusal codes),
+ * fingerprinted on those so grouping is by site and kind, never by message.
+ * The code is appended to the fingerprint only when present, so an uncoded
+ * event keeps the fingerprint it had before the tag existed and every issue
+ * already in Sentry stays grouped where it is. The original object, its
+ * message and its `cause` chain never reach the SDK: a CapabilityError's
+ * peer-supplied text, a Keychain error's detail, or a relay-transport string
+ * cannot ride out through here. scrubEvent re-asserts that on any event
+ * tagged `site`, as a second line of defence.
  *
  * `ignoreErrors` matches the message the SDK is given, which is the synthetic
  * one, so EXPECTED_TRANSPORT_NOISE is applied here against the ORIGINAL
@@ -290,7 +319,8 @@ export function reportHandledError(site: HandledErrorSite, error: unknown): void
   if (HANDLED_ERROR_EXCLUDED_NAMES.has(described.errorName)) return;
   if (EXPECTED_TRANSPORT_NOISE.some((pattern) => pattern.test(described.message))) return;
 
-  const rateKey = `${site}|${described.errorName}|${described.verb ?? ''}`;
+  const codeSuffix: string[] = described.code !== null ? [described.code] : [];
+  const rateKey = [site, described.errorName, described.verb ?? '', ...codeSuffix].join('|');
   const now = Date.now();
   const lastReportedAt = handledReportLastAtMs.get(rateKey);
   if (lastReportedAt !== undefined && now - lastReportedAt < HANDLED_REPORT_COOLDOWN_MS) return;
@@ -313,8 +343,9 @@ export function reportHandledError(site: HandledErrorSite, error: unknown): void
         site,
         errorName: described.errorName,
         ...(described.verb !== null ? { verb: described.verb } : {}),
+        ...(described.code !== null ? { code: described.code } : {}),
       },
-      fingerprint: ['handled', site, described.errorName, described.verb ?? ''],
+      fingerprint: ['handled', site, described.errorName, described.verb ?? '', ...codeSuffix],
     });
   } catch {
     // Reporting must never cascade into the path that was already failing.

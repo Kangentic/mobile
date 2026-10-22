@@ -1,5 +1,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { StyleSheet, View, type TextInput } from 'react-native';
+import { UNKNOWN_SESSION_ERROR_CODE } from '@kangentic/protocol';
+import { CapabilityError } from '@/channel';
 import { IconButton, Row, Text, TextField, useTheme } from '@/components';
 import { sendUserMessage } from '@/connection/actions';
 import { getRetentionProbeVariant } from '@/devsupport/retentionProbe';
@@ -13,6 +15,12 @@ export interface ComposerBarProps {
 }
 
 const COMPOSER_MAX_HEIGHT = 120;
+
+/** The line above the input after a send that did not land: a failure in danger, a session that ended muted. */
+interface ComposerNote {
+  text: string;
+  color: 'danger' | 'muted';
+}
 
 /** Appends dictated text to whatever was typed before dictation began, inserting one space if needed. */
 function joinDictationText(baseText: string, dictatedText: string): string {
@@ -34,7 +42,7 @@ export function ComposerBar({ sessionId }: ComposerBarProps): React.JSX.Element 
   const dictationMode = useSettingsStore((state) => state.dictationMode);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
-  const [errorNote, setErrorNote] = useState<string | null>(null);
+  const [note, setNote] = useState<ComposerNote | null>(null);
   const inputRef = useRef<TextInput>(null);
   // Mirror of `text` for callbacks that must read the latest value without re-binding.
   const textRef = useRef('');
@@ -51,7 +59,7 @@ export function ComposerBar({ sessionId }: ComposerBarProps): React.JSX.Element 
       const trimmedText = messageText.trim();
       if (trimmedText.length === 0) return;
       setSending(true);
-      setErrorNote(null);
+      setNote(null);
       void sendUserMessage(sessionId, trimmedText)
         .then(() => {
           textRef.current = '';
@@ -59,9 +67,18 @@ export function ComposerBar({ sessionId }: ComposerBarProps): React.JSX.Element 
           setText('');
         })
         .catch((error: unknown) => {
+          // Keep the text in both branches, so it can be retried or copied.
+          // The composer renders only while the session looks live, so a send
+          // that lands just after it ended is a normal condition, not a
+          // failure to report (Sentry MOBILE-C). Keyed on the code, never the
+          // text, as stopCommandTerminal does: a desktop that predates the
+          // code keeps the branch below.
+          if (error instanceof CapabilityError && error.code === UNKNOWN_SESSION_ERROR_CODE) {
+            setNote({ text: 'Session ended', color: 'muted' });
+            return;
+          }
           reportHandledError('composer-send', error);
-          // Keep the text so the user can retry.
-          setErrorNote(error instanceof Error ? error.message : 'Message failed to send');
+          setNote({ text: error instanceof Error ? error.message : 'Message failed to send', color: 'danger' });
         })
         .finally(() => setSending(false));
     },
@@ -100,9 +117,9 @@ export function ComposerBar({ sessionId }: ComposerBarProps): React.JSX.Element 
   // lens must not shift the bottom rows by a pixel.
   return (
     <View>
-      {errorNote !== null ? (
-        <Text variant="caption" color="danger" style={{ paddingHorizontal: theme.spacing.xs }}>
-          {errorNote}
+      {note !== null ? (
+        <Text variant="caption" color={note.color} style={{ paddingHorizontal: theme.spacing.xs }} testID="composer-note">
+          {note.text}
         </Text>
       ) : null}
       <Row gap="sm" style={styles.inputRow}>
