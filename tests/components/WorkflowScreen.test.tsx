@@ -14,8 +14,9 @@ import { workflowDetailFixture, workflowMemberFixture, workflowWireFixture } fro
 /**
  * One workflow, as a full screen (protocol 0.21.0, design screen 7, V6): the
  * desktop's workflow canvas turned into a list that reads like the board. The
- * header names it and holds its one Pause or Resume; under it come the tally and
- * then the board's columns in board order, holding only this workflow's tasks.
+ * header is one row (task #124) that names it and holds its one Pause or
+ * Resume; under it come the board's columns in board order, holding only this
+ * workflow's tasks.
  *
  * The workflow below is "Ship the checkout", home project 'project-1', seven
  * tasks spread over the shapes the list has to tell apart:
@@ -24,9 +25,6 @@ import { workflowDetailFixture, workflowMemberFixture, workflowWireFixture } fro
  *   Planning   #5 (a card, working)
  *   Executing  #2 (a card, working), #3 (a card, idle), #6 (compact: its board
  *              is not loaded on this phone)
- *
- * Two agents work and one idles on purpose: with one of each, a tally that
- * swapped the two counts would read the same.
  *   Done       #1 (compact: a finished task opens its run)
  */
 
@@ -130,7 +128,7 @@ function seedBoard(workflowState = 'running', swimlaneOf: Record<string, string>
   });
 }
 
-/** #2 and #5 work and #3 waits on the user, so the tally reads two active and one idle. */
+/** #2 and #5 work and #3 waits on the user. */
 function seedSessions(): void {
   const activity = useActivityStore.getState();
   activity.registerSession('sess-b', 'task-b', HOME_PROJECT_ID);
@@ -183,12 +181,27 @@ describe('WorkflowScreen', () => {
       useWorkflowStore.getState().setDetail(WORKFLOW_ID, shippingDetail());
     });
 
-    it('names the workflow in the header, with its state chip and its count', async () => {
+    /**
+     * One row (task #124): the name on one truncating line and the one control.
+     * Pause names the running state, and the sections below carry the counts,
+     * so the header draws no state chip, count or tally.
+     *
+     * Mutations seen failing: the state chip drawn beside the title
+     * (`<WorkflowStateChip state={state} />`): the header held "Running"; the
+     * title given two lines (`numberOfLines={2}`): "Expected: 1, Received: 2";
+     * and a tally line put back under the header (a caption reading "1 idle"):
+     * it was found.
+     */
+    it('names the workflow in one header row, with no state chip, count or tally', async () => {
       await renderWorkflow();
 
       expect(screen.getByTestId('workflow-title')).toHaveTextContent('Ship the checkout');
-      expect(screen.getByTestId('workflow-summary-state')).toHaveTextContent('Running');
-      expect(screen.getByTestId('workflow-summary-count')).toHaveTextContent('1 of 7');
+      expect(screen.getByTestId('workflow-title').props.numberOfLines).toBe(1);
+      const header = within(screen.getByTestId('workflow-header'));
+      expect(header.getByTestId('workflow-pause')).toBeTruthy();
+      expect(header.queryByText('Running')).toBeNull();
+      expect(header.queryByText(/of 7/)).toBeNull();
+      expect(screen.queryByText(/^\d+ (idle|active|waiting|done)$/)).toBeNull();
     });
 
     /**
@@ -266,47 +279,6 @@ describe('WorkflowScreen', () => {
       await fireEvent(screen.getByTestId('workflow-card-task-b'), 'longPress');
 
       expect(mockPush).toHaveBeenCalledWith({ pathname: '/task-actions', params: { taskId: 'task-b', projectId: 'project-1' } });
-    });
-
-    /**
-     * Mutation seen failing: swapping the arms of `memberActivity`'s final
-     * ternary (a working task counted as idle, an idle one as active): "Expected:
-     * 1 idle, Received: 2 idle". The first fixture had ONE of each, and the same
-     * mutation passed against it, which is why two agents work here.
-     */
-    it('tallies idle, active, waiting and done tasks', async () => {
-      await renderWorkflow();
-
-      expect(screen.getByTestId('workflow-tally-idle')).toHaveTextContent('1 idle');
-      expect(screen.getByTestId('workflow-tally-active')).toHaveTextContent('2 active');
-      // #4 has no agent, #6's board is not loaded, plan-7 is not started.
-      expect(screen.getByTestId('workflow-tally-waiting')).toHaveTextContent('3 waiting');
-      expect(screen.getByTestId('workflow-tally-done')).toHaveTextContent('1 done');
-    });
-
-    /**
-     * A session the desktop has queued, parked or ended runs no turn, so it is
-     * not an agent working or waiting on the user. The two sessions here keep
-     * the activity states they had (#2 thinking, #3 idle) and only their
-     * lifecycle status changes, so a tally that read the activity alone would
-     * count #2 active and #3 idle.
-     *
-     * Mutation seen failing: deleting the line in `memberActivity` that returns
-     * null for a queued, suspended or exited session, so the activity state
-     * alone decided: all three rows failed on the first count ("Expected: 0
-     * idle, Received: 1 idle").
-     */
-    it.each(['suspended', 'queued', 'exited'] as const)('tallies a session that is %s as waiting, whatever its activity says', async (sessionStatus) => {
-      const activity = useActivityStore.getState();
-      activity.applySnapshot('sess-b', 'task-b', HOME_PROJECT_ID, streamSnapshotFixture({ activity: { state: 'thinking', reason: null }, sessionStatus }));
-      activity.applySnapshot('sess-c', 'task-c', HOME_PROJECT_ID, streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus }));
-      await renderWorkflow();
-
-      expect(screen.getByTestId('workflow-tally-idle')).toHaveTextContent('0 idle');
-      expect(screen.getByTestId('workflow-tally-active')).toHaveTextContent('1 active');
-      // #2 and #3 join #4 (no agent), #6 (board not loaded) and plan-7 (not started).
-      expect(screen.getByTestId('workflow-tally-waiting')).toHaveTextContent('5 waiting');
-      expect(screen.getByTestId('workflow-tally-done')).toHaveTextContent('1 done');
     });
 
     /**
@@ -469,10 +441,17 @@ describe('WorkflowScreen', () => {
     /**
      * The board rows are newer than the last read, so the header follows THEM.
      * Here the read still says running while every row already says paused.
+     * The header names no state word while paused either (task #124): Resume
+     * is the whole signal. It is scoped to the header because a task card
+     * below can show its own "Paused" waiting footer.
      *
-     * Mutation seen failing: taking the state from the read alone
+     * Mutations seen failing: taking the state from the read alone
      * (`detail?.state`): the header kept offering Pause ("Unable to find an
-     * element with testID: workflow-resume", with `workflow-pause` in the dump).
+     * element with testID: workflow-resume", with `workflow-pause` in the dump);
+     * and the state chip drawn beside the title only while paused
+     * (`state === 'paused' ? <WorkflowStateChip state={state} /> : null`): the
+     * header held "Paused" (`expect(received).toBeNull()` received the
+     * chip's Text).
      */
     it('follows the board rows rather than the older read for the state', async () => {
       seedBoard('paused');
@@ -481,7 +460,7 @@ describe('WorkflowScreen', () => {
 
       expect(screen.getByTestId('workflow-resume')).toBeTruthy();
       expect(screen.queryByTestId('workflow-pause')).toBeNull();
-      expect(screen.getByTestId('workflow-summary-state')).toHaveTextContent('Paused');
+      expect(within(screen.getByTestId('workflow-header')).queryByText('Paused')).toBeNull();
     });
 
     it('swaps Pause for Resume as the rows report the pause', async () => {
@@ -498,7 +477,15 @@ describe('WorkflowScreen', () => {
       expect(screen.queryByTestId('workflow-pause')).toBeNull();
     });
 
-    it.each(['draft', 'done'] as const)('offers neither for a workflow that is %s', async (state) => {
+    /**
+     * With no button, the header names no state either (task #124, decision
+     * G1): the list shows it, every task planned in To Do or every task in Done.
+     *
+     * Mutation seen failing: the state chip drawn beside the title
+     * (`<WorkflowStateChip state={state} />`): the header held "Not started" and
+     * "Complete".
+     */
+    it.each(['draft', 'done'] as const)('offers neither for a workflow that is %s, and names no state', async (state) => {
       useWorkflowStore
         .getState()
         .setDetail(WORKFLOW_ID, shippingDetail({ state, members: [workflowMemberFixture({ key: 'plan-1', taskId: null, place: 'planned' })] }));
@@ -507,6 +494,7 @@ describe('WorkflowScreen', () => {
       expect(screen.getByTestId('workflow-title')).toHaveTextContent('Ship the checkout');
       expect(screen.queryByTestId('workflow-pause')).toBeNull();
       expect(screen.queryByTestId('workflow-resume')).toBeNull();
+      expect(within(screen.getByTestId('workflow-header')).queryByText(/Not started|Complete/)).toBeNull();
     });
 
     /**
@@ -551,12 +539,11 @@ describe('WorkflowScreen', () => {
   });
 
   describe('before the workflow is read', () => {
-    it('shows placeholders while there is nothing to draw, and no list or tally', async () => {
+    it('shows placeholders while there is nothing to draw, and no list', async () => {
       await renderWorkflow();
 
       expect(screen.getByTestId('workflow-loading')).toBeTruthy();
       expect(screen.queryByTestId('workflow-list')).toBeNull();
-      expect(screen.queryByTestId('workflow-tally')).toBeNull();
       expect(screen.queryByTestId('workflow-read-failed')).toBeNull();
     });
 

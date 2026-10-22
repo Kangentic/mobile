@@ -3,10 +3,9 @@ import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { FlashList } from '@shopify/flash-list';
-import { CircleCheckBig, CirclePause, LoaderCircle } from 'lucide-react-native';
+import { CirclePause } from 'lucide-react-native';
 import type { BoardColumnWire, BoardTaskWire } from '@kangentic/protocol';
 import {
-  AgentStatusIcon,
   Badge,
   Button,
   Card,
@@ -23,33 +22,20 @@ import {
 } from '@/components';
 import { getColumnIcon } from '@/components/board/columnIcons';
 import { WorkflowGlyph } from '@/components/board/WorkflowGlyph';
-import { WorkflowSummary } from '@/components/board/WorkflowStateChip';
 import { openProjectBoard } from '@/connection/actions';
 import { controlWorkflow, fetchWorkflowDetail } from '@/connection/workflowActions';
-import { sectionForEntry, useActivityStore, type SessionActivityEntry } from '@/state/activityStore';
 import { selectColumnsOrdered, useBoardStore, type ProjectBoard } from '@/state/boardStore';
 import { selectWorkflowDetailRead, useWorkflowStore } from '@/state/workflowStore';
 import { normalizeWorkflowState, type WorkflowStateName } from '@/workflow/workflowState';
-import {
-  WORKFLOW_DONE_SECTION_KEY,
-  groupWorkflowMembers,
-  workflowDoneCount,
-  workflowTally,
-  type WorkflowMember,
-  type WorkflowMemberActivity,
-  type WorkflowSection,
-} from '@/workflow/workflowView';
+import { WORKFLOW_DONE_SECTION_KEY, groupWorkflowMembers, type WorkflowMember, type WorkflowSection } from '@/workflow/workflowView';
 import { BoardTaskCard } from '../board/BoardTaskCard';
 
 const HEADER_GLYPH_SIZE = 18;
-const TALLY_GLYPH_SIZE = 12;
 const SECTION_GLYPH_SIZE = 18;
 const BUTTON_GLYPH_SIZE = 16;
 const SKELETON_KEYS = ['workflow-skeleton-1', 'workflow-skeleton-2', 'workflow-skeleton-3'];
 /** How long the view waits after a board change before re-reading the workflow, so a burst of task events costs one read. */
 const REREAD_DEBOUNCE_MS = 400;
-/** A finished task's place in the tally, which no session id can equal. */
-const DONE_TALLY_ENTRY = Symbol('done');
 
 export const WORKFLOW_READ_FAILED_MESSAGE = 'Could not load this workflow';
 
@@ -65,26 +51,21 @@ function rowOf(boardsByProjectId: Record<string, ProjectBoard>, member: Workflow
 }
 
 /**
- * What a task with an agent is doing, for the counts under the header, in the
- * Agents feed's own words: Active while a turn runs, Idle while it waits on
- * the user. A session that is queued, paused or ended is waiting.
- */
-function memberActivity(entry: SessionActivityEntry | undefined): 'active' | 'idle' | null {
-  if (entry === undefined || entry.feedStatus !== 'live') return null;
-  if (entry.sessionStatus === 'queued' || entry.sessionStatus === 'suspended' || entry.sessionStatus === 'exited') return null;
-  return sectionForEntry(entry) === 'working' ? 'active' : 'idle';
-}
-
-/**
  * One workflow, as a full screen (design screen 7, V6, signed off 2026-10-17):
  * the desktop's workflow canvas turned into a list that reads like the board.
  *
- * - The header names the workflow (its glyph, name, the desktop's state chip
- *   and count) and holds its one Pause or Resume, which acts at once with no
- *   confirmation, as the desktop's header does. Planning, Start and Delete
- *   stay on the desktop.
- * - Under it, how many of its tasks are idle, active, waiting and done.
- * - Then the board's columns in board order, holding only this workflow's
+ * - The header is one row (task #124, signed off 2026-10-21): the workflow's
+ *   glyph, its name on one truncating line, and its one Pause or Resume, which
+ *   acts at once with no confirmation, as the desktop's header does. The
+ *   button is what names the state, as the desktop's buttons do; a workflow
+ *   not started or finished has no button and no state word, because the list
+ *   shows it (every task planned in To Do, or every task in Done). There is no
+ *   state chip, count or tally: each section below carries its own count.
+ *   That departs from the desktop's header on purpose: it also shows "N of M
+ *   done", a segmented progress bar and in progress, queued and blocked
+ *   counts, which the phone leaves to the sections. Planning, Start and
+ *   Delete stay on the desktop.
+ * - Under it, the board's columns in board order, holding only this workflow's
  *   tasks, each card the desktop canvas's own (BoardTaskCard's `canvas`
  *   variant). A done task is the Done column's compact card.
  *
@@ -179,31 +160,6 @@ export function WorkflowScreen(): React.JSX.Element {
     return listItems;
   }, [sections, boardsByProjectId]);
 
-  // Each listed task's session, or DONE for a finished one, in list order.
-  const tallySessionIds = useMemo(() => {
-    const sessionIds: (string | typeof DONE_TALLY_ENTRY | null)[] = [];
-    for (const section of sections) {
-      for (const member of section.members) {
-        sessionIds.push(section.key === WORKFLOW_DONE_SECTION_KEY ? DONE_TALLY_ENTRY : (rowOf(boardsByProjectId, member)?.session_id ?? null));
-      }
-    }
-    return sessionIds;
-  }, [sections, boardsByProjectId]);
-  // Joined into a primitive, as the Board header's Workflows button does, so
-  // an activity event for a session outside this workflow does not redraw it.
-  const tallyKey = useActivityStore((state) =>
-    tallySessionIds
-      .map((entry): WorkflowMemberActivity => {
-        if (entry === DONE_TALLY_ENTRY) return 'done';
-        return (entry !== null ? memberActivity(state.bySessionId[entry]) : null) ?? 'waiting';
-      })
-      .join(','),
-  );
-  const tally = useMemo(
-    () => workflowTally(tallyKey.length === 0 ? [] : (tallyKey.split(',') as WorkflowMemberActivity[])),
-    [tallyKey],
-  );
-
   const onLongPressTask = useCallback(
     (task: BoardTaskWire, projectId: string) => {
       router.push({ pathname: '/task-actions', params: { taskId: task.id, projectId } });
@@ -255,17 +211,13 @@ export function WorkflowScreen(): React.JSX.Element {
             borderBottomColor: theme.colors.border,
           },
         ]}
+        testID="workflow-header"
       >
         <IconButton iconName="chevron-back" onPress={() => router.back()} testID="workflow-back" accessibilityLabel="Back" />
         <WorkflowGlyph colorSlot={colorSlot} size={HEADER_GLYPH_SIZE} testID="workflow-glyph" />
-        <Stack gap="xs" style={styles.flex}>
-          <Text variant="bodyStrong" numberOfLines={1} testID="workflow-title">
-            {title}
-          </Text>
-          {state !== null && detail !== null ? (
-            <WorkflowSummary state={state} doneCount={workflowDoneCount(detail)} taskCount={detail.members.length} testID="workflow-summary" />
-          ) : null}
-        </Stack>
+        <Text variant="bodyStrong" numberOfLines={1} style={styles.flex} testID="workflow-title">
+          {title}
+        </Text>
         {state !== null && workflowId !== null && homeProjectId !== null ? (
           <WorkflowControlButton
             state={state}
@@ -300,17 +252,14 @@ export function WorkflowScreen(): React.JSX.Element {
           {routable ? <Button label="Try again" variant="tinted" onPress={reread} testID="workflow-retry" /> : null}
         </Stack>
       ) : (
-        <>
-          <WorkflowTallyRow idle={tally.idle} active={tally.active} waiting={tally.waiting} done={tally.done} />
-          <FlashList<WorkflowListItem>
-            testID="workflow-list"
-            data={items}
-            keyExtractor={(item) => item.key}
-            getItemType={(item) => item.kind}
-            renderItem={renderItem}
-            contentContainerStyle={{ paddingBottom: theme.spacing.xl + insets.bottom }}
-          />
-        </>
+        <FlashList<WorkflowListItem>
+          testID="workflow-list"
+          data={items}
+          keyExtractor={(item) => item.key}
+          getItemType={(item) => item.kind}
+          renderItem={renderItem}
+          contentContainerStyle={{ paddingBottom: theme.spacing.xl + insets.bottom }}
+        />
       )}
     </Screen>
   );
@@ -363,43 +312,6 @@ function WorkflowControlButton({
         </Text>
       </Row>
     </PressScale>
-  );
-}
-
-/** How many of the workflow's tasks are idle, active, waiting and done, at a glance. */
-function WorkflowTallyRow({ idle, active, waiting, done }: { idle: number; active: number; waiting: number; done: number }): React.JSX.Element {
-  const theme = useTheme();
-  return (
-    <Row
-      gap="md"
-      style={[
-        styles.tally,
-        {
-          paddingHorizontal: theme.spacing.md,
-          paddingVertical: theme.spacing.sm,
-          backgroundColor: theme.colors.surface,
-          borderBottomColor: theme.colors.border,
-        },
-      ]}
-      testID="workflow-tally"
-    >
-      <Row gap="xs" style={styles.centered}>
-        <AgentStatusIcon kind="idle-unread" size={TALLY_GLYPH_SIZE} still />
-        <Text variant="caption" color="secondary" testID="workflow-tally-idle">{`${idle} idle`}</Text>
-      </Row>
-      <Row gap="xs" style={styles.centered}>
-        <AgentStatusIcon kind="working" size={TALLY_GLYPH_SIZE} still />
-        <Text variant="caption" color="secondary" testID="workflow-tally-active">{`${active} active`}</Text>
-      </Row>
-      <Row gap="xs" style={styles.centered}>
-        <LoaderCircle size={TALLY_GLYPH_SIZE} color={theme.colors.textMuted} />
-        <Text variant="caption" color="secondary" testID="workflow-tally-waiting">{`${waiting} waiting`}</Text>
-      </Row>
-      <Row gap="xs" style={styles.centered}>
-        <CircleCheckBig size={TALLY_GLYPH_SIZE} color={theme.colors.success} />
-        <Text variant="caption" color="secondary" testID="workflow-tally-done">{`${done} done`}</Text>
-      </Row>
-    </Row>
   );
 }
 
@@ -485,10 +397,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: StyleSheet.hairlineWidth,
-  },
-  tally: {
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    borderBottomWidth: StyleSheet.hairlineWidth,
   },
 });

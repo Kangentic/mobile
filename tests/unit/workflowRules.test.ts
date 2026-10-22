@@ -16,7 +16,8 @@ import {
   workflowSlotNumber,
   workflowStateLabel,
   workflowStripLabel,
-} from '@/workflow/workflowState';import { workflowWaitingFooter } from '@/workflow/workflowWaiting';
+} from '@/workflow/workflowState';
+import { workflowWaitingFooter } from '@/workflow/workflowWaiting';
 import {
   WORKFLOW_DONE_SECTION_KEY,
   groupWorkflowMembers,
@@ -24,7 +25,6 @@ import {
   parseWorkflowList,
   workflowDoneCount,
   workflowRunDepths,
-  workflowTally,
   type WorkflowDetail,
   type WorkflowMember,
 } from '@/workflow/workflowView';
@@ -431,11 +431,5 @@ describe('groupWorkflowMembers (design V6)', () => {
     ];
     const sections = groupWorkflowMembers({ detail: detailOf(members, 'draft'), columnsByProjectId: { 'project-1': columns }, rowFor: () => null });
     expect(sections[0]?.members.map((member) => member.key)).toEqual(['#9', 'plan-a', 'plan-b']);
-  });
-});
-
-describe('workflowTally', () => {
-  it('counts each activity', () => {
-    expect(workflowTally(['idle', 'active', 'waiting', 'waiting', 'done'])).toEqual({ idle: 1, active: 1, waiting: 2, done: 1 });
   });
 });
