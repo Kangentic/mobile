@@ -4584,7 +4584,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
           return ok(request, staticSessionSnapshot(staticState.spec, wantsTerminal, staticState.usageReported) as unknown as JsonValue);
         }
         if (activeSessionId === null || payload.sessionId !== activeSessionId) {
-          return failWith(request, `No such session: ${payload.sessionId}`);
+          return failWithCode(request, 'unknown-session', `No such session: ${payload.sessionId}`);
         }
         if (payload.action === 'transcript-window') {
           const end = Math.min(payload.beforeIndex ?? transcript.length, transcript.length);
@@ -4697,7 +4697,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
           return ok(request, { delivered: true });
         }
         if (activeSessionId === null || payload.sessionId !== activeSessionId) {
-          return failWith(request, `No such session: ${payload.sessionId}`);
+          return failWithCode(request, 'unknown-session', `No such session: ${payload.sessionId}`);
         }
         // Magic dev commands for exercising session-lifecycle paths that a
         // real desktop only hits on a model switch or process exit.
@@ -4858,7 +4858,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
                 const targetState = staticSessionStates.get(payload.sessionId);
                 return targetState ? { sessionId: targetState.spec.sessionId, taskId: targetState.spec.taskId } : null;
               })();
-        if (!terminalTarget) return failWith(request, `No such session: ${payload.sessionId}`);
+        if (!terminalTarget) return failWithCode(request, 'unknown-session', `No such session: ${payload.sessionId}`);
         emit({
           kind: 'terminal',
           sessionId: terminalTarget.sessionId,

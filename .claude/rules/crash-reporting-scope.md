@@ -57,9 +57,13 @@ scrubber is therefore a second line of defence, never the control itself.
   existing pairing already stored, not an attempt at a new ceremony. `site` is a member of the `HandledErrorSite` union, a
   literal and never computed, and it is the only thing a caller supplies besides the error. The
   door forwards no message text and no `cause`; it tags `site`, `errorName` and, for a
-  capability error, `verb`, keeps the stack frames, fingerprints on those three, drops
+  capability error, `verb` and the refusal's `code` (each only when it is one of the protocol's
+  closed literals: the wire decoder accepts any string as `code`, so the door checks it against
+  a record the compiler holds to `CapabilityErrorCode`), keeps the stack frames, fingerprints on
+  those tags (the code is appended only when present, so an uncoded event keeps the fingerprint
+  it had before the tag existed), drops
   `NotConnectedError` and `ChannelDisconnectedError` by name and the transport-noise patterns by
-  the ORIGINAL message, and rate-limits per key (one a minute, ten a launch). `scrubEvent`
+  the ORIGINAL message, and rate-limits per fingerprint (one a minute, ten a launch). `scrubEvent`
   re-redacts every exception value on any event tagged `site`, as the second line. Adding a site
   means adding the literal and asserting the call in that surface's component test, on failure
   and not on success. Sites still owed: MoveTask, EditTask, TaskActions (all but its
@@ -255,13 +259,15 @@ ships as-is. Truncating or genericizing peer-supplied error text at its construc
 the fix if this ever matters; until then it is a named gap, not an unbroken invariant.
 
 **The door trades diagnosability for the redaction, deliberately.** Every bare `Error` caught at
-one site shares one issue (the fingerprint is site, class name, verb), so a Keychain error and a
-JSON error at the same site are told apart only by their stack frames inside it. The fix is a
-typed error at the throw site, which `ChannelDisconnectedError` and `CapabilityTimeoutError` in
-`src/channel/capabilityClient.ts` began; never a message allowlist.
+one site shares one issue (the fingerprint is site, class name, verb, and a refusal code when
+there is one), so a Keychain error and a JSON error at the same site are told apart only by their
+stack frames inside it. The fix is a typed error at the throw site, which
+`ChannelDisconnectedError` and `CapabilityTimeoutError` in `src/channel/capabilityClient.ts`
+began, or a protocol refusal code for a desktop refusal (Sentry MOBILE-C, whose event could not
+say which refusal fired until the desktop sent `unknown-session`); never a message allowlist.
 
 **Counts read out of Sentry for a handled site are lower bounds.** The door reports at most one
-event per site, class and verb per minute and ten per launch, and the SDK's default Dedupe
+event per fingerprint per minute and ten per launch, and the SDK's default Dedupe
 integration drops back-to-back identical events besides. Use them to see THAT a site fails, not
 how often.
 
@@ -286,7 +292,7 @@ how often.
 - **Test (live now):** `tests/unit/scrubEvent.test.ts` locks the scrubber, the `site`-keyed
   redaction and the breadcrumb allowlist, including its default-deny behaviour.
   `tests/unit/crashReporting.test.ts` locks the door's contract (a synthetic error, frames only,
-  the three tags, the fingerprint, the exclusions, the cooldown and cap) and the four
+  the four tags, the fingerprint, the exclusions, the cooldown and cap) and the four
   environments. `tests/unit/buildWorkflow.test.ts` locks the pre-prebuild ordering of the Sentry
   env export on both platforms, the crash-test gates, and asserts no DSN is committed. One
   mechanical consequence for the vitest tier: a test that loads a module importing the door

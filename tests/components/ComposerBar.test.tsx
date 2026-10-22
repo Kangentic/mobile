@@ -1,7 +1,11 @@
 import React from 'react';
+import { StyleSheet, type StyleProp, type TextStyle } from 'react-native';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { UNKNOWN_SESSION_ERROR_CODE } from '@kangentic/protocol';
+import { CapabilityError } from '@/channel';
 import { ThemeProvider } from '@/components';
 import { ComposerBar } from '@/components/composer/ComposerBar';
+import { darkTerminalTheme } from '@/components/theme/tokens';
 import { sendUserMessage } from '@/connection/actions';
 import type { RetentionProbeVariant } from '@/devsupport/retentionProbe';
 import { useChannelStore } from '@/state/channelStore';
@@ -53,6 +57,12 @@ async function renderComposer(): Promise<void> {
   );
 }
 
+/** The color the failure note actually renders in, read off the real `Text` style. */
+function composerNoteColor(): string | undefined {
+  const noteStyle = StyleSheet.flatten(screen.getByTestId('composer-note').props.style as StyleProp<TextStyle>) as TextStyle;
+  return noteStyle.color as string | undefined;
+}
+
 describe('ComposerBar', () => {
   beforeEach(() => {
     mockSendUserMessage.mockReset();
@@ -97,6 +107,40 @@ describe('ComposerBar', () => {
     await fireEvent.press(screen.getByTestId('composer-send'));
     expect(await screen.findByText('Not connected')).toBeTruthy();
     expect(screen.getByTestId('composer-input').props.value).toBe('hello agent');
+    expect(mockReportHandledError).toHaveBeenCalledWith('composer-send', failure);
+  });
+
+  it('says the session ended, and reports nothing, when the desktop refuses with unknown-session', async () => {
+    // Sentry MOBILE-C: the composer renders only while the phone believes the
+    // session is live, so a send that lands just after it ended on the desktop
+    // is a normal condition, not a defect, and the raw refusal text is noise.
+    mockSendUserMessage.mockRejectedValue(
+      new CapabilityError('send-user-message', 'No such session: sess-1', UNKNOWN_SESSION_ERROR_CODE),
+    );
+    await renderComposer();
+    await fireEvent.changeText(screen.getByTestId('composer-input'), 'hello agent');
+    await fireEvent.press(screen.getByTestId('composer-send'));
+    expect(await screen.findByText('Session ended')).toBeTruthy();
+    expect(screen.queryByText(/No such session/)).toBeNull();
+    // An ended session is a normal condition, so the note is muted, never the
+    // danger red that marks a real failure. The text alone would not catch a swap.
+    expect(composerNoteColor()).toBe(darkTerminalTheme.colors.textMuted);
+    expect(screen.getByTestId('composer-input').props.value).toBe('hello agent');
+    expect(mockReportHandledError).not.toHaveBeenCalled();
+  });
+
+  it('still shows and reports an uncoded refusal, matching on the code and never the text', async () => {
+    // A desktop that predates the code sends only the text. Branching on it
+    // would be a message match, which the door's rule names as debt.
+    const failure = new CapabilityError('send-user-message', 'No such session: sess-1');
+    mockSendUserMessage.mockRejectedValue(failure);
+    await renderComposer();
+    await fireEvent.changeText(screen.getByTestId('composer-input'), 'hello agent');
+    await fireEvent.press(screen.getByTestId('composer-send'));
+    expect(await screen.findByText('No such session: sess-1')).toBeTruthy();
+    expect(screen.queryByText('Session ended')).toBeNull();
+    // A refusal that is not the ended-session code is a real failure: danger red.
+    expect(composerNoteColor()).toBe(darkTerminalTheme.colors.danger);
     expect(mockReportHandledError).toHaveBeenCalledWith('composer-send', failure);
   });
 
