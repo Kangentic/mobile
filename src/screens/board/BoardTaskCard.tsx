@@ -78,7 +78,8 @@ export function useOpenBoardTask(task: BoardTaskWire, projectId: string): () => 
  *
  * A workflow task waiting in To Do also gets the desktop's waiting footer, and
  * a task whose column automations are disabled (protocol 0.22.0) gets the
- * desktop's "Automations disabled" strip in the band's slot.
+ * desktop's "Automations disabled" strip across the top, above the band when
+ * the card has one (a workflow task never carries the switch).
  */
 export const BoardTaskCard = React.memo(function BoardTaskCard({
   task,

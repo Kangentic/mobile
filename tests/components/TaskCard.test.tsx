@@ -816,23 +816,55 @@ describe('TaskCard', () => {
       const strip = StyleSheet.flatten(screen.getByTestId(AUTOMATIONS_STRIP).props.style as StyleProp<ViewStyle>) as ViewStyle;
       expect(strip.height).toBe(COLUMN_STRIP_HEIGHT);
       expect(strip.backgroundColor).toBe(darkTerminalTheme.colors.surfaceInset);
-      expect(strip.marginTop).toBe(-darkTerminalTheme.spacing.md);
-      expect(strip.marginHorizontal).toBe(-darkTerminalTheme.spacing.md);
     });
 
-    it('draws no strip for a task whose automations run', async () => {
+    /**
+     * The desktop's `cardStripBleedClass`: one wrapper takes the card's edges, so no strip carries a margin.
+     *
+     * Seen failing with `marginBottom: STRIP_GAP_BELOW` deleted from the bleed's
+     * style: "Expected: 8, Received: undefined" on marginBottom.
+     */
+    it('sits in the bleed that cancels the card padding, carrying no margin of its own', async () => {
+      await renderTaskCard({ automationsDisabled: true });
+      const bleed = StyleSheet.flatten(screen.getByTestId(`${BASE_TEST_ID}-strips`).props.style as StyleProp<ViewStyle>) as ViewStyle;
+      expect(bleed.marginTop).toBe(-darkTerminalTheme.spacing.md);
+      expect(bleed.marginHorizontal).toBe(-darkTerminalTheme.spacing.md);
+      // The bleed also owns the desktop's 8 below the strips (its STRIP_GAP_BELOW), the clip that rounds the first strip's fill, and the card's inner top radii.
+      expect(bleed.marginBottom).toBe(8);
+      expect(bleed.overflow).toBe('hidden');
+      expect(bleed.borderTopLeftRadius).toBe(darkTerminalTheme.radii.md - StyleSheet.hairlineWidth);
+      expect(bleed.borderTopRightRadius).toBe(darkTerminalTheme.radii.md - StyleSheet.hairlineWidth);
+      const strip = StyleSheet.flatten(screen.getByTestId(AUTOMATIONS_STRIP).props.style as StyleProp<ViewStyle>) as ViewStyle;
+      expect(strip.marginTop).toBeUndefined();
+      expect(strip.marginBottom).toBeUndefined();
+    });
+
+    it('draws no strip, and no bleed, for a board task whose automations run', async () => {
       await renderTaskCard();
       expect(screen.queryByTestId(AUTOMATIONS_STRIP)).toBeNull();
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-strips`)).toBeNull();
     });
 
-    /** One slot holds one band. A workflow task never carries the flag, but the slot rule must not depend on that. */
-    it('leaves the slot to the column strip when a card passes both', async () => {
+    /**
+     * The Agents feed's held card, as the desktop's Agent Monitor card draws it
+     * (kangentic #877): the automations strip on top, the column strip under
+     * it, flush in one bleed.
+     *
+     * Seen failing, one mutation at a time: the one-slot rule this replaced
+     * (`automationsDisabled && !columnStrip`; the bleed held only the column
+     * strip), and the two strips swapped (the order read column first).
+     */
+    it('stacks the automations strip above the column strip when a card passes both', async () => {
       await renderTaskCard({
         automationsDisabled: true,
         columnStrip: { column: null, track: [], projectName: 'storefront-web', waitingSinceMs: null },
       });
-      expect(screen.getByTestId(`${BASE_TEST_ID}-column`)).toBeTruthy();
-      expect(screen.queryByTestId(AUTOMATIONS_STRIP)).toBeNull();
+      const stripOrder = screen
+        .getByTestId(`${BASE_TEST_ID}-strips`)
+        .children.filter((child): child is TestInstance => typeof child !== 'string')
+        .map((child) => child.props.testID as string);
+      expect(stripOrder).toEqual([AUTOMATIONS_STRIP, `${BASE_TEST_ID}-column`]);
+      expect(screen.getByTestId(AUTOMATIONS_STRIP).props.accessibilityLabel).toBe(AUTOMATIONS_DISABLED_DESCRIPTION);
     });
   });
 });

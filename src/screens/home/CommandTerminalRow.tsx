@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { ActivityMarkIcon, Card, Row, Stack, Text, useTheme } from '@/components';
 import { CommandTerminalPill } from '@/components/board/CommandTerminalPill';
 import { cardStatusFooter } from '@/components/board/CardStatusFooter';
+import { CardStripBleed } from '@/components/board/CardStrip';
 import { cardSessionDisplay, toCardSession } from '@/components/board/cardSessionDisplay';
 import { ColumnStrip } from '@/components/board/ColumnStrip';
 import { formatActivityLine } from '@/lib/activityLine';
@@ -60,15 +61,17 @@ export const CommandTerminalRow = React.memo(function CommandTerminalRow({ entry
 
   return (
     <Card testID={testID} onPress={openTerminal} onLongPress={openActions}>
-      <ColumnStrip
-        column={null}
-        track={NO_TRACK}
-        projectName={projectName}
-        waitingSinceMs={waitingSinceMs}
-        waitTestID={`${testID}-wait`}
-        testID={`${testID}-band`}
-        trailing={pill}
-      />
+      <CardStripBleed testID={`${testID}-strips`}>
+        <ColumnStrip
+          column={null}
+          track={NO_TRACK}
+          projectName={projectName}
+          waitingSinceMs={waitingSinceMs}
+          waitTestID={`${testID}-wait`}
+          testID={`${testID}-band`}
+          trailing={pill}
+        />
+      </CardStripBleed>
       {entry.sectionChangedAt !== null ? (
         <SectionLandingPulse key={`${entry.sessionId}:${entry.sectionChangedAt}`} changedAtMs={entry.sectionChangedAt} testID={`${testID}-pulse`} />
       ) : null}

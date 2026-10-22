@@ -632,9 +632,10 @@ const ActivityRow = React.memo(function ActivityRow({
   const theme = useTheme();
   const router = useRouter();
   // The full task (not just title): the Agents feed renders the EXACT SAME
-  // card as the board - labels, PR, usage bar - via the same shared
-  // TaskCard, plus one Agents-only addition: the band across the top naming
-  // the project and drawing the column's step track. A session can outlive its
+  // card as the board - labels, PR, usage bar, and a held task's automations
+  // strip - via the same shared TaskCard, plus one Agents-only addition: the
+  // band across the top naming the project and drawing the column's step
+  // track, under the automations strip when there is one. A session can outlive its
   // task's board entry briefly (e.g. a snapshot race), so a located-but-absent
   // task falls back to a minimal stand-in rather than crashing.
   const locatedTask = useBoardStore((state) => state.boardsByProjectId[entry.projectId]?.tasksById[entry.taskId] ?? null);
@@ -882,6 +883,8 @@ const ActivityRow = React.memo(function ActivityRow({
         sessionDisplay={sessionDisplay}
         usage={entry.usage}
         columnStrip={columnStrip}
+        // Never the fallback stand-in's: it cannot tell, so it draws no strip.
+        automationsDisabled={locatedTask?.automations_disabled === true}
         bodyText={bodyText}
         bodyNumberOfLines={SNIPPET_LINES}
         bodyMinHeight={snippetSlotHeight}
@@ -920,7 +923,8 @@ const ActivityRow = React.memo(function ActivityRow({
  *
  * Deliberately the session row minus everything a session supplies: no status
  * icon, no wait time, no snippet (the body is the description, as on every
- * card that is not running), no usage, no landing pulse. The footer says what
+ * card that is not running), no usage, no landing pulse. What the task supplies
+ * stays, a held task's automations strip included. The footer says what
  * it is ("Paused", the desktop's step) through the same cardSessionDisplay.
  * Tapping opens the session screen with no session id, where the board row
  * offers Resume (useResumeOffer) or the launch veil waits for the agent.
@@ -969,6 +973,7 @@ const SessionlessTaskRow = React.memo(function SessionlessTaskRow({
       sessionDisplay={sessionDisplay}
       usage={null}
       columnStrip={columnStrip}
+      automationsDisabled={task.automations_disabled === true}
       bodyText={collapseToSnippetText(task.description)}
       bodyNumberOfLines={SNIPPET_LINES}
       bodyMinHeight={theme.typography.caption.lineHeight * SNIPPET_LINES}

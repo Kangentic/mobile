@@ -590,8 +590,10 @@ resumes them. Planning, starting and deleting a workflow stay on the desktop.
   can never unlock a card.
 - **Board and Agents cards.** A workflow task's card draws the desktop's workflow strip: the
   workflow's glyph in its color (the desktop's six dark chart colors, `theme.workflowSlots`),
-  its name, a pause glyph while paused, and the task's route as the step track. A workflow
-  task waiting in To Do gets the desktop's footer ("Blocked by #14...", "Queued...", "Paused").
+  its name, and the task's route as the step track. A paused workflow draws no pause glyph, as
+  the desktop's strips draw none since kangentic #877 (at 11 px it read as stray bars); the
+  band's spoken label still says "paused". A workflow task waiting in To Do gets the desktop's
+  footer ("Blocked by #14...", "Queued...", "Paused").
 - **Moves.** The Move sheet lists every column and disables the ones a hand may not take the
   task to, with no reason, as the desktop's menu keeps them. A locked card's Move and every
   workflow task's Archive are disabled in the long-press sheet. Archive is disabled by the
@@ -623,11 +625,14 @@ automations stays on the desktop (`set_automations` is not on the board-tool all
   or the desktop's own clears when a task leaves Done, is restored, or joins a workflow), reaches
   the phone as a `task-updated` board event, so a subscribed board re-reads it with no extra
   wiring.
-- **The strip.** A held task's Board card draws the desktop's "Automations disabled" strip
-  (`AutomationsDisabledStrip`) in the band's slot, in the same shell as the column strip
-  (`src/components/board/CardStrip.tsx`, the desktop's `CardStrip`). It has no hue. The Agents
-  feed draws none, as the desktop's Agent Monitor rows draw none: its cards always carry their
-  own band, and one slot holds one band. A workflow task never carries the flag.
+- **The strip.** A held task's card draws the desktop's "Automations disabled" strip
+  (`AutomationsDisabledStrip`) across its top, in the same shell as the column strip
+  (`src/components/board/CardStrip.tsx`, the desktop's `CardStrip`). It has no hue. On the
+  Board it is the card's only strip. On the Agents feed it stacks above the card's band, as the
+  desktop's Agent Monitor card stacks it above its project strip (kangentic #877), so a held
+  card is one strip taller than its neighbours. One `CardStripBleed` wraps a card's strips (the
+  desktop's `cardStripBleedClass`), so a stack meets the card's corners as one piece. The flag
+  alone decides, as on the desktop: a workflow task never carries it.
 - **The menu row.** The long-press hub (`TaskActionsScreen`, reached from the Board, the Agents
   feed and the session header) offers Disable automations (`Ban`) or Enable automations
   (`Columns3Cog`), in View workflow's slot, since the two never show together. The row is LEFT
