@@ -91,10 +91,12 @@ const BOARD_TOOL_WRITES_WITHOUT_RESULT: ReadonlySet<BoardToolWriteName> = new Se
 export class CapabilityError extends Error {
   readonly verb: CapabilityVerb;
   /**
-   * The refusal's stable key, when the desktop sent one: `unsupported-verb`
-   * (protocol 0.15.0) or `response-too-large` (0.19.0). Branch on this, never
-   * on `message`, which is the desktop's display text. Absent for a refusal
-   * with no key and for a response that failed its parse guard.
+   * The refusal's stable key, when the desktop sent one: one of the protocol's
+   * `CapabilityErrorCode` literals (`unsupported-verb`, `unknown-session`, and
+   * the rest of that union). Branch on this, never on `message`, which is the
+   * desktop's display text. Absent for a refusal with no key and for a
+   * response that failed its parse guard. The wire decoder checks only that it
+   * is a string, so a code newer than this build can arrive despite the type.
    */
   readonly code?: CapabilityErrorCode;
 

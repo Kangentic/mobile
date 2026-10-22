@@ -17,8 +17,8 @@
  *    release build fires on establish.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { BridgeEvent } from '@kangentic/protocol';
-import { ChannelController } from '@/channel';
+import type { BridgeEvent, CapabilityErrorCode } from '@kangentic/protocol';
+import { CapabilityError, ChannelController } from '@/channel';
 import {
   createMockDesktop,
   MOCK_CODEX_STATIC_SESSION,
@@ -69,6 +69,17 @@ function eventsFor(kind: BridgeEvent['kind'], sessionId: string): BridgeEvent[] 
   return feedEvents.filter((event) => event.kind === kind && 'sessionId' in event && event.sessionId === sessionId);
 }
 
+/** The refusal's typed code, or a loud failure when the call was NOT refused. */
+async function refusalCodeOf(call: Promise<unknown>): Promise<CapabilityErrorCode | undefined> {
+  try {
+    await call;
+  } catch (error) {
+    if (error instanceof CapabilityError) return error.code;
+    throw error;
+  }
+  throw new Error('expected the desktop to refuse this call, but it was accepted');
+}
+
 describe('interactive-terminal routing', () => {
   it('echoes typed keystrokes into the session they were typed in', async () => {
     const response = await controller.verbs.writeInteractiveTerminal(MOCK_IDLE_STATIC_SESSION.sessionId, 'ls\r');
@@ -86,6 +97,13 @@ describe('interactive-terminal routing', () => {
 
   it('refuses an unknown session rather than echoing somewhere invisible', async () => {
     await expect(controller.verbs.writeInteractiveTerminal('no-such-session', 'x')).rejects.toThrow(/No such session/);
+  });
+
+  it('tags the unknown-session refusal with its typed code, so the phone can tell it from any other refusal', async () => {
+    // Sentry MOBILE-C: the phone branches on the code, never on the desktop's
+    // text, so the text alone passing is no proof the code reaches the wire.
+    await expect(controller.verbs.writeInteractiveTerminal('no-such-session', 'x')).rejects.toThrow(/No such session/);
+    expect(await refusalCodeOf(controller.verbs.writeInteractiveTerminal('no-such-session', 'x'))).toBe('unknown-session');
   });
 
   it('echoes typed keystrokes into the STREAMING session when typed there', async () => {
@@ -173,6 +191,13 @@ describe('read-stream terminal gating', () => {
     const idle = await controller.verbs.readStreamSubscribe(MOCK_IDLE_STATIC_SESSION.sessionId, { terminal: false });
     expect(idle.sessionStatus).toBe('running');
   });
+
+  it('refuses a subscribe to an unknown session with the typed unknown-session code', async () => {
+    // The phone drops a dead session on the code, never on the desktop's text
+    // (Sentry MOBILE-C), so the text alone passing proves nothing about the wire.
+    await expect(controller.verbs.readStreamSubscribe('no-such-session', { terminal: false })).rejects.toThrow(/No such session/);
+    expect(await refusalCodeOf(controller.verbs.readStreamSubscribe('no-such-session', { terminal: false }))).toBe('unknown-session');
+  });
 });
 
 describe('send-user-message routing', () => {
@@ -197,6 +222,14 @@ describe('send-user-message routing', () => {
     const seedLength = staticSessionSeedTranscriptForTest(MOCK_PAUSED_STATIC_SESSION).length;
     expect(window.totalEntries).toBe(seedLength + 2);
     expect(window.revision).toBe(3);
+  });
+
+  it('refuses a message to an unknown session with the typed unknown-session code', async () => {
+    // Ordinary text, not a magic dev command: /stall-resume and /fail-resume
+    // are accepted from ANY session before the lookup, so they would never
+    // reach the refusal. The composer clears its dead-session state on the code.
+    await expect(controller.verbs.sendUserMessage('no-such-session', 'hello')).rejects.toThrow(/No such session/);
+    expect(await refusalCodeOf(controller.verbs.sendUserMessage('no-such-session', 'hello'))).toBe('unknown-session');
   });
 });
 
