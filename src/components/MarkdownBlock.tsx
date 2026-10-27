@@ -1,6 +1,8 @@
-import React, { useMemo } from 'react';
-import { EnrichedMarkdownText, type MarkdownStyle } from 'react-native-enriched-markdown';
+import React, { useCallback, useMemo } from 'react';
+import * as Linking from 'expo-linking';
+import { EnrichedMarkdownText, type LinkPressEvent, type MarkdownStyle } from 'react-native-enriched-markdown';
 import { getRetentionProbeVariant } from '@/devsupport/retentionProbe';
+import { httpsUrlOrNull } from '@/lib/httpsUrl';
 import { useTheme } from './theme/ThemeProvider';
 import type { Theme } from './theme/tokens';
 
@@ -36,6 +38,11 @@ export interface MarkdownBlockProps {
  *   docs/developer-guide.md).
  * - Styling flows through the `markdownStyle` prop, mapped below from the
  *   theme's semantic tokens and typography scale.
+ * - The library never opens a URL itself: a tapped link only reaches
+ *   `onLinkPress` (Android's `LinkSpan.onClick`, iOS's
+ *   `ENRMTextInteractionUtils.m`), and with no handler the tap goes nowhere.
+ *   This adapter opens it, https only, because link URLs are agent-authored.
+ *   No `onLinkLongPress`, so iOS keeps its system link preview.
  */
 export function MarkdownBlock({ markdown, testID }: MarkdownBlockProps): React.JSX.Element {
   const theme = useTheme();
@@ -44,12 +51,28 @@ export function MarkdownBlock({ markdown, testID }: MarkdownBlockProps): React.J
   // Retention bisect: keeps the native view, drops the selectable TextView.
   const selectable = getRetentionProbeVariant() !== 'markdown-not-selectable';
 
+  /**
+   * `Linking.openURL` hands the URL to the OS default handler, so a github.com
+   * link opens in the GitHub app where it is installed, as the task actions
+   * sheet's View pull request does. Anything that is not https is ignored
+   * (see `httpsUrlOrNull`). A refusal is dropped: a markdown block has no
+   * error surface, and the tap simply does nothing, as it did before.
+   */
+  const onLinkPress = useCallback((event: LinkPressEvent) => {
+    const url = httpsUrlOrNull(event.url);
+    if (url === null) return;
+    void Linking.openURL(url).catch((error: unknown) => {
+      if (__DEV__) console.warn('[markdown] could not open link:', error);
+    });
+  }, []);
+
   return (
     <EnrichedMarkdownText
       testID={testID}
       markdown={markdown}
       markdownStyle={markdownStyle}
       selectable={selectable}
+      onLinkPress={onLinkPress}
     />
   );
 }

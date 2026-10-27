@@ -443,7 +443,10 @@ never re-render). The live in-progress turn is a cleaned tail of the raw PTY str
 (`src/terminal/liveTail.ts` interprets only line-identity control bytes, filters spinner/frame
 chrome, and resets on full-screen redraws), shown while the session is thinking and replaced
 when settled entries land at the window's end. Markdown renders through the `MarkdownBlock`
-adapter (react-native-enriched-markdown, swappable in one file).
+adapter (react-native-enriched-markdown, swappable in one file). The library never opens a URL
+itself, so the adapter does: a tapped link goes to the OS handler only when it is https
+(`src/lib/httpsUrl.ts`), and any other scheme is ignored, because link URLs are agent-authored and
+a `kangentic-pair://` link must never reach the app's own deep-link router.
 
 The raw interactive terminal is the full-fidelity view: xterm.js bundled offline in a WebView
 (`src/terminal/xterm.html`, assembled by `scripts/buildXtermHtml.mjs` from the page fragments
