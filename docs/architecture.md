@@ -126,7 +126,7 @@ decides *what* it may do:
 | `move-task` | Move a task between board columns |
 | `answer-permission-prompt` | Respond to an outstanding agent permission prompt |
 | `interactive-terminal` | Raw keystroke write to the session PTY (full terminal parity) |
-| `board-tool-read` | The allowlisted read half of the desktop's task/backlog command registry (search, stats, transcripts, ...) |
+| `board-tool-read` | The allowlisted read half of the desktop's task/backlog command registry (search, stats, transcripts, ...). A completed task's Summary reads `get_task_report` (protocol 0.24.0: its route, span, commits and per-file changes) and falls back to `find_task` when an older desktop refuses it |
 | `board-tool-write` | The allowlisted mutate half (create/update/delete task, backlog CRUD, link PR, ...) |
 | `register-push` | Register/unregister this device's Expo push token plus its 32-byte notification-decrypt key with the desktop's push notifier (it only lets the desktop send the device ciphertext) |
 | `start-session` | Ask the desktop to start or resume a task's agent session (protocol 0.15.0). The desktop answers when the start is ACCEPTED, `outcome: 'starting'` or `'live'`, not when the agent is up; the successor then arrives as the same board and stream events a column move produces. The phone sends it only for Resume on a paused task, gated on the board row's `resumable` flag (protocol 0.16.0, see Resume below), so no earlier desktop ever receives it. The session screen's "Start again" for an ended session is a follow-up (a button on the swap veil during the waiting phase) |
@@ -166,7 +166,9 @@ src/
                   #   board/ (the Board's card connector and its Workflows button),
                   #   workflow/ (the workflow view), terminals/ (the Command Terminal screen,
                   #   the Board's Terminals button; its two sheets sit with the other sheet
-                  #   screens), FileDiff, Pairing (Scan/Confirm), Settings, Devices
+                  #   screens), completed/ (a completed task's Summary header strip and report
+                  #   cards, and its Description), FileDiff, Pairing (Scan/Confirm), Settings,
+                  #   Devices
   components/      # Design system + conversation/ cells and prompt cards, terminal/ pane +
                   #   quick keys, board/ sheets, composer/, diff/ line cells
   pairing/         # QR validation, device identity, the IKpsk0 pairing state machine, trust anchor storage
@@ -181,6 +183,9 @@ src/
   workflow/        # Pure workflow rules ported from the desktop: state and color, who may move
                   #   a card, the waiting footer, the get_workflow/list_workflows readers and
                   #   the workflow view's sections
+  taskReport/      # Pure completed-task Summary rules ported from the desktop's completed view:
+                  #   its formats, the header strip, the find_task fallback reader, and the
+                  #   Summary list's rows
   notifications/   # Push registration, E2E blob decrypt, notifee channels, local notifier,
                   #   foreground service, background push task, tap routing (tap routing
                   #   and rich display are cross-platform; the iOS half decrypts in

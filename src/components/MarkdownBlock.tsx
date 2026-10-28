@@ -6,9 +6,18 @@ import { httpsUrlOrNull } from '@/lib/httpsUrl';
 import { useTheme } from './theme/ThemeProvider';
 import type { Theme } from './theme/tokens';
 
+/**
+ * `commonmark` is the library's single-TextView renderer and every surface's
+ * default. `github` is its container-based GFM renderer, the only one that
+ * draws task-list checkboxes (`- [ ]`); a completed task's Description uses it
+ * to match the desktop, and nothing else does until it is measured there.
+ */
+export type MarkdownFlavor = 'commonmark' | 'github';
+
 export interface MarkdownBlockProps {
   markdown: string;
   testID?: string;
+  flavor?: MarkdownFlavor;
 }
 
 /**
@@ -44,7 +53,7 @@ export interface MarkdownBlockProps {
  *   This adapter opens it, https only, because link URLs are agent-authored.
  *   No `onLinkLongPress`, so iOS keeps its system link preview.
  */
-export function MarkdownBlock({ markdown, testID }: MarkdownBlockProps): React.JSX.Element {
+export function MarkdownBlock({ markdown, testID, flavor = 'commonmark' }: MarkdownBlockProps): React.JSX.Element {
   const theme = useTheme();
   const markdownStyle = useMemo(() => markdownStyleFromTheme(theme), [theme]);
 
@@ -73,6 +82,10 @@ export function MarkdownBlock({ markdown, testID }: MarkdownBlockProps): React.J
       markdownStyle={markdownStyle}
       selectable={selectable}
       onLinkPress={onLinkPress}
+      flavor={flavor}
+      // A checkbox here is read-only: a local toggle would never reach the
+      // desktop's description. Only the GitHub flavor draws one.
+      enableTaskListItemToggle={false}
     />
   );
 }
@@ -151,6 +164,16 @@ function markdownStyleFromTheme(theme: Theme): MarkdownStyle {
       headerBackgroundColor: theme.colors.surfaceRaised,
       headerTextColor: theme.colors.textPrimary,
       borderColor: theme.colors.border,
+    },
+    // GitHub flavor only: read-only checkboxes in the list markers' color, a
+    // checked item left legible rather than struck through.
+    taskList: {
+      borderColor: theme.colors.textSecondary,
+      checkedColor: theme.colors.textSecondary,
+      checkmarkColor: theme.colors.background,
+      checkedTextColor: theme.colors.textPrimary,
+      checkedStrikethrough: false,
+      checkboxBorderRadius: theme.radii.sm,
     },
   };
 }

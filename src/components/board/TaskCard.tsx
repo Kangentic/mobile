@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
-import { GitMerge, GitMergeConflict, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft } from 'lucide-react-native';
 import type { BoardColumnWire, BoardTaskWire, SessionUsageWire } from '@kangentic/protocol';
 import {
   AgentStatusIcon,
@@ -20,7 +19,8 @@ import type { CardSessionDisplay } from './cardSessionDisplay';
 import { ColumnStrip, type StripWorkflow } from './ColumnStrip';
 import type { ColumnTrackStep } from './columnTrack';
 import { computeVisibleLabelCount } from './labelFit';
-import { prChipAccessibilityLabel, prChipPresentation, type PrChipGlyph } from './prChipPresentation';
+import { prChipAccessibilityLabel, prChipPresentation } from './prChipPresentation';
+import { prGlyph } from './prGlyph';
 import type { WorkflowWaitingFooter } from '@/workflow/workflowWaiting';
 
 /** Before the labels row's real width is measured (its first layout pass). */
@@ -28,25 +28,6 @@ const FALLBACK_LABEL_LIMIT = 3;
 
 /** The PR icon's size: the card's other title-row glyphs are 14 to 16. */
 const PR_GLYPH_SIZE = 14;
-
-/**
- * The PR chip's icon for each state. A switch over static imports rather than
- * a lookup table of components, so no component is chosen at render time.
- */
-function prGlyph(glyph: PrChipGlyph, color: string): React.JSX.Element {
-  switch (glyph) {
-    case 'merge':
-      return <GitMerge size={PR_GLYPH_SIZE} color={color} />;
-    case 'merge-conflict':
-      return <GitMergeConflict size={PR_GLYPH_SIZE} color={color} />;
-    case 'closed':
-      return <GitPullRequestClosed size={PR_GLYPH_SIZE} color={color} />;
-    case 'draft':
-      return <GitPullRequestDraft size={PR_GLYPH_SIZE} color={color} />;
-    case 'pull-request':
-      return <GitPullRequest size={PR_GLYPH_SIZE} color={color} />;
-  }
-}
 
 export interface TaskCardProps {
   /** Base testID; sub-parts key off it as `${testID}-status`, `-display-id`, `-pr`, `-snippet`, `-wait`, `-usage`, `-status-bar`, `-strips` (the bleed around the strips below), `-column` (whose own parts include `-column-project`), `-automations-disabled` (whose own part is `-automations-disabled-icon`). */
@@ -239,7 +220,7 @@ export function TaskCard({
               accessibilityRole="text"
               accessibilityLabel={prChipAccessibilityLabel(task.pr_state, task.pr_merge_readiness)}
             >
-              {prGlyph(prChip.glyph, colorForTextRole(prChip.color, theme.colors))}
+              {prGlyph(prChip.glyph, colorForTextRole(prChip.color, theme.colors), PR_GLYPH_SIZE)}
             </View>
           ) : null}
         </Row>

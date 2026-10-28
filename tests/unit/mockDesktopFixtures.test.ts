@@ -40,6 +40,7 @@ import {
   MOCK_STREAM_CEILING_FOR_TEST,
   activeCapture,
   activeGrid,
+  archivedTaskRecordFor,
   archivedTasksFor,
   baseTranscriptForTest,
   codexTuiFrameForTest,
@@ -168,6 +169,20 @@ function renderedFixtureText(): { label: string; text: string }[] {
   // branch.
   collectProse(archivedTasksFor('mock-project'), 'archived', collected);
   collectProse(archivedTasksFor('mock-project-relay'), 'archived relay', collected);
+  // The completed task Summary behind each archived row (task #130): its
+  // written summary, commit subjects, changed paths and route all render.
+  // Subjects and paths sit under keys the prose walk does not collect.
+  for (const projectId of ['mock-project', 'mock-project-relay']) {
+    for (const task of archivedTasksFor(projectId)) {
+      const record = archivedTaskRecordFor(projectId, task.id);
+      if (record === null) continue;
+      const label = `task report ${task.id}`;
+      collectProse(record.report.summaryState, label, collected);
+      for (const commit of record.report.commits ?? []) collected.push({ label: `${label} commit`, text: commit.subject });
+      for (const file of record.report.changes?.files ?? []) collected.push({ label: `${label} file`, text: file.path });
+      for (const column of record.report.route) collected.push({ label: `${label} route`, text: column.name });
+    }
+  }
   for (const task of [...initialTasks(), ...initialTasks2()]) {
     collected.push({ label: `task ${task.id} title`, text: task.title });
     if (task.description) collected.push({ label: `task ${task.id} description`, text: task.description });
@@ -259,6 +274,8 @@ describe('the mock fixtures stay inside the customer fiction', () => {
     expect(collected.some((entry) => entry.label.startsWith('transcript.'))).toBe(true);
     expect(collected.some((entry) => entry.label.startsWith('archived.'))).toBe(true);
     expect(collected.some((entry) => entry.text === 'Cache the product-grid query on the storefront home')).toBe(true);
+    expect(collected.some((entry) => entry.label.startsWith('task report ') && entry.label.endsWith(' commit'))).toBe(true);
+    expect(collected.some((entry) => entry.label.startsWith('task report ') && entry.label.endsWith('.text'))).toBe(true);
     for (const frame of COMMAND_TERMINAL_FRAMES) {
       expect(collected.some((entry) => entry.label === `command terminal ${frame} row` && entry.text.includes('Claude Code'))).toBe(true);
     }

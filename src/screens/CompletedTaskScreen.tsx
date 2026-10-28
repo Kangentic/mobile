@@ -1,31 +1,41 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
-import { ClipboardList, MessagesSquare } from 'lucide-react-native';
-import type { SessionSummaryWire } from '@kangentic/protocol';
-import { EmptyState, MarkdownBlock, Screen, SegmentedSwitcher, Stack, Text, useTheme, type SegmentOption } from '@/components';
+import { ClipboardList, FileText, MessagesSquare } from 'lucide-react-native';
+import { EmptyState, Screen, SegmentedSwitcher, useTheme, type SegmentOption } from '@/components';
 import { loadTranscriptTail } from '@/connection/actions';
-import { formatDuration } from '@/lib/formatDuration';
+import { lastAssistantMessage } from '@/conversation/lastAssistantMessage';
 import { findArchivedTaskById, useBoardStore } from '@/state/boardStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
+import { DescriptionPane } from './completed/DescriptionPane';
+import { SummaryPane } from './completed/SummaryPane';
+import { useCompletedTaskReport } from './completed/useCompletedTaskReport';
 import { ConversationTab } from './task/ConversationTab';
 import { TaskHeader } from './task/TaskHeader';
 
-type CompletedMode = 'conversation' | 'summary';
+type CompletedMode = 'conversation' | 'summary' | 'description';
 
 /**
- * A completed task has two surfaces, not the session's three.
+ * A completed task has its own three surfaces, not the session's
+ * Terminal, Chat and Changes.
  *
  * Terminal is impossible - the PTY is gone, and the desktop suspends it on the
  * move to Done. Changes is deliberately absent rather than empty: archiving
  * DELETES the worktree, and read-diff falls back to the project checkout when
  * a task has none, so a Changes tab here would render the repository's current
- * state and label it as this task's work. The captured files/lines totals live
- * in Summary instead, which is what the desktop shows for an archived task.
+ * state and label it as this task's work. What the task changed is in Summary,
+ * read from git on the desktop by its task report.
+ *
+ * Description is its own segment, as the desktop's completed view gives it a
+ * tab, and the usage figures sit at the end of Summary. Three segments is also
+ * the most this switcher fits: "Conversation" is 71 pt at 12 pt semibold (93 pt
+ * at 130% text) against 112 pt per segment on a 360 pt phone, and four wrap it
+ * at large text sizes (task #130's design review).
  */
 const COMPLETED_MODE_OPTIONS: SegmentOption<CompletedMode>[] = [
   { mode: 'conversation', label: 'Conversation', accessibilityLabel: 'Conversation view', Icon: MessagesSquare },
   { mode: 'summary', label: 'Summary', accessibilityLabel: 'Summary view', Icon: ClipboardList },
+  { mode: 'description', label: 'Description', accessibilityLabel: 'Description view', Icon: FileText },
 ];
 
 export function CompletedTaskScreen(): React.JSX.Element {
@@ -54,7 +64,8 @@ export function CompletedTaskScreen(): React.JSX.Element {
    * never subscribed: its agent is gone, and read-stream still requires a live
    * session for every action except the transcript window. So without this the
    * pane stays blank forever, showing nothing on the screen whose entire
-   * purpose is the conversation.
+   * purpose is the conversation. Summary reads the agent's last message from
+   * the same window, so it is fetched whichever segment is showing.
    */
   const anchorSessionId = found?.summary?.sessionId ?? null;
   useEffect(() => {
@@ -71,6 +82,23 @@ export function CompletedTaskScreen(): React.JSX.Element {
       if (__DEV__) console.warn('[completed-task] transcript unavailable:', error);
     });
   }, [anchorSessionId]);
+
+  // The stored session slice, not a value derived inside the selector (the
+  // same snapshot-caching rule as `archivedByProjectId` above).
+  const transcriptSession = useTranscriptStore((state) =>
+    anchorSessionId === null ? undefined : state.bySessionId[anchorSessionId],
+  );
+  const lastMessage = useMemo(
+    () => (transcriptSession === undefined ? null : lastAssistantMessage(transcriptSession.entries)),
+    [transcriptSession],
+  );
+
+  // `found.projectId` is the project's id, which is what the bridge resolves
+  // `project` by; the route's own param can be absent. Read on open, whichever
+  // segment shows: the desktop's completed view reads the same report on open
+  // (its strip sits above its tabs), and waiting for a Summary visit would show
+  // the skeleton for the whole read, up to the desktop's 8 s index wait.
+  const reportRead = useCompletedTaskReport(found?.projectId ?? null, found?.task.id ?? null);
 
   if (!found) {
     return (
@@ -108,8 +136,10 @@ export function CompletedTaskScreen(): React.JSX.Element {
               overseerSize={54}
             />
           )
+        ) : mode === 'summary' ? (
+          <SummaryPane task={task} summary={summary} read={reportRead} lastMessage={lastMessage} />
         ) : (
-          <SummaryPane task={{ description: task.description, archivedAt: task.archived_at }} summary={summary} />
+          <DescriptionPane description={task.description} />
         )}
       </View>
 
@@ -125,91 +155,6 @@ export function CompletedTaskScreen(): React.JSX.Element {
   );
 }
 
-function SummaryPane({
-  task,
-  summary,
-}: {
-  task: { description: string; archivedAt: string | null };
-  summary: SessionSummaryWire | null;
-}): React.JSX.Element {
-  const theme = useTheme();
-  return (
-    <ScrollView
-      testID="completed-task-summary"
-      contentContainerStyle={{ padding: theme.spacing.md, paddingBottom: theme.spacing.xxl }}
-    >
-      <Stack gap="lg">
-        {task.description.length > 0 ? (
-          <Stack gap="xs">
-            <Text variant="caption" color="muted">Description</Text>
-            {/* Descriptions are authored as markdown (the desktop renders them
-                as such), so plain Text showed literal ** and backticks. */}
-            <MarkdownBlock markdown={task.description} testID="completed-task-description" />
-          </Stack>
-        ) : null}
-
-        {summary ? (
-          <Stack gap="xs">
-            <Text variant="caption" color="muted">Session</Text>
-            <SummaryRow label="Completed" value={formatTimestamp(task.archivedAt)} />
-            <SummaryRow label="Started" value={formatTimestamp(summary.startedAt)} />
-            <SummaryRow label="Agent active" value={formatDuration(summary.durationMs)} />
-            <SummaryRow label="Model" value={summary.modelDisplayName.length > 0 ? summary.modelDisplayName : 'Unknown'} />
-            <SummaryRow label="Cost" value={formatCost(summary.totalCostUsd)} />
-            <SummaryRow
-              label="Tokens"
-              value={`${formatCount(summary.totalInputTokens)} in / ${formatCount(summary.totalOutputTokens)} out`}
-            />
-            <SummaryRow label="Files changed" value={String(summary.filesChanged)} />
-            <SummaryRow label="Lines changed" value={`+${formatCount(summary.linesAdded)} -${formatCount(summary.linesRemoved)}`} />
-            <SummaryRow label="Tool calls" value={formatCount(summary.toolCallCount)} />
-          </Stack>
-        ) : (
-          <Stack gap="xs">
-            <Text variant="caption" color="muted">Session</Text>
-            <Text color="muted">No agent ran on this task.</Text>
-          </Stack>
-        )}
-      </Stack>
-    </ScrollView>
-  );
-}
-
-function SummaryRow({ label, value }: { label: string; value: string }): React.JSX.Element {
-  const theme = useTheme();
-  return (
-    <View style={[styles.row, { paddingVertical: theme.spacing.xs, borderBottomColor: theme.colors.border }]}>
-      <Text color="muted">{label}</Text>
-      <Text>{value}</Text>
-    </View>
-  );
-}
-
-/** Compact date. Absolute rather than relative: a completed task is history, and "3 days ago" ages wrong when read later. */
-function formatTimestamp(value: string | null): string {
-  if (!value) return 'Unknown';
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return 'Unknown';
-  return parsed.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
-/** Sub-cent costs round to $0.00, which reads as free; show them as the smallest real figure instead. */
-function formatCost(totalCostUsd: number): string {
-  if (totalCostUsd <= 0) return '$0.00';
-  return totalCostUsd < 0.01 ? '<$0.01' : `$${totalCostUsd.toFixed(2)}`;
-}
-
-function formatCount(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
-  return String(value);
-}
-
 const styles = StyleSheet.create({
   body: {
     flex: 1,
@@ -218,10 +163,5 @@ const styles = StyleSheet.create({
     // Matches the session screen's switcher placement, so the control lands in
     // the same spot whichever kind of task was opened.
     paddingTop: 0,
-  },
-  row: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
   },
 });

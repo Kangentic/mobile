@@ -2929,9 +2929,10 @@ that per-session state is bounded and cleaned up, with one real exception. All *
   whole point of shedding. `setArchivedLoading` also maintains `archivedProjectOrder`, so the map
   and the LRU cannot disagree about what is held.
 
-  **Why not truncate the description instead**, which looks cheaper: `CompletedTaskScreen` renders
-  the full description through `MarkdownBlock`, so a truncated copy would silently degrade that
-  screen. Capping what is HELD keeps the rows that exist complete.
+  **Why not truncate the description instead**, which looks cheaper: a completed task's Description
+  segment (`src/screens/completed/DescriptionPane.tsx`) renders the full description through
+  `MarkdownBlock`, so a truncated copy would silently degrade that screen. Capping what is HELD keeps
+  the rows that exist complete.
 
   Still uncapped by design: depth within one project. Scrolling 580 archived tasks holds all of
   them, because the list cannot show rows it has dropped. The project cap bounds the common case
