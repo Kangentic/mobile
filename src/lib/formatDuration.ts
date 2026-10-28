@@ -5,11 +5,10 @@
  * the caller owns the clock (the same split `relativeTimeLabel` makes, and the
  * reason `Date.now()` never appears in a render path here).
  *
- * The `<= 0` case returns '0m' rather than an empty string because
- * `CompletedTaskScreen`'s run summary is a table that must always have a value
- * in the cell. A LIVE counter wants the opposite - nothing at all until the
- * span is worth reporting - so that floor belongs to the caller, not here:
- * `WaitLabel` renders null below a minute instead of asking this to.
+ * The `<= 0` case returns '0m' rather than an empty string, so a caller that
+ * always shows a value has one. A LIVE counter wants the opposite - nothing at
+ * all until the span is worth reporting - so that floor belongs to the caller,
+ * not here: `WaitLabel` renders null below a minute instead of asking this to.
  */
 export function formatDuration(milliseconds: number): string {
   if (milliseconds <= 0) return '0m';
