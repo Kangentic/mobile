@@ -725,7 +725,7 @@ describe('BoardScreen', () => {
     );
 
     if (drawn) {
-      expect(screen.getByTestId('board-card-task-1-automations-disabled')).toHaveTextContent('Automations disabled');
+      expect(screen.getByTestId('board-card-task-1-automations-disabled')).toHaveTextContent('Automations paused');
     } else {
       expect(screen.queryByTestId('board-card-task-1-automations-disabled')).toBeNull();
     }
@@ -1077,6 +1077,18 @@ describe('BoardScreen', () => {
                 swimlane_id: 'lane-doing',
                 workflow: workflowWireFixture({ waiting_for: ['#14'] }),
               }),
+              // Held by its own automations switch (protocol 0.25.0) while its
+              // workflow runs, waiting on nothing: the engine would otherwise
+              // start it next, so its footer reads Queued... without the hold.
+              'task-held': boardTaskFixture({
+                id: 'task-held',
+                display_id: 19,
+                title: 'Rotate the gateway keys',
+                swimlane_id: 'lane-todo',
+                position: 3,
+                automations_disabled: true,
+                workflow: workflowWireFixture({ automations_pausable: true }),
+              }),
             },
             snapshotAt: 0,
             showTicketNumbers: true,
@@ -1145,6 +1157,22 @@ describe('BoardScreen', () => {
 
       expect(screen.getByTestId('board-card-task-paused-status-bar-label')).toHaveTextContent('Paused');
       expect(screen.getByTestId('board-card-task-paused-status-bar-paused')).toBeTruthy();
+    });
+
+    /**
+     * Kangentic #923 (design changes 3 and 4): a held card of a running
+     * workflow stacks the "Automations paused" strip over its workflow strip,
+     * and reads Paused, not Queued, in To Do. Mutation seen failing: passing
+     * `held` as false from BoardTaskCard read "Queued..." in the footer.
+     */
+    it('stacks the paused strip over the workflow strip and reads "Paused" for a held task in To Do', async () => {
+      seedWorkflowBoard();
+      await renderBoard();
+
+      expect(screen.getByTestId('board-card-task-held-automations-disabled')).toHaveTextContent('Automations paused');
+      expect(screen.getByTestId('board-card-task-held-column-workflow-name')).toHaveTextContent('Ship the checkout');
+      expect(screen.getByTestId('board-card-task-held-status-bar-label')).toHaveTextContent('Paused');
+      expect(screen.getByTestId('board-card-task-held-status-bar-paused')).toBeTruthy();
     });
 
     /** The wait is a To Do thing: the same blocker list on a card in Doing draws the band but no footer. */

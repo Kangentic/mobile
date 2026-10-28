@@ -76,10 +76,12 @@ export function useOpenBoardTask(task: BoardTaskWire, projectId: string): () => 
  *   has waited on you. Its body is the agent's last line while a session runs,
  *   as on the Agents feed, and nothing otherwise.
  *
- * A workflow task waiting in To Do also gets the desktop's waiting footer, and
- * a task whose column automations are disabled (protocol 0.22.0) gets the
- * desktop's "Automations disabled" strip across the top, above the band when
- * the card has one (a workflow task never carries the switch).
+ * A workflow task waiting in To Do also gets the desktop's waiting footer
+ * ("Paused" for a held one with nothing to wait for), and a task whose column
+ * automations are paused (protocol 0.22.0) gets the desktop's "Automations
+ * paused" strip across the top, above the band when the card has one: a held
+ * workflow card stacks it over its workflow strip (protocol 0.25.0, kangentic
+ * #923).
  */
 export const BoardTaskCard = React.memo(function BoardTaskCard({
   task,
@@ -135,7 +137,8 @@ export const BoardTaskCard = React.memo(function BoardTaskCard({
     [boardColumns, task.swimlane_id],
   );
   const workflow = task.workflow ?? null;
-  const waiting = useMemo(() => workflowWaitingFooter(workflow, column?.role ?? null), [workflow, column]);
+  const held = task.automations_disabled === true;
+  const waiting = useMemo(() => workflowWaitingFooter(workflow, column?.role ?? null, held), [workflow, column, held]);
   const waitingSinceMs = variant === 'canvas' && activityEntry !== null && running ? selectWaitingSince(activityEntry) : null;
   const columnStrip = useMemo(() => {
     if (variant === 'board' && workflow === null) return undefined;

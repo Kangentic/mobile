@@ -601,17 +601,23 @@ resumes them. Planning, starting and deleting a workflow stay on the desktop.
   its name, and the task's route as the step track. A paused workflow draws no pause glyph, as
   the desktop's strips draw none since kangentic #877 (at 11 px it read as stray bars); the
   band's spoken label still says "paused". A workflow task waiting in To Do gets the desktop's
-  footer ("Blocked by #14...", "Queued...", "Paused").
+  footer ("Blocked by #14...", "Queued...", "Paused"). A task held by its own automations switch
+  (see below) reads "Paused" there too, since the engine starts no held task; a blocker still
+  wins.
 - **Moves.** The Move sheet lists every column and disables the ones a hand may not take the
   task to, with no reason, as the desktop's menu keeps them. A locked card's Move and every
   workflow task's Archive are disabled in the long-press sheet. Archive is disabled by the
   phone itself, because the desktop would accept a paused workflow's archive as a plain move
-  into Done.
+  into Done. A held card (its own automations paused, protocol 0.25.0) moves by hand to any
+  column but To Do while the rest of its workflow runs, as a paused workflow's card does, and is
+  not limited to a human gate's target; the Move sheet chooses no column for it in advance.
 - **Pause and Resume** live only in the workflow view, and act at once, as the desktop's header
   does. They are the board-tool writes `pause_workflow` and `resume_workflow`, asked of the
   workflow's home project. Both answer with no data, which the bridge forwards as `{}`, so
   `verbClient.boardToolWrite` accepts a missing `result` for those two tools only. A paused
-  workflow's task offers View workflow where the desktop would refuse its Resume.
+  workflow's task offers View workflow where the desktop would refuse its Resume, except a held
+  task (its own automations paused): the workflow's Pause and Resume leave a held task's agent
+  alone (kangentic #923), so it keeps its own Resume session.
 - **Reading.** `list_workflows` (the Board header's Workflows button and sheet) and
   `get_workflow` (the workflow view) are board-tool reads asked of the workflow's HOME project,
   held in `useWorkflowStore` and re-read when a member task's row moves or changes state.
@@ -624,8 +630,11 @@ resumes them. Planning, starting and deleting a workflow stay on the desktop.
 
 The desktop can hold one task's column automations: no On task enter, On agent turn end or On
 task exit row runs for it, and a move types no column message (protocol 0.22.0, task #119; the
-design was signed off on 2026-10-18). The phone shows the switch and flips it. Editing a column's
-automations stays on the desktop (`set_automations` is not on the board-tool allowlist).
+design was signed off on 2026-10-18). On a workflow task the same switch holds that one task out
+of its workflow while the rest runs: the workflow neither judges, moves nor starts it (protocol
+0.25.0, task #133, mirroring kangentic #923; the design was signed off on 2026-10-27). The phone
+shows the switch and flips it. Editing a column's automations stays on the desktop
+(`set_automations` is not on the board-tool allowlist).
 
 - **What the board rows say.** `BoardTaskWire.automations_disabled` is a nullable boolean. Null
   or absent means a desktop older than the field, which the phone treats as "cannot tell", not
@@ -633,26 +642,33 @@ automations stays on the desktop (`set_automations` is not on the board-tool all
   or the desktop's own clears when a task leaves Done, is restored, or joins a workflow), reaches
   the phone as a `task-updated` board event, so a subscribed board re-reads it with no extra
   wiring.
-- **The strip.** A held task's card draws the desktop's "Automations disabled" strip
-  (`AutomationsDisabledStrip`) across its top, in the same shell as the column strip
-  (`src/components/board/CardStrip.tsx`, the desktop's `CardStrip`). It has no hue. On the
-  Board it is the card's only strip. On the Agents feed it stacks above the card's band, as the
-  desktop's Agent Monitor card stacks it above its project strip (kangentic #877), so a held
-  card is one strip taller than its neighbours. One `CardStripBleed` wraps a card's strips (the
-  desktop's `cardStripBleedClass`), so a stack meets the card's corners as one piece. The flag
-  alone decides, as on the desktop: a workflow task never carries it.
+- **The strip.** A held task's card draws the desktop's "Automations paused" strip
+  (`AutomationsDisabledStrip`, which keeps the switch's old name as the desktop's component
+  does) across its top, in the same shell as the column strip
+  (`src/components/board/CardStrip.tsx`, the desktop's `CardStrip`). It has no hue. On an
+  ordinary Board card it is the card's only strip. Over a band it stacks on top: the Agents
+  feed's column strip, as the desktop's Agent Monitor card stacks it above its project strip
+  (kangentic #877), and a workflow card's workflow strip, as the desktop's held workflow card
+  does (#923), so a held card is one strip taller than its neighbours. One `CardStripBleed`
+  wraps a card's strips (the desktop's `cardStripBleedClass`), so a stack meets the card's
+  corners as one piece. The flag alone decides, as on the desktop. A screen reader hears the
+  desktop's tooltip, whose workflow variant adds that the workflow does not move the task.
 - **The menu row.** The long-press hub (`TaskActionsScreen`, reached from the Board, the Agents
-  feed and the session header) offers Disable automations (`Ban`) or Enable automations
-  (`Columns3Cog`), in View workflow's slot, since the two never show together. The row is LEFT
-  OUT, not disabled, for a workflow task (its workflow's Pause holds it, and the desktop refuses
-  `true` for one) and for a row whose field is not a boolean.
+  feed and the session header) offers Pause automations (`Ban`) or Resume automations
+  (`Columns3Cog`), directly above View workflow, as the desktop's menu puts it before Open
+  workflow. The row is LEFT OUT, not disabled, for a row whose field is not a boolean, and for a
+  workflow task unless its `workflow.automations_pausable` is `true`: a desktop older than
+  protocol 0.25.0 refuses `true` for a workflow task. There is no Pause workflow row on a task:
+  the sheet acts on one task, and the workflow's own Pause stays in the workflow view.
 - **The write.** There is no verb: it is the existing `board-tool-write` `update_task` with the
   camelCase `automationsDisabled` param (the desktop ignores the row's snake_case spelling as an
   unknown key). It never restarts the session. `updateTaskFields` applies it optimistically
   through the board store's pending edits, which a racing snapshot re-applies and a refusal
   rolls back, touching only the fields the edit named. The sheet closes once the desktop
   accepts; a refusal stays in the sheet with the desktop's sentence, since the phone has no
-  toasts.
+  toasts. A failure with no sentence names its direction in the desktop's toast words ("Couldn't
+  pause automations" / "Couldn't resume automations", plus the phone's "- check the
+  connection").
 
 ## Notification pipeline
 

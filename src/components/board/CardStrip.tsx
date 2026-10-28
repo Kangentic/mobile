@@ -19,8 +19,15 @@ const AUTOMATIONS_ICON_SIZE = 12;
 const AUTOMATIONS_ICON_STROKE = 2;
 const AUTOMATIONS_LABEL_GAP = 5;
 
-/** The desktop's tooltip on its strip. A phone has no hover, so it is what a screen reader hears instead. */
-export const AUTOMATIONS_DISABLED_DESCRIPTION = "Column automations don't run for this task. Enable them from the card's menu.";
+/**
+ * The desktop's tooltip on its strip, one per kind of task (kangentic #923's
+ * `useAutomationsPausedText`). A phone has no hover, so it is what a screen
+ * reader hears instead. A workflow task's says the workflow leaves it alone
+ * too, since that is what the hold is for there.
+ */
+export const AUTOMATIONS_PAUSED_DESCRIPTION = "Column automations don't run for this task. Resume them from the card's menu.";
+export const WORKFLOW_AUTOMATIONS_PAUSED_DESCRIPTION =
+  "Column automations don't run for this task, and its workflow does not move it. Resume them from the card's menu.";
 
 export interface CardStripProps {
   testID: string;
@@ -89,25 +96,35 @@ export function CardStrip({ testID, accessibilityLabel, children }: CardStripPro
 }
 
 /**
- * Across the top of a card whose column automations are disabled (protocol
- * 0.22.0): the desktop's strip, in the column strip's shell, with no hue, so
- * it competes with neither the activity mark nor a workflow's color. On the
- * Board it is the card's only strip. On the Agents feed it stacks above the
- * column strip, as the desktop's Agent Monitor card stacks it (kangentic
- * #877). A workflow task never wears it, since joining a workflow clears the
- * switch, and the flag alone decides, as it does on the desktop.
+ * Across the top of a card whose column automations are paused (protocol
+ * 0.22.0): the desktop's "Automations paused" strip, in the column strip's
+ * shell, with no hue, so it competes with neither the activity mark nor a
+ * workflow's color. On an ordinary Board card it is the card's only strip.
+ * Over a band (the Agents feed's column strip, a workflow card's workflow
+ * strip) it stacks on top, as the desktop's Agent Monitor card and its held
+ * workflow card stack it (kangentic #877, #923). The flag alone decides, as it
+ * does on the desktop.
+ *
+ * Its name and testID keep the switch's old word, as the desktop's
+ * `AutomationsDisabledCardStrip` and its testid do.
  *
  * Static by design - no animated hooks (see ColumnStrip).
  */
 export const AutomationsDisabledStrip = React.memo(function AutomationsDisabledStrip({
   testID,
+  inWorkflow,
 }: {
   /** Root testID; the glyph's wrapper is `-icon`. */
   testID: string;
+  /** The task is in a workflow, whose tip says the workflow leaves it alone too. */
+  inWorkflow: boolean;
 }): React.JSX.Element {
   const theme = useTheme();
   return (
-    <CardStrip testID={testID} accessibilityLabel={AUTOMATIONS_DISABLED_DESCRIPTION}>
+    <CardStrip
+      testID={testID}
+      accessibilityLabel={inWorkflow ? WORKFLOW_AUTOMATIONS_PAUSED_DESCRIPTION : AUTOMATIONS_PAUSED_DESCRIPTION}
+    >
       <View style={styles.automations}>
         {/* The testID rides a wrapping View: lucide forwards `testID` as the
             web-only `data-testid`, which neither RNTL nor Maestro can select. */}
@@ -115,7 +132,7 @@ export const AutomationsDisabledStrip = React.memo(function AutomationsDisabledS
           <Ban size={AUTOMATIONS_ICON_SIZE} strokeWidth={AUTOMATIONS_ICON_STROKE} color={theme.colors.textMuted} />
         </View>
         <Text variant="caption" color="muted" numberOfLines={1} style={styles.automationsLabel}>
-          Automations disabled
+          Automations paused
         </Text>
       </View>
     </CardStrip>

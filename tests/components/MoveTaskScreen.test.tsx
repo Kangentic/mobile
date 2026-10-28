@@ -250,7 +250,8 @@ describe('MoveTaskScreen row highlight', () => {
  * a To Do move and every case below would pass for the wrong reason.
  */
 describe('MoveTaskScreen workflow tasks', () => {
-  function seedWorkflowBoard(workflow: Partial<BoardTaskWorkflowWire> | null, taskColumnId = 'lane-doing'): void {
+  /** `held`: the task's own automations are paused (protocol 0.25.0), which frees its card as a paused workflow's is. */
+  function seedWorkflowBoard(workflow: Partial<BoardTaskWorkflowWire> | null, taskColumnId = 'lane-doing', held = false): void {
     useBoardStore.setState({
       projects: [{ id: 'project-1', name: 'Alpha' }],
       boardsByProjectId: {
@@ -266,6 +267,7 @@ describe('MoveTaskScreen workflow tasks', () => {
               id: 'task-1',
               swimlane_id: taskColumnId,
               title: 'Fix the login redirect',
+              automations_disabled: held,
               workflow: workflow === null ? null : workflowWireFixture(workflow),
             }),
           },
@@ -354,6 +356,37 @@ describe('MoveTaskScreen workflow tasks', () => {
     expect(rowDisabled('lane-review')).toBe(false);
     expect(rowDisabled('lane-done')).toBe(false);
     // Two columns are open, so nothing is chosen for the user.
+    expect(screen.getByTestId('move-confirm').props.accessibilityState.disabled).toBe(true);
+  });
+
+  /**
+   * Kangentic #923 (design change 5): a held card of a running workflow moves by
+   * hand to any column but To Do, read from the row's own switch.
+   */
+  it('opens every column but To Do for a held card of a running workflow', async () => {
+    seedWorkflowBoard({ state: 'running', lock_reason: null, gate_target_id: null }, 'lane-doing', true);
+    await renderMoveTaskScreen();
+
+    expect(rowDisabled('lane-todo')).toBe(true);
+    expect(rowDisabled('lane-review')).toBe(false);
+    expect(rowDisabled('lane-done')).toBe(false);
+    expect(screen.getByTestId('move-confirm').props.accessibilityState.disabled).toBe(true);
+  });
+
+  /**
+   * The desktop names no gate for a held card, but the optimistic hold lands
+   * before the snapshot that drops it. A stale gate must neither limit the
+   * card nor pre-choose a column. Mutation seen failing: removing the
+   * `automations_disabled !== true` clause from MoveTaskScreen's gateTargetId
+   * left Review chosen ("Expected: false, Received: true" on its selected state).
+   */
+  it('chooses nothing for a held card that still carries a stale gate, and opens the rest', async () => {
+    seedWorkflowBoard({ state: 'running', lock_reason: null, gate_target_id: 'lane-review' }, 'lane-doing', true);
+    await renderMoveTaskScreen();
+
+    expect(rowSelected('lane-review')).toBe(false);
+    expect(rowDisabled('lane-done')).toBe(false);
+    expect(rowDisabled('lane-todo')).toBe(true);
     expect(screen.getByTestId('move-confirm').props.accessibilityState.disabled).toBe(true);
   });
 

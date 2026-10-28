@@ -118,9 +118,10 @@ export interface ColumnStripProps {
  * below it, which is the movement the row's fixed snippet slot already exists
  * to prevent. The desktop never drops its strip either.
  *
- * A held task's card (column automations disabled) stacks the automations
- * strip above this band, as the desktop's Agent Monitor card does (kangentic
- * #877), so it is one strip taller than its neighbours. That height follows the
+ * A held task's card (column automations paused) stacks the automations
+ * strip above this band, as the desktop's Agent Monitor card and its held
+ * workflow card do (kangentic #877, #923), so it is one strip taller than its
+ * neighbours. That height follows the
  * switch, which a person flips, and the board row, which arrives with the
  * labels row and the PR chip the stand-in lacks too. Nothing the agent streams
  * moves it.
