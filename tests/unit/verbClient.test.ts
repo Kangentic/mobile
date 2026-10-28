@@ -266,6 +266,55 @@ describe('VerbClient', () => {
     }
   });
 
+  /**
+   * `get_task_report` can wait on the desktop's index (up to 8 s) before it
+   * reads git, so the completed task Summary asks for it with its own 20 s
+   * bound (`TASK_REPORT_TIMEOUT_MS`). `boardToolRead` has to carry that option
+   * through `requireOk` to the capability client, or the read gives up at the
+   * shared 10 s default and the Summary falls back to the poorer `find_task`
+   * for a report the desktop was still assembling. A call with no options must
+   * keep the default, so no other board read quietly waits twice as long.
+   *
+   * Mutation seen failing: dropping `, options` from the `requireOk` call in
+   * `boardToolRead` - the optioned read has already rejected at 11 s.
+   */
+  it('boardToolRead gives a read its own timeout, and a read with no options still gives up at the default', async () => {
+    const reportTimeoutMs = 20_000;
+    // Harness first, on real timers: the handshake flush needs them.
+    const { verbs } = await establishedHarness(() => null); // the desktop never answers
+    vi.useFakeTimers();
+    try {
+      const readParams = { project: 'project-1', taskId: 'task-1' };
+      const optionedSettled = verbs.boardToolRead('get_task_report', readParams, { timeoutMs: reportTimeoutMs }).then(
+        () => 'resolved',
+        (error: unknown) => error,
+      );
+      const defaultSettled = verbs.boardToolRead('get_task_report', readParams).then(
+        () => 'resolved',
+        (error: unknown) => error,
+      );
+      let optionedHasSettled = false;
+      void optionedSettled.then(() => {
+        optionedHasSettled = true;
+      });
+
+      // Past the shared default: the read with no options is already gone, as a timeout.
+      await vi.advanceTimersByTimeAsync(11_000);
+      await expect(defaultSettled).resolves.toBeInstanceOf(CapabilityTimeoutError);
+      expect(optionedHasSettled).toBe(false);
+
+      // The last millisecond before its own bound: still waiting.
+      await vi.advanceTimersByTimeAsync(reportTimeoutMs - 11_000 - 1);
+      expect(optionedHasSettled).toBe(false);
+
+      // And at the bound it gives up as a timeout, rather than hanging forever.
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(optionedSettled).resolves.toBeInstanceOf(CapabilityTimeoutError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('registerPush sends the typed registration payload and parses the boolean result', async () => {
     const { verbs, requests } = await establishedHarness((request) => okResponse(request, { registered: true }));
 
