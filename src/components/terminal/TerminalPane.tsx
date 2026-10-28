@@ -3,6 +3,7 @@ import { AppState, Keyboard, StyleSheet, View, type LayoutChangeEvent } from 're
 import { Asset } from 'expo-asset';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import type { TerminalDimensionsWire } from '@kangentic/protocol';
 import { IconButton, MonoText, useTheme, type TerminalPalette, type Theme } from '@/components';
 import {
   decodeTerminalMessage,
@@ -118,7 +119,12 @@ const TERMINAL_EVAL_TIMEOUT_MS = 5000;
  * line so a logcat timeline can tell a swap's seed init from a chunk
  * release or a lens switch back. Names a code path, never content.
  */
-type TerminalInitReason = 'ready' | 'seed' | 'chunk-release' | 'swap' | 'clean-feed' | 'reactivate';
+type TerminalInitReason = 'ready' | 'seed' | 'chunk-release' | 'swap' | 'clean-feed' | 'reactivate' | 'grid-mismatch';
+
+/** A grid as one comparable value, or null when the desktop has not reported one. */
+function terminalGridKey(dimensions: TerminalDimensionsWire | null): string | null {
+  return dimensions === null ? null : `${dimensions.cols}x${dimensions.rows}`;
+}
 
 interface PendingTerminalEval {
   resolve: (value: unknown) => void;
@@ -228,11 +234,37 @@ export function TerminalPane({
   const directKeyRef = useRef<DirectKeyInputHandle>(null);
   const [terminalHtmlUri, setTerminalHtmlUri] = useState<string | null>(null);
   const [terminalReady, setTerminalReady] = useState(false);
-  // The same fact for handlers, written beside every setTerminalReady rather
-  // than only synced by an effect: a layout landing between the 'ready' init
-  // and that commit's effect would otherwise read false and never tell the
-  // live page its new fit height (onWebViewLayout).
+  // For handlers: true exactly while the live feed's listener is attached,
+  // which is also when the page has had its init. Written by the live-feed
+  // effect as it attaches and detaches, and cleared by recoverWebView itself,
+  // because a layout landing in the same tick as a lost renderer must not post
+  // to the page that is gone. The 'ready' handler reads it to tell a page
+  // that repeats 'ready' (answer at once) from a fresh page (the live-feed
+  // effect posts that init), and onWebViewLayout posts a new fit height only
+  // to a page whose init is out; before that, the init carries the height.
   const terminalReadyRef = useRef(false);
+  // THE READY GAP. A fresh page's init is posted by the live-feed effect,
+  // right after it attaches the listener, never by the 'ready' handler: the
+  // handler runs a task or more before that effect, and a snapshot landing in
+  // between emitted its dims and its seed to no listener. The page kept the
+  // grid it was inited with (80 columns guessed from an empty ring, rows
+  // unknown), nothing told it otherwise, and live 210-column output wrapped at
+  // 80 until the app restarted (task #131, seen on a Pixel). Each 'ready' that
+  // defers bumps the request; the effect posts once per request it has not
+  // posted yet. A counter in state rather than a flag in a ref, so the request
+  // re-runs the effect by itself: the init never depends on terminalReady
+  // changing value, which it would not if a remount's false and the new
+  // page's true were batched into one render.
+  const [readyInitRequest, setReadyInitRequest] = useState(0);
+  const postedReadyInitRequestRef = useRef(0);
+  // The ring as the 'ready' handler saw it, so the deferred init can say on
+  // the connection trace whether the gap was hit (terminal-ready-gap).
+  const readyRingStateRef = useRef<{ seeded: boolean; gridKey: string | null }>({ seeded: false, gridKey: null });
+  // The ring grid the last grid-mismatch repair was for (see the 'font-size'
+  // branch of onWebViewMessage), so a page that keeps reporting the same wrong
+  // grid is repaired once rather than in a loop. Cleared by a report that
+  // matches, and by a session swap.
+  const gridRepairKeyRef = useRef<string | null>(null);
   // Bumped to remount the WebView after the OS kills its renderer (the
   // Android render process under memory pressure, the iOS content process).
   // Without a handler that surfaces as a native crash or a permanently blank
@@ -411,9 +443,6 @@ export function TerminalPane({
   // width. See the provisional rule in onWebViewLayout.
   const hostFitHeightFromActiveRef = useRef(false);
   const hostFitWidthRef = useRef<number | null>(null);
-  useEffect(() => {
-    terminalReadyRef.current = terminalReady;
-  }, [terminalReady]);
   // Whether the soft keyboard is up, by the same events the screen's
   // KeyboardAvoidingView pads on: keyboardWillShow/WillHide on iOS and
   // keyboardDidShow/DidHide on Android (the other pair never fires there).
@@ -623,7 +652,8 @@ export function TerminalPane({
         scrollback: modeRestore + scrollback,
         // The desktop's exact grid. When the dims have not arrived yet (e.g.
         // mid-reconnect, before the snapshot lands) infer cols from content and
-        // leave rows null; the real grid arrives shortly as a 'resize'.
+        // leave rows null; the real grid arrives shortly as a 'resize', and the
+        // grid check on the next fit report repairs a page that missed it.
         cols: ptyDimensions ? ptyDimensions.cols : parseColsFromScrollback(scrollback),
         rows: ptyDimensions ? ptyDimensions.rows : null,
         fitHeightPx: hostFitHeightRef.current,
@@ -683,6 +713,12 @@ export function TerminalPane({
   // Live feed, attached only after the WebView said 'ready' (writes posted
   // before then would race the Terminal construction). Chunks batch on a
   // short timer so a fast token stream becomes one write per frame-ish.
+  //
+  // A fresh page's init is posted HERE, in the same synchronous block that
+  // attaches the listener (see readyInitRequest): every dims, seed and chunk
+  // that landed in the ring before it is in the init, and every one after it
+  // reaches the listener. Posting it from the 'ready' handler left a gap the
+  // desktop's answer could fall into.
   useEffect(() => {
     if (!terminalReady) return;
     const unsubscribe = subscribeChunks(sessionId, (event) => {
@@ -737,12 +773,34 @@ export function TerminalPane({
         }, CHUNK_BATCH_INTERVAL_MS);
       }
     });
+    terminalReadyRef.current = true;
+    if (readyInitRequest !== postedReadyInitRequestRef.current) {
+      postedReadyInitRequestRef.current = readyInitRequest;
+      // Whether the desktop's answer landed between the page's 'ready' and
+      // this attach, the window that used to drop it, so a release build's
+      // trace can count how often it is hit. Booleans only, never an
+      // identifier.
+      const seedLanded = !readyRingStateRef.current.seeded && hasSeed(sessionId);
+      const dimsLanded = readyRingStateRef.current.gridKey !== terminalGridKey(getTerminalDimensions(sessionId));
+      if (seedLanded || dimsLanded) traceConnection('terminal-ready-gap', { seedLanded, dimsLanded });
+      postInit('ready');
+    }
     return () => {
+      terminalReadyRef.current = false;
       unsubscribe();
       clearFlushTimer();
       flushPendingChunks();
     };
-  }, [terminalReady, sessionId, postInit, postInitOrHold, flushPendingChunks, clearFlushTimer, postToTerminal]);
+  }, [
+    terminalReady,
+    readyInitRequest,
+    sessionId,
+    postInit,
+    postInitOrHold,
+    flushPendingChunks,
+    clearFlushTimer,
+    postToTerminal,
+  ]);
 
   // Pause/resume rendering with tab visibility. When the terminal becomes the
   // visible page again, drop any queued writes and re-seed from the ring so the
@@ -820,8 +878,12 @@ export function TerminalPane({
     if (!sessionChanged && !cleanFeedChanged) return;
     previousSessionIdRef.current = sessionId;
     previousCleanFeedRef.current = cleanFeedEnabled;
-    // A new session is a new episode: it gets its own repair attempts.
-    if (sessionChanged) blankRecoveryAttemptsRef.current = 0;
+    // A new session is a new episode: it gets its own repair attempts, and
+    // its own grid repair.
+    if (sessionChanged) {
+      blankRecoveryAttemptsRef.current = 0;
+      gridRepairKeyRef.current = null;
+    }
     if (!terminalReady) return;
     pendingChunksRef.current = [];
     clearFlushTimer();
@@ -869,8 +931,22 @@ export function TerminalPane({
         displayedFrameSessionIdRef.current = null;
         heldInitSessionIdRef.current = null;
         setAwaitingFirstFrame(true);
-        postInit('ready');
-        terminalReadyRef.current = true;
+        if (terminalReadyRef.current) {
+          // A page that said 'ready' again without a remount: the live feed
+          // is already attached, so nothing can fall between this init and
+          // the listener.
+          postInit('ready');
+          return;
+        }
+        // Otherwise the live-feed effect posts it, once it has attached the
+        // listener (see readyInitRequest for why never from here). The ref
+        // stays false until then, so a second 'ready' before that commit
+        // joins this request rather than posting into the gap.
+        readyRingStateRef.current = {
+          seeded: hasSeed(sessionId),
+          gridKey: terminalGridKey(getTerminalDimensions(sessionId)),
+        };
+        setReadyInitRequest((request) => request + 1);
         setTerminalReady(true);
         return;
       }
@@ -957,6 +1033,37 @@ export function TerminalPane({
           maxCellWriteMs: message.maxCellWriteMs ?? 'n/a',
           active: isActiveRef.current,
         });
+        // THE GRID CHECK: the page's grid must be the ring's. Every path that
+        // changes the ring's grid tells the page, but by an EVENT, and one
+        // missed event (the ready gap above was one) left a mirror wrapping
+        // at a guessed width with nothing to bring it back. The fit report
+        // carries the page's own grid after every fit, so this compares the
+        // page's truth, not a record of what was posted. Re-inits rather than
+        // resizes: the ring's bytes are laid out for the ring's grid, so a
+        // replay repairs the frame, where a resize would keep whatever the
+        // wrong width already drew. Skipped while hidden (stale until the
+        // reactivate init, by design), while held (a swap hold shows the
+        // previous session's grid on purpose), and with no desktop grid to
+        // compare against. Once per ring grid until a report matches, so a
+        // page that never adopts the grid cannot loop; a report that was
+        // already in flight when a desktop resize landed costs at most one
+        // redundant re-init.
+        const ringDimensions = getTerminalDimensions(sessionId);
+        if (ringDimensions !== null && isActiveRef.current && heldInitSessionIdRef.current !== sessionId) {
+          // Field by field, not by terminalGridKey: the page's rows are null
+          // until it learns a grid, and the key is only the repair's memo.
+          if (message.cols === ringDimensions.cols && message.rows === ringDimensions.rows) {
+            gridRepairKeyRef.current = null;
+          } else {
+            const ringGridKey = terminalGridKey(ringDimensions);
+            if (gridRepairKeyRef.current !== ringGridKey) {
+              gridRepairKeyRef.current = ringGridKey;
+              pendingChunksRef.current = [];
+              clearFlushTimer();
+              postInitOrHold('grid-mismatch');
+            }
+          }
+        }
         return;
       }
       if (message.type === 'renderer') {
@@ -998,7 +1105,7 @@ export function TerminalPane({
           writeError instanceof Error ? writeError.message : String(writeError);
       });
     },
-    [postInit, sessionId, clearBlankRecovery],
+    [postInit, postInitOrHold, sessionId, clearBlankRecovery, clearFlushTimer],
   );
 
   /* eslint-disable react-hooks/refs, react-hooks/purity -- the pinch callbacks run on touch

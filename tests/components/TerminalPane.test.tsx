@@ -821,22 +821,23 @@ describe('TerminalPane (faithful mirror)', () => {
 
     /**
      * A layout that lands in the same tick as the page's 'ready', before the
-     * commit that 'ready' schedules has run its passive effects, must still
-     * reach the live page. The 'ready' handler posts the init (which carried no
-     * height: no layout had landed yet) and the layout handler then has a page
-     * to tell, but only if the ready flag the layout handler reads was written
-     * by the 'ready' handler itself. It used to be synced only by a passive
-     * effect, so this layout read false, was recorded and never posted, and the
-     * page sat on its own provisional height until the next unrelated layout.
+     * commit that 'ready' schedules has run its passive effects, is in the
+     * page's very first init. That init is posted by the live-feed effect once
+     * it has attached the listener (the ready gap, task #131), which runs after
+     * this layout. When the 'ready' handler posted the init itself, this layout
+     * came too late for it and reached the page only as a separate fit-height
+     * post, so the first frame was fitted to the page's own provisional height
+     * and corrected after.
      *
-     * Both calls are inside ONE act(): React batches the setTerminalReady(true)
-     * and runs neither a render nor a passive effect until the callback
-     * returns, which is what makes the gap between the two calls real.
+     * Both calls are inside ONE act(): React batches the state updates and runs
+     * neither a render nor a passive effect until the callback returns, which
+     * is what makes the gap between the two calls real.
      *
-     * Mutation that reddens this: delete `terminalReadyRef.current = true;` from
-     * the 'ready' branch of onWebViewMessage.
+     * Mutation that reddens this: post `postInit('ready')` from the 'ready'
+     * branch of onWebViewMessage instead of deferring it to the live-feed
+     * effect.
      */
-    it('tells a page that just reported ready its fit height when a layout lands in the same tick', async () => {
+    it('fits the first init to a layout that lands in the same tick as ready', async () => {
       retainTerminal('sess-1');
       seedScrollback('sess-1', 'hello');
       await render(
@@ -852,13 +853,9 @@ describe('TerminalPane (faithful mirror)', () => {
         liveProps?.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width: 411, height: 635 } } });
       });
 
-      // The precondition that makes this the race: the init the page got
-      // carried no height, so the post below is its only way to learn one.
-      const firstInit = decodedPosts().find((message) => message?.type === 'init');
-      expect(firstInit?.type === 'init' ? firstInit.fitHeightPx : 'no init').toBeNull();
-      expect(decodedPosts().filter((message) => message?.type === 'fit-height')).toEqual([
-        { type: 'fit-height', fitHeightPx: 635 },
-      ]);
+      const inits = decodedPosts().filter((message) => message?.type === 'init');
+      expect(inits).toHaveLength(1);
+      expect(inits[0]?.type === 'init' ? inits[0].fitHeightPx : 'no init').toBe(635);
     });
 
     /**
@@ -1289,6 +1286,365 @@ describe('TerminalPane (faithful mirror)', () => {
       await rerenderPane(result, true);
 
       expect(decodedPosts().some((message) => message?.type === 'init')).toBe(false);
+    });
+  });
+
+  /**
+   * Board task #131: a Command Terminal started from a Pixel wrapped every row
+   * at 80 columns while its bytes were laid out for the desktop's 210x48 park
+   * grid, until the app restarted. The page had been inited with no grid (80
+   * columns guessed from an empty ring, rows unknown) and never told the real
+   * one: the 'ready' handler posted the init, and the listener attached in an
+   * effect a task or more later, so a snapshot landing in between emitted its
+   * dims and its seed to nobody.
+   */
+  describe('the ready gap and the grid check', () => {
+    const PARK_GRID = { cols: 210, rows: 48 };
+
+    async function renderPaneWithoutReady(cleanFeedEnabled = false): Promise<RenderResult> {
+      const result = await render(
+        <ThemeProvider>
+          <TerminalPane sessionId="sess-1" isActive cleanFeedEnabled={cleanFeedEnabled} />
+        </ThemeProvider>,
+      );
+      await waitFor(() => expect(screen.getByTestId('terminal-webview')).toBeTruthy());
+      return result;
+    }
+
+    /**
+     * Fires 'ready' and then the ring writes inside ONE act(), so they land
+     * after the handler ran and before the commit that attaches the listener.
+     * postFromWebView would flush that commit first and hide the gap.
+     */
+    async function readyWithRingWritesInTheGap(landInGap: () => void): Promise<void> {
+      await act(() => {
+        webViewMock.__capturedProps.current?.onMessage?.({ nativeEvent: { data: JSON.stringify({ type: 'ready' }) } });
+        landInGap();
+      });
+    }
+
+    function postedInits(): Extract<NonNullable<ReturnType<typeof decodeHostMessage>>, { type: 'init' }>[] {
+      return decodedPosts().flatMap((message) => (message?.type === 'init' ? [message] : []));
+    }
+
+    function tracedInitReasons(): unknown[] {
+      return connectionTraceMock.traceConnection.mock.calls
+        .filter((call) => call[0] === 'terminal-init')
+        .map((call) => (call[1] as { reason: unknown }).reason);
+    }
+
+    function fitReport(cols: number, rows: number | null): string {
+      return JSON.stringify({ type: 'font-size', fontSizePx: 10, source: 'settled', trigger: 'init', cols, rows });
+    }
+
+    /** The data of every 'write' the pane has posted since the mock was last cleared. */
+    function postedWriteData(): string[] {
+      return decodedPosts().flatMap((message) => (message?.type === 'write' ? [message.data] : []));
+    }
+
+    /**
+     * The screenshot: the snapshot's dims and seed both land in the gap.
+     * Mutation seen failing: post `postInit('ready')` from the 'ready' branch
+     * of onWebViewMessage (the one init carries 80 columns, null rows and an
+     * empty scrollback).
+     */
+    it('inits a fresh page at the grid and with the seed of a snapshot that lands in the gap', async () => {
+      retainTerminal('sess-1');
+      await renderPaneWithoutReady();
+
+      await readyWithRingWritesInTheGap(() => {
+        setTerminalDimensions('sess-1', PARK_GRID);
+        seedScrollback('sess-1', 'Beyond the issue in #51');
+      });
+
+      const inits = postedInits();
+      expect(inits).toHaveLength(1);
+      expect(inits[0]?.cols).toBe(210);
+      expect(inits[0]?.rows).toBe(48);
+      expect(inits[0]?.scrollback).toBe('Beyond the issue in #51');
+      expect(connectionTraceMock.traceConnection).toHaveBeenCalledWith('terminal-ready-gap', {
+        seedLanded: true,
+        dimsLanded: true,
+      });
+    });
+
+    /**
+     * The terminal that never loads (inferred, no capture yet): an idle TUI
+     * sends no live bytes, so a seed lost in the gap left the page blank with
+     * nothing retrying. Mutation seen failing: the same as above.
+     */
+    it('inits a fresh page with a seed that lands in the gap without dims', async () => {
+      retainTerminal('sess-1');
+      await renderPaneWithoutReady();
+
+      await readyWithRingWritesInTheGap(() => seedScrollback('sess-1', 'idle prompt'));
+
+      const inits = postedInits();
+      expect(inits).toHaveLength(1);
+      expect(inits[0]?.scrollback).toBe('idle prompt');
+      expect(connectionTraceMock.traceConnection).toHaveBeenCalledWith('terminal-ready-gap', {
+        seedLanded: true,
+        dimsLanded: false,
+      });
+    });
+
+    it('traces no gap when the ring was already seeded before the page was ready', async () => {
+      retainTerminal('sess-1');
+      setTerminalDimensions('sess-1', PARK_GRID);
+      seedScrollback('sess-1', 'hello');
+      await renderPaneAndReady();
+
+      expect(postedInits()).toHaveLength(1);
+      expect(connectionTraceMock.traceConnection).not.toHaveBeenCalledWith('terminal-ready-gap', expect.anything());
+    });
+
+    /**
+     * The live-feed effect re-runs on every dependency change; only a 'ready'
+     * it has not answered may post a ready init. Mutation seen failing: drop
+     * the `postedReadyInitRequestRef.current = readyInitRequest` write (the
+     * clean-feed flip posted a second 'ready' init beside its own).
+     */
+    it('posts no second ready init when the live feed re-attaches for another reason', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      const result = await renderPaneWithoutReady();
+      await postFromWebView(JSON.stringify({ type: 'ready' }));
+      expect(tracedInitReasons()).toEqual(['ready']);
+
+      await result.rerender(
+        <ThemeProvider>
+          <TerminalPane sessionId="sess-1" isActive cleanFeedEnabled />
+        </ThemeProvider>,
+      );
+
+      expect(tracedInitReasons()).toEqual(['ready', 'clean-feed']);
+    });
+
+    /**
+     * A page that says 'ready' again without a remount has the listener
+     * already attached, so it is answered at once. Mutation seen failing: drop
+     * the `postInit('ready')` from the already-ready branch (no init at all).
+     */
+    it('answers a second ready from the same page with an init', async () => {
+      retainTerminal('sess-1');
+      setTerminalDimensions('sess-1', PARK_GRID);
+      seedScrollback('sess-1', 'hello');
+      await renderPaneAndReady();
+      webViewMock.__postMessageMock.mockClear();
+
+      await postFromWebView(JSON.stringify({ type: 'ready' }));
+
+      const inits = postedInits();
+      expect(inits).toHaveLength(1);
+      expect(inits[0]?.cols).toBe(210);
+    });
+
+    /**
+     * Two 'ready' messages that land before the commit attaching the live feed
+     * join ONE request: the ready ref is written only once the listener is
+     * attached, so the second cannot take the already-ready branch and post an
+     * init into the gap. Mutation seen failing: write `terminalReadyRef.current
+     * = true` in the 'ready' branch just before `setTerminalReady(true)` (the
+     * second ready posts its own init into the gap, then the effect posts the
+     * request's: two inits, expected length 1 received 2).
+     */
+    it('answers two ready messages that land before the live feed attaches with exactly one init', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      await renderPaneWithoutReady();
+
+      await act(() => {
+        const onMessage = webViewMock.__capturedProps.current?.onMessage;
+        onMessage?.({ nativeEvent: { data: JSON.stringify({ type: 'ready' }) } });
+        onMessage?.({ nativeEvent: { data: JSON.stringify({ type: 'ready' }) } });
+      });
+
+      expect(postedInits()).toHaveLength(1);
+      expect(tracedInitReasons()).toEqual(['ready']);
+    });
+
+    /**
+     * The checked invariant: a page reporting a grid other than the ring's is
+     * re-inited from the ring, once per ring grid until a report matches.
+     * Mutation seen failing: delete the comparison in the 'font-size' branch
+     * (no repair at all), and drop the `gridRepairKeyRef.current = null` reset
+     * on a match (the later divergence goes unrepaired).
+     */
+    it('re-inits a page whose fit report shows a grid other than the ring, once until a report matches', async () => {
+      retainTerminal('sess-1');
+      setTerminalDimensions('sess-1', PARK_GRID);
+      seedScrollback('sess-1', 'hello');
+      await renderPaneAndReady();
+      webViewMock.__postMessageMock.mockClear();
+      connectionTraceMock.traceConnection.mockClear();
+
+      // The page on its 80-column guess, rows unknown: the screenshot's state.
+      await postFromWebView(fitReport(80, null));
+      let inits = postedInits();
+      expect(inits).toHaveLength(1);
+      expect(inits[0]?.cols).toBe(210);
+      expect(inits[0]?.rows).toBe(48);
+      expect(inits[0]?.scrollback).toBe('hello');
+      expect(tracedInitReasons()).toEqual(['grid-mismatch']);
+
+      // The same wrong report again: no loop.
+      webViewMock.__postMessageMock.mockClear();
+      await postFromWebView(fitReport(80, null));
+      expect(postedInits()).toHaveLength(0);
+
+      // A matching report, then a later divergence: repaired again.
+      await postFromWebView(fitReport(210, 48));
+      expect(postedInits()).toHaveLength(0);
+      await postFromWebView(fitReport(80, null));
+      inits = postedInits();
+      expect(inits).toHaveLength(1);
+      expect(inits[0]?.cols).toBe(210);
+    });
+
+    /**
+     * The re-init replays the whole ring, so a chunk still queued for the
+     * batch flush is already inside it: the repair drops the queue and the
+     * timer, and the chunk is not written a second time on top of the replay.
+     * Mutation seen failing: delete `pendingChunksRef.current = []` and
+     * `clearFlushTimer()` from the grid-mismatch branch (the batch timer then
+     * writes the chunk a second time after the init: expected no writes,
+     * received the queued chunk).
+     */
+    it('drops the chunks queued for the batch flush when a grid mismatch re-inits, so they are not written twice', async () => {
+      jest.useFakeTimers();
+      try {
+        const queuedChunk = 'queued-behind-the-batch-timer';
+        retainTerminal('sess-1');
+        setTerminalDimensions('sess-1', PARK_GRID);
+        seedScrollback('sess-1', 'hello');
+        await renderPaneAndReady();
+        webViewMock.__postMessageMock.mockClear();
+        connectionTraceMock.traceConnection.mockClear();
+
+        // No input was sent, so the echo fast path is closed and the chunk
+        // waits on the batch timer: nothing is written yet.
+        await act(() => appendChunk('sess-1', queuedChunk));
+        expect(postedWriteData()).toEqual([]);
+
+        await postFromWebView(fitReport(80, null));
+        // Past the batch interval, so a timer the repair left armed would fire.
+        await act(() => {
+          jest.advanceTimersByTime(100);
+        });
+
+        expect(tracedInitReasons()).toEqual(['grid-mismatch']);
+        const inits = postedInits();
+        expect(inits).toHaveLength(1);
+        // The replay already carries the chunk...
+        expect(inits[0]?.scrollback).toBe(`hello${queuedChunk}`);
+        // ...so nothing writes it again.
+        expect(postedWriteData()).toEqual([]);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    /**
+     * A new session is a new episode with its own grid repair: the repair the
+     * previous session spent at this grid key must not swallow the successor's
+     * first divergence. Mutation seen failing: drop `gridRepairKeyRef.current
+     * = null` from the `sessionChanged` block of the session-change effect (the
+     * swap init still posts, but the successor's report finds the key already
+     * spent: no grid-mismatch init, expected ['grid-mismatch'] received []).
+     */
+    it("repairs the successor session's first divergence at the same grid key after a session change", async () => {
+      retainTerminal('sess-1');
+      setTerminalDimensions('sess-1', PARK_GRID);
+      seedScrollback('sess-1', 'hello');
+      const result = await renderPaneAndReady();
+      webViewMock.__postMessageMock.mockClear();
+      connectionTraceMock.traceConnection.mockClear();
+
+      // The first session spends the repair for its 210x48 ring grid.
+      await postFromWebView(fitReport(80, null));
+      expect(postedInits()).toHaveLength(1);
+      expect(tracedInitReasons()).toEqual(['grid-mismatch']);
+
+      // The successor is seeded with VISIBLE bytes at the same grid, so its
+      // swap init is posted rather than held (a held init would make the grid
+      // check skip and this test pass vacuously).
+      retainTerminal('sess-2');
+      setTerminalDimensions('sess-2', PARK_GRID);
+      seedScrollback('sess-2', 'world');
+      webViewMock.__postMessageMock.mockClear();
+      connectionTraceMock.traceConnection.mockClear();
+      await result.rerender(
+        <ThemeProvider>
+          <TerminalPane sessionId="sess-2" isActive />
+        </ThemeProvider>,
+      );
+      expect(tracedInitReasons()).toEqual(['swap']);
+      expect(postedInits()).toHaveLength(1);
+
+      webViewMock.__postMessageMock.mockClear();
+      connectionTraceMock.traceConnection.mockClear();
+      await postFromWebView(fitReport(80, null));
+
+      expect(tracedInitReasons()).toEqual(['grid-mismatch']);
+      const inits = postedInits();
+      expect(inits).toHaveLength(1);
+      expect(inits[0]?.cols).toBe(210);
+      expect(inits[0]?.rows).toBe(48);
+      expect(inits[0]?.scrollback).toBe('world');
+    });
+
+    it('leaves the grid to the reactivate init while the pane is hidden', async () => {
+      retainTerminal('sess-1');
+      setTerminalDimensions('sess-1', PARK_GRID);
+      seedScrollback('sess-1', 'hello');
+      const result = await renderPaneAndReady();
+      await rerenderPane(result, false);
+      webViewMock.__postMessageMock.mockClear();
+
+      await postFromWebView(fitReport(80, null));
+
+      expect(postedInits()).toHaveLength(0);
+    });
+
+    /**
+     * A held init keeps the frame on screen on purpose (a swap hold shows the
+     * previous session's grid), so a report taken then is no divergence and
+     * must not spend the one repair the grid gets. Mutation seen failing: drop
+     * the `heldInitSessionIdRef.current !== sessionId` gate (the report during
+     * the hold spent the repair, and the real divergence after the release
+     * went unrepaired; postInitOrHold's own hold hides the difference before).
+     */
+    it('leaves the grid alone while an init is held, and keeps its repair for after', async () => {
+      retainTerminal('sess-1');
+      setTerminalDimensions('sess-1', PARK_GRID);
+      seedScrollback('sess-1', 'hello');
+      await renderPaneAndReady();
+      // An empty re-seed over the painted frame: held until visible bytes come.
+      await act(() => seedScrollback('sess-1', ''));
+      webViewMock.__postMessageMock.mockClear();
+
+      await postFromWebView(fitReport(80, null));
+      expect(postedInits()).toHaveLength(0);
+
+      // Visible bytes release the hold, and a divergence after that is repaired.
+      await act(() => appendChunk('sess-1', 'world'));
+      expect(postedInits()).toHaveLength(1);
+      webViewMock.__postMessageMock.mockClear();
+      await postFromWebView(fitReport(80, null));
+      const inits = postedInits();
+      expect(inits).toHaveLength(1);
+      expect(inits[0]?.cols).toBe(210);
+    });
+
+    it('checks nothing when the desktop has reported no grid', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      await renderPaneAndReady();
+      webViewMock.__postMessageMock.mockClear();
+
+      await postFromWebView(fitReport(80, null));
+
+      expect(postedInits()).toHaveLength(0);
     });
   });
 

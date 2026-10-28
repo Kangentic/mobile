@@ -1928,17 +1928,23 @@ move-opened window, the end arriving, with `sinceMoveMs`), `phase=bind` (the suc
 `sinceEndedMs` and `sinceMoveMs`), `phase=settled` (the veil let go, with the `mode` it settled
 in, `sinceEndedMs`, `sinceMoveMs` and `sinceBindMs`) or `phase=deadline` (the quiet threshold
 passed first, with `bound` and `ended`; `ended=false` is a move whose end never came, which drops
-the veil without spending the window), plus six from the terminal pane: `terminal-fit-height`
+the veil without spending the window), plus seven from the terminal pane: `terminal-fit-height`
 when the pane's measured fit height changes (`fitHeightPx`, `previousPx`, `ready`, whether the
 page was up to be told, and `active`, false for a provisional value taken while another lens
 showed; a fit must end on the pane's settled height, so with the keyboard
 down the last of these should match the next `terminal-fit`'s `innerHeightPx`), `terminal-init` on every init it
-posts (`reason`, one of `ready`, `seed`, `chunk-release`, `swap`, `clean-feed` or `reactivate`;
-the grid's `cols` and `rows`, `n/a` before the desktop reports one; `fitHeightPx`, the
-host-measured Terminal-lens height the page fits against, `n/a` before the pane has measured one;
-`holdFrame`, whether the page holds the displayed frame across the reset; and `preservePinch`,
-whether a pinch survives it), `terminal-fit` on every fit report the page sends (`source`,
-`settled` when a fit chain converged or `texture-cap` when the GPU limit clamped a pinch;
+posts (`reason`, one of `ready`, `seed`, `chunk-release`, `swap`, `clean-feed`, `reactivate` or
+`grid-mismatch`, the last when a fit report showed the page on a grid other than the ring's and the
+pane re-inited it from the ring; the grid's `cols` and `rows`, `n/a` before the desktop reports one;
+`fitHeightPx`, the host-measured Terminal-lens height the page fits against, `n/a` before the pane
+has measured one; `holdFrame`, whether the page holds the displayed frame across the reset; and
+`preservePinch`, whether a pinch survives it), `terminal-ready-gap` when the desktop's answer
+landed between the page's `ready` and the moment the live feed attached (`seedLanded` and
+`dimsLanded`; task #131: the init used to be posted before the listener, so such an answer was
+dropped and the mirror sat on a guessed 80-column grid until a restart. The init now waits for the
+listener, so this line counts how often that window is hit rather than a failure), `terminal-fit`
+on every fit report the page sends (`source`, `settled` when a fit chain converged or
+`texture-cap` when the GPU limit clamped a pinch;
 `trigger`, what started the fit, one of `init`, `ro-settle`, `ro-raf`, `window-resize`,
 `refit-msg`, `resize-msg` or `fit-height`; the settled `fontSizePx` and `lineHeight`; the grid's
 `cols` and `rows`; the page's `fitHeightPx` beside the host's `hostFitHeightPx`; the page's
@@ -1950,7 +1956,10 @@ canvas resize that clears the pane), `cellWriteMs` and `maxCellWriteMs`, all `n/
 `texture-cap` report; and `active`, whether the pane was the visible one). A `cellWrites` above 2
 on a `computed` chain, or any `computed-miss` at 48 rows, is the regression to look for. Every open of a grid of 48
 rows or fewer should settle on the SAME `fontSizePx` and `lineHeight`, which is the reference-cell
-rule's whole claim, so this line is how it is checked on a release build. Then
+rule's whole claim, so this line is how it is checked on a release build. Its `cols` and `rows`
+are the page's own grid: a mirror whose rows wrap at the wrong width shows here as a grid other
+than the desktop's (for task #131's case, `cols=80 rows=n/a` while the desktop's PTY was 210x48),
+and the pane answers it with a `grid-mismatch` init, once per grid. Then
 `terminal-recovery` when the blank-recovery deadline fires (`action`, `refresh` when no seed ever
 arrived, so the stream is re-subscribed, or `remount` when the page sent no paint report at all for
 its init, so the WebView is rebuilt; and `attempt`, at most two per episode), `terminal-painted`
