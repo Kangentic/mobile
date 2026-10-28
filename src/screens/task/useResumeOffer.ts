@@ -21,6 +21,11 @@ export interface ResumeOffer {
    * 0.21.0): the desktop refuses to resume one task of a paused workflow, so
    * the session panel offers View workflow there, where Resume lives (design
    * screen 5), and no surface offers Resume session.
+   *
+   * Never set for a held task (its own automations paused, protocol 0.25.0):
+   * the workflow's Pause and Resume leave its agent alone (kangentic #923), so
+   * the workflow's Resume would not bring this one back, and it keeps its own
+   * Resume session.
    */
   pausedWorkflow: { workflowId: string; homeProjectId: string } | null;
 }
@@ -83,12 +88,13 @@ export function useResumeOffer(taskId: string | null, sessionId: string | null):
     const workflow = selectTaskRow(state, taskId)?.workflow;
     return workflow ? normalizeWorkflowState(workflow.state) === 'paused' : false;
   });
+  const held = useBoardStore((state) => selectTaskRow(state, taskId)?.automations_disabled === true);
   const pausedWorkflow = useMemo(
     () =>
-      resumeOffered && workflowPaused && workflowId !== null && workflowHomeProjectId !== null
+      resumeOffered && workflowPaused && !held && workflowId !== null && workflowHomeProjectId !== null
         ? { workflowId, homeProjectId: workflowHomeProjectId }
         : null,
-    [resumeOffered, workflowPaused, workflowId, workflowHomeProjectId],
+    [resumeOffered, workflowPaused, held, workflowId, workflowHomeProjectId],
   );
   return { offered: resumeOffered && pausedWorkflow === null, attempt, pausedWorkflow };
 }

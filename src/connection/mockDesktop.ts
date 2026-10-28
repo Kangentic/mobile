@@ -2181,9 +2181,9 @@ export function initialTasks(): BoardTaskWire[] {
       // on this palette is the true yellow `warning` rather than the brand
       // amber (see the two-hue rule in theme/tokens.ts).
       pr_merge_readiness: 'blocked',
-      // The held card (protocol 0.22.0): its column automations are off, so
-      // `dev:mock` shows the "Automations disabled" strip and the menu's
-      // Enable automations. In Merge because the store screenshots photograph
+      // The held card (protocol 0.22.0): its column automations are paused,
+      // so `dev:mock` shows the "Automations paused" strip and the menu's
+      // Resume automations. In Merge because the store screenshots photograph
       // only Executing, and the Agents feed draws no sessionless task.
       automations_disabled: true,
       created_at: nowIso,
@@ -2479,6 +2479,7 @@ export function initialTasks2(): BoardTaskWire[] {
         description: seed.description,
         swimlane_id: seed.columnId,
         position: 10 + seedIndex,
+        automations_disabled: seed.held,
         created_at: nowIso,
         updated_at: nowIso,
       }),
@@ -2489,7 +2490,8 @@ export function initialTasks2(): BoardTaskWire[] {
 /**
  * checkout-api's workflows (protocol 0.21.0), one per state the phone draws
  * differently: one RUNNING (a locked card, a card in a human gate, cards
- * blocked by one and by two tasks, a queued one, and a finished one), one
+ * blocked by one and by two tasks, the first of them held by its own
+ * automations switch (protocol 0.25.0), a queued one, and a finished one), one
  * PAUSED, and one not started (a draft, which has no board rows at all, so it
  * is reached only through `list_workflows` and `get_workflow`).
  */
@@ -2518,6 +2520,8 @@ interface MockWorkflowTaskSeed {
   waitsFor: string[];
   /** A column no agent judges, and the one column a hand may move it on to from there. */
   humanGate: { columnId: string; targetColumnId: string } | null;
+  /** Starts with its own automations paused (protocol 0.25.0): held out of its workflow while the rest runs. */
+  held: boolean;
 }
 
 export const MOCK_WORKFLOW_TASK_SEEDS: readonly MockWorkflowTaskSeed[] = [
@@ -2531,6 +2535,7 @@ export const MOCK_WORKFLOW_TASK_SEEDS: readonly MockWorkflowTaskSeed[] = [
     route: ['lane2-executing', 'lane2-code-review', 'lane2-merge'],
     waitsFor: ['#5'],
     humanGate: null,
+    held: false,
   },
   {
     taskId: 'mock-task-wf-refunds',
@@ -2542,6 +2547,7 @@ export const MOCK_WORKFLOW_TASK_SEEDS: readonly MockWorkflowTaskSeed[] = [
     route: ['lane2-executing', 'lane2-testing', 'lane2-merge'],
     waitsFor: ['#5'],
     humanGate: { columnId: 'lane2-testing', targetColumnId: 'lane2-merge' },
+    held: false,
   },
   {
     taskId: 'mock-task-wf-soak',
@@ -2553,6 +2559,9 @@ export const MOCK_WORKFLOW_TASK_SEEDS: readonly MockWorkflowTaskSeed[] = [
     route: ['lane2-executing', 'lane2-code-review', 'lane2-merge'],
     waitsFor: ['#6'],
     humanGate: null,
+    // The held workflow card: both strips, its blocker still named in the
+    // footer, and Resume automations plus an open Move in its sheet.
+    held: true,
   },
   {
     taskId: 'mock-task-wf-runbook',
@@ -2564,6 +2573,7 @@ export const MOCK_WORKFLOW_TASK_SEEDS: readonly MockWorkflowTaskSeed[] = [
     route: ['lane2-planning', 'lane2-executing'],
     waitsFor: ['#6', '#7'],
     humanGate: null,
+    held: false,
   },
   {
     taskId: 'mock-task-wf-keys',
@@ -2575,6 +2585,7 @@ export const MOCK_WORKFLOW_TASK_SEEDS: readonly MockWorkflowTaskSeed[] = [
     route: ['lane2-executing'],
     waitsFor: [],
     humanGate: null,
+    held: false,
   },
   {
     taskId: 'mock-task-wf-currency',
@@ -2586,6 +2597,7 @@ export const MOCK_WORKFLOW_TASK_SEEDS: readonly MockWorkflowTaskSeed[] = [
     route: ['lane2-executing', 'lane2-code-review'],
     waitsFor: [],
     humanGate: null,
+    held: false,
   },
   {
     taskId: 'mock-task-wf-euro',
@@ -2597,6 +2609,7 @@ export const MOCK_WORKFLOW_TASK_SEEDS: readonly MockWorkflowTaskSeed[] = [
     route: ['lane2-planning', 'lane2-executing'],
     waitsFor: [],
     humanGate: null,
+    held: false,
   },
 ];
 
@@ -4520,15 +4533,23 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
 
   /**
    * A row's `workflow`, as the desktop's workflow-wire.ts builds it: the lock
-   * sentence only while the workflow runs and the card is not in a human gate,
-   * and the gate's target only while it sits in that gate.
+   * sentence only while the workflow runs and the card is neither held nor in
+   * a human gate, and the gate's target only while it sits in that gate and is
+   * not held. A held card (its own automations paused, protocol 0.25.0) moves
+   * by hand, so it gets neither, as the desktop's `humanGateExit` and
+   * `workflowWireFacts` give it none. Every row says this desktop honours the
+   * hold (`automations_pausable`).
    */
   function mockWorkflowWire(task: BoardTaskWire): BoardTaskWorkflowWire | null {
     const seed = MOCK_WORKFLOW_TASK_SEEDS.find((candidate) => candidate.taskId === task.id);
     const definition = seed ? mockWorkflowDefinition(seed.workflowId) : null;
     if (!seed || !definition) return null;
     const state = workflowStates.get(definition.id) ?? definition.initialState;
-    const gateTargetId = state === 'running' && seed.humanGate !== null && task.swimlane_id === seed.humanGate.columnId ? seed.humanGate.targetColumnId : null;
+    const held = task.automations_disabled === true;
+    const gateTargetId =
+      state === 'running' && !held && seed.humanGate !== null && task.swimlane_id === seed.humanGate.columnId
+        ? seed.humanGate.targetColumnId
+        : null;
     return {
       id: definition.id,
       title: definition.title,
@@ -4537,8 +4558,9 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       color_slot: definition.colorSlot,
       route: seed.route,
       waiting_for: seed.waitsFor.filter((key) => !workflowTaskDone(key)),
-      lock_reason: state === 'running' && gateTargetId === null ? `#${task.display_id} is locked while ${definition.title} runs.` : null,
+      lock_reason: state === 'running' && !held && gateTargetId === null ? `#${task.display_id} is locked while ${definition.title} runs.` : null,
       gate_target_id: gateTargetId,
+      automations_pausable: true,
     };
   }
 
@@ -5187,18 +5209,15 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
           const params = (payload.params ?? {}) as { taskId?: string; title?: string; description?: string; automationsDisabled?: unknown };
           // The automations switch (protocol 0.22.0), checked the way the
           // desktop's handleUpdateTask checks it, in its words, and before
-          // anything is written: a truthy string must not disable a task, and
-          // only `true` is refused for a workflow task, whose workflow's Pause
-          // holds it instead.
+          // anything is written: a truthy string must not pause a task. A
+          // workflow task takes it too since protocol 0.25.0 (kangentic #923),
+          // where it holds that task out of its workflow (see mockWorkflowWire).
           const automationsDisabled = params.automationsDisabled;
           if (automationsDisabled !== undefined && automationsDisabled !== null && typeof automationsDisabled !== 'boolean') {
             return failWith(request, 'automationsDisabled must be true or false.');
           }
           const located = locateTask(params.taskId);
           if (!located) return failWith(request, `No such task: ${params.taskId}`);
-          if (automationsDisabled === true && mockWorkflowWire(located.task) !== null) {
-            return failWith(request, 'This task is in a workflow. Pause the workflow to hold it. The task was not updated.');
-          }
           if (typeof params.title === 'string') located.task.title = params.title;
           if (typeof params.description === 'string') located.task.description = params.description;
           if (typeof automationsDisabled === 'boolean') located.task.automations_disabled = automationsDisabled;

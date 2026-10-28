@@ -7,7 +7,8 @@ import { darkTerminalTheme } from '@/components/theme/tokens';
 import { Ban, Columns3Cog } from 'lucide-react-native';
 import { CapabilityError } from '@/channel';
 import {
-  AUTOMATIONS_FAILED_MESSAGE,
+  AUTOMATIONS_PAUSE_FAILED_MESSAGE,
+  AUTOMATIONS_RESUME_FAILED_MESSAGE,
   PAUSE_FAILED_MESSAGE,
   PAUSE_UNCONFIRMED_MESSAGE,
   TaskActionsScreen,
@@ -810,6 +811,19 @@ describe('TaskActionsScreen', () => {
     });
 
     /**
+     * Kangentic #923: a held card (its own automations paused) moves by hand
+     * while its workflow runs, so the row the locked card above loses comes
+     * back, and Archive still stays off. The desktop sends no lock for one.
+     */
+    it('enables Move for a held card of a running workflow, and keeps Archive off', async () => {
+      seedWorkflowTask({ workflow: { state: 'running', lock_reason: null, gate_target_id: null }, task: { automations_disabled: true } });
+      await renderTaskActions();
+
+      expect(disabledOf('task-action-move')).toBe(false);
+      expect(disabledOf('task-action-archive')).toBe(true);
+    });
+
+    /**
      * Archive takes a task out of its workflow, which only the desktop can do,
      * so it is off for every state. The Done column IS there, so the workflow
      * is the only possible reason; a paused one is the case the desktop would
@@ -869,17 +883,35 @@ describe('TaskActionsScreen', () => {
 
       expect(screen.getByTestId('task-action-resume')).toBeTruthy();
     });
+
+    /**
+     * Kangentic #923: the workflow's Pause and Resume leave a held task's agent
+     * alone, so Resume workflow would never resume this one, and the desktop's
+     * own resume path has no workflow check. A held task keeps its Resume
+     * session. Seen failing before `!held` joined useResumeOffer's
+     * paused-workflow branch: the Resume row was missing (Unable to find an
+     * element with testID: task-action-resume).
+     */
+    it('offers Resume for a held paused task even when its workflow is paused', async () => {
+      seedWorkflowTask({ workflow: { state: 'paused' }, task: { session_id: null, resumable: true, paused: true, automations_disabled: true } });
+      await renderTaskActions();
+
+      expect(screen.getByTestId('task-action-resume')).toBeTruthy();
+    });
   });
 
   /**
    * The column automations switch (protocol 0.22.0), the desktop card menu's
-   * Disable/Enable automations, written through `update_task`. Left out rather
-   * than disabled where the desktop leaves it out: a workflow task, and a
-   * desktop older than the switch, whose row cannot say which way it is set.
+   * Pause/Resume automations (renamed in kangentic #923), written through
+   * `update_task`. Left out rather than disabled where it cannot work: a
+   * desktop older than the switch, whose row cannot say which way it is set,
+   * and a workflow task on a desktop that does not send
+   * `automations_pausable: true` (protocol 0.25.0), which refuses to hold one.
    */
   describe('Automations switch', () => {
     const AUTOMATIONS_ROW = 'task-action-automations';
-    const WORKFLOW_REFUSAL = 'This task is in a workflow. Pause the workflow to hold it. The task was not updated.';
+    /** Any sentence the desktop refuses with; the sheet shows it as given. */
+    const DESKTOP_REFUSAL = 'automationsDisabled must be true or false.';
 
     /** What the store's optimistic edit does to the row while the write is in flight. */
     function patchTaskRow(patch: Partial<BoardTaskWire>): void {
@@ -896,21 +928,21 @@ describe('TaskActionsScreen', () => {
       });
     }
 
-    it('offers "Disable automations" with the desktop\'s Ban glyph while automations run', async () => {
+    it('offers "Pause automations" with the desktop\'s Ban glyph while automations run', async () => {
       seedBoard({ withDoneColumn: true, task: { automations_disabled: false } });
       await renderTaskActions();
 
       const row = screen.getByTestId(AUTOMATIONS_ROW);
-      expect(row).toHaveTextContent('Disable automations');
+      expect(row).toHaveTextContent('Pause automations');
       expect(getLucideGlyph(row, Ban)).toBeTruthy();
     });
 
-    it('offers "Enable automations" with the desktop\'s Columns3Cog glyph on a held task', async () => {
+    it('offers "Resume automations" with the desktop\'s Columns3Cog glyph on a held task', async () => {
       seedBoard({ withDoneColumn: true, task: { automations_disabled: true } });
       await renderTaskActions();
 
       const row = screen.getByTestId(AUTOMATIONS_ROW);
-      expect(row).toHaveTextContent('Enable automations');
+      expect(row).toHaveTextContent('Resume automations');
       expect(getLucideGlyph(row, Columns3Cog)).toBeTruthy();
     });
 
@@ -930,13 +962,49 @@ describe('TaskActionsScreen', () => {
       expect(screen.queryByTestId(AUTOMATIONS_ROW)).toBeNull();
     });
 
-    /** Its workflow's Pause holds it instead, and the desktop refuses `true` for one. */
-    it('leaves the row out for a workflow task', async () => {
-      seedBoard({ withDoneColumn: true, task: { automations_disabled: false, workflow: workflowWireFixture() } });
+    /**
+     * Kangentic #923 (protocol 0.25.0): on a desktop that honours it, the
+     * switch is a workflow task's own hold, offered directly above View
+     * workflow as the desktop's menu puts it before Open workflow. Mutation
+     * seen failing: restoring `workflow === null &&` to automationsOffered left
+     * the row out ("Unable to find an element with testID").
+     */
+    it('offers the switch on a workflow task whose desktop honours it, directly above View workflow', async () => {
+      seedBoard({ withDoneColumn: true, task: { automations_disabled: false, workflow: workflowWireFixture({ automations_pausable: true }) } });
+      await renderTaskActions();
+
+      expect(screen.getByTestId(AUTOMATIONS_ROW)).toHaveTextContent('Pause automations');
+      const rowOrder = screen.getAllByRole('button').map((row) => row.props.testID as string);
+      expect(rowOrder.indexOf(AUTOMATIONS_ROW)).toBeGreaterThan(-1);
+      expect(rowOrder.indexOf('task-action-view-workflow')).toBe(rowOrder.indexOf(AUTOMATIONS_ROW) + 1);
+    });
+
+    /**
+     * A desktop older than `automations_pausable` refuses to hold a workflow
+     * task, so the row it would refuse is not offered. Mutation seen failing:
+     * dropping the `automations_pausable === true` clause offered it on both.
+     */
+    it.each([
+      ['absent', workflowWireFixture()],
+      ['null', workflowWireFixture({ automations_pausable: null })],
+      ['false', workflowWireFixture({ automations_pausable: false })],
+    ])('leaves the row out for a workflow task when automations_pausable is %s', async (_label, workflow) => {
+      seedBoard({ withDoneColumn: true, task: { automations_disabled: false, workflow } });
       await renderTaskActions();
 
       expect(screen.queryByTestId(AUTOMATIONS_ROW)).toBeNull();
       expect(screen.getByTestId('task-action-view-workflow')).toBeTruthy();
+    });
+
+    it('releases a held workflow task with automationsDisabled false', async () => {
+      seedBoard({ withDoneColumn: true, task: { automations_disabled: true, workflow: workflowWireFixture({ automations_pausable: true }) } });
+      await renderTaskActions();
+
+      expect(screen.getByTestId(AUTOMATIONS_ROW)).toHaveTextContent('Resume automations');
+      await act(async () => {
+        await fireEvent.press(screen.getByTestId(AUTOMATIONS_ROW));
+      });
+      expect(mockUpdateTaskFields).toHaveBeenCalledWith({ projectId: 'project-1', taskId: 'task-1', automationsDisabled: false });
     });
 
     it('holds a task through update_task and closes once the desktop accepts', async () => {
@@ -966,8 +1034,8 @@ describe('TaskActionsScreen', () => {
 
     /**
      * The store flips the row at once, so without the held target the label
-     * would turn into "Enable automations" under the finger that just tapped
-     * "Disable automations", while the sheet waits on the desktop.
+     * would turn into "Resume automations" under the finger that just tapped
+     * "Pause automations", while the sheet waits on the desktop.
      */
     it('keeps the tapped label, with every row disabled, while the write is in flight', async () => {
       seedBoard({ withDoneColumn: true, task: { automations_disabled: false } });
@@ -982,7 +1050,7 @@ describe('TaskActionsScreen', () => {
       });
 
       const row = screen.getByTestId(AUTOMATIONS_ROW);
-      expect(row).toHaveTextContent('Disable automations');
+      expect(row).toHaveTextContent('Pause automations');
       expect(getLucideGlyph(row, Ban)).toBeTruthy();
       expect(row.props.accessibilityState.disabled).toBe(true);
       expect(screen.getByTestId('task-action-move').props.accessibilityState.disabled).toBe(true);
@@ -991,7 +1059,7 @@ describe('TaskActionsScreen', () => {
 
     it("stays open with the desktop's own sentence when it refuses, and offers the row again", async () => {
       seedBoard({ withDoneColumn: true, task: { automations_disabled: false } });
-      const refusal = new CapabilityError('board-tool-write', WORKFLOW_REFUSAL);
+      const refusal = new CapabilityError('board-tool-write', DESKTOP_REFUSAL);
       mockUpdateTaskFields.mockRejectedValueOnce(refusal);
       await renderTaskActions();
 
@@ -1000,15 +1068,23 @@ describe('TaskActionsScreen', () => {
       });
 
       expect(mockReportHandledError).toHaveBeenCalledWith('task-automations', refusal);
-      expect(screen.getByTestId('task-action-error')).toHaveTextContent(WORKFLOW_REFUSAL);
+      expect(screen.getByTestId('task-action-error')).toHaveTextContent(DESKTOP_REFUSAL);
       expect(mockBack).not.toHaveBeenCalled();
       const row = screen.getByTestId(AUTOMATIONS_ROW);
-      expect(row).toHaveTextContent('Disable automations');
+      expect(row).toHaveTextContent('Pause automations');
       expect(row.props.accessibilityState.disabled).toBe(false);
     });
 
-    it('says to check the connection when the write fails with no reason', async () => {
-      seedBoard({ withDoneColumn: true, task: { automations_disabled: false } });
+    /**
+     * Design decision A1 (task #133): the desktop's own failure words, one per
+     * direction, with the phone's hint. Mutation seen failing: swapping the two
+     * lines in onToggleAutomations' fallback read the wrong line in both rows.
+     */
+    it.each([
+      ['pausing', false, AUTOMATIONS_PAUSE_FAILED_MESSAGE],
+      ['resuming', true, AUTOMATIONS_RESUME_FAILED_MESSAGE],
+    ])('names the direction when %s fails with no reason', async (_label, automationsDisabled, expectedLine) => {
+      seedBoard({ withDoneColumn: true, task: { automations_disabled: automationsDisabled } });
       mockUpdateTaskFields.mockRejectedValueOnce('no reason');
       await renderTaskActions();
 
@@ -1016,7 +1092,7 @@ describe('TaskActionsScreen', () => {
         await fireEvent.press(screen.getByTestId(AUTOMATIONS_ROW));
       });
 
-      expect(screen.getByTestId('task-action-error')).toHaveTextContent(AUTOMATIONS_FAILED_MESSAGE);
+      expect(screen.getByTestId('task-action-error')).toHaveTextContent(expectedLine);
       expect(mockBack).not.toHaveBeenCalled();
       expect(mockReportHandledError).toHaveBeenCalledWith('task-automations', 'no reason');
     });

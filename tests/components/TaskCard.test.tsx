@@ -18,11 +18,12 @@ import { ThemeProvider } from '@/components';
 import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
 import { darkTerminalTheme } from '@/components/theme/tokens';
 import { TaskCard, type TaskCardProps } from '@/components/board/TaskCard';
-import { AUTOMATIONS_DISABLED_DESCRIPTION } from '@/components/board/CardStrip';
+import { AUTOMATIONS_PAUSED_DESCRIPTION, WORKFLOW_AUTOMATIONS_PAUSED_DESCRIPTION } from '@/components/board/CardStrip';
 import { COLUMN_STRIP_HEIGHT } from '@/components/board/ColumnStrip';
 import { PR_READINESS_FRESHNESS_CAVEAT } from '@/components/board/prChipPresentation';
 import { boardColumnFixture, boardTaskFixture, usageFixture } from '@/devsupport/desktopFixtures';
 import { getLucideGlyph, lucideGlyphs } from '../helpers/lucideGlyphs';
+import { workflowWireFixture } from '../helpers/workflows';
 
 const BASE_TEST_ID = 'task-card';
 
@@ -793,10 +794,11 @@ describe('TaskCard', () => {
   });
 
   /**
-   * The desktop's "Automations disabled" strip (protocol 0.22.0,
-   * task-card-view.tsx): the column strip's own shell, the Ban glyph in the
-   * muted text color with no hue of its own, and the desktop's tooltip as what
-   * a screen reader hears, since a phone has no hover.
+   * The desktop's "Automations paused" strip (protocol 0.22.0, renamed in
+   * kangentic #923, AutomationsDisabledStrip.tsx): the column strip's own
+   * shell, the Ban glyph in the muted text color with no hue of its own, and
+   * the desktop's tooltip as what a screen reader hears, since a phone has no
+   * hover.
    */
   describe('automations strip', () => {
     const AUTOMATIONS_STRIP = `${BASE_TEST_ID}-automations-disabled`;
@@ -804,8 +806,8 @@ describe('TaskCard', () => {
     it('draws the desktop strip across a held card', async () => {
       await renderTaskCard({ automationsDisabled: true });
       const strip = screen.getByTestId(AUTOMATIONS_STRIP);
-      expect(strip).toHaveTextContent('Automations disabled');
-      expect(strip.props.accessibilityLabel).toBe(AUTOMATIONS_DISABLED_DESCRIPTION);
+      expect(strip).toHaveTextContent('Automations paused');
+      expect(strip.props.accessibilityLabel).toBe(AUTOMATIONS_PAUSED_DESCRIPTION);
       const glyph = getLucideGlyph(screen.getByTestId(`${AUTOMATIONS_STRIP}-icon`), Ban);
       expect(glyph.props.stroke).toBe(darkTerminalTheme.colors.textMuted);
       expect(glyph.props.strokeWidth).toBe(2);
@@ -864,7 +866,34 @@ describe('TaskCard', () => {
         .children.filter((child): child is TestInstance => typeof child !== 'string')
         .map((child) => child.props.testID as string);
       expect(stripOrder).toEqual([AUTOMATIONS_STRIP, `${BASE_TEST_ID}-column`]);
-      expect(screen.getByTestId(AUTOMATIONS_STRIP).props.accessibilityLabel).toBe(AUTOMATIONS_DISABLED_DESCRIPTION);
+      expect(screen.getByTestId(AUTOMATIONS_STRIP).props.accessibilityLabel).toBe(AUTOMATIONS_PAUSED_DESCRIPTION);
+    });
+
+    /**
+     * A held workflow card (kangentic #923): the paused strip over the
+     * workflow strip in one bleed, and the desktop's workflow tip, which says
+     * the workflow leaves the task alone too. Mutation seen failing: passing
+     * `inWorkflow={false}` from TaskCard read the ordinary tip instead.
+     */
+    it("stacks over a workflow strip and speaks the workflow's tip on a held workflow card", async () => {
+      await renderTaskCard({
+        task: boardTaskFixture({ automations_disabled: true, workflow: workflowWireFixture() }),
+        automationsDisabled: true,
+        columnStrip: {
+          column: null,
+          track: [],
+          projectName: null,
+          workflow: { title: 'Ship the checkout', colorSlot: 2, paused: false },
+          waitingSinceMs: null,
+        },
+      });
+      const stripOrder = screen
+        .getByTestId(`${BASE_TEST_ID}-strips`)
+        .children.filter((child): child is TestInstance => typeof child !== 'string')
+        .map((child) => child.props.testID as string);
+      expect(stripOrder).toEqual([AUTOMATIONS_STRIP, `${BASE_TEST_ID}-column`]);
+      expect(screen.getByTestId(`${BASE_TEST_ID}-column-workflow-name`)).toHaveTextContent('Ship the checkout');
+      expect(screen.getByTestId(AUTOMATIONS_STRIP).props.accessibilityLabel).toBe(WORKFLOW_AUTOMATIONS_PAUSED_DESCRIPTION);
     });
   });
 });

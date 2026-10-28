@@ -77,7 +77,7 @@ describe('updateTaskFields: the automations switch', () => {
 
   it('puts the card back and rethrows the desktop refusal', async () => {
     seedBoard();
-    const refusal = new CapabilityError('board-tool-write', 'This task is in a workflow. Pause the workflow to hold it. The task was not updated.');
+    const refusal = new CapabilityError('board-tool-write', 'No such task: task-1');
     boardToolWrite.mockRejectedValue(refusal);
 
     await expect(updateTaskFields({ projectId: 'project-1', taskId: 'task-1', automationsDisabled: true })).rejects.toBe(refusal);
@@ -86,7 +86,7 @@ describe('updateTaskFields: the automations switch', () => {
     expect(useBoardStore.getState().pendingEdits).toEqual([]);
   });
 
-  // Enable automations is `false`, the falsy value. A truthy check anywhere on
+  // Resume automations is `false`, the falsy value. A truthy check anywhere on
   // the path (the param spread, the optimistic row) would drop exactly this
   // write while every `true` test above stayed green.
   describe('enabling a held task (automationsDisabled: false)', () => {

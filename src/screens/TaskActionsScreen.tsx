@@ -39,8 +39,13 @@ export const PAUSE_FAILED_MESSAGE = 'Pause failed - check the connection';
 /** Past PAUSE_WAIT_MS with no paused row. Not a failure: the pause may still land. */
 export const PAUSE_UNCONFIRMED_MESSAGE = 'Desktop has not confirmed the pause yet';
 
-/** The generic line for an automations change the desktop refused without text, or one that never reached it. */
-export const AUTOMATIONS_FAILED_MESSAGE = 'Could not change automations - check the connection';
+/**
+ * The generic lines for an automations change the desktop refused without
+ * text, or one that never reached it: the desktop's own failure words, one per
+ * direction (kangentic #923), with the phone's usual hint (design decision A1).
+ */
+export const AUTOMATIONS_PAUSE_FAILED_MESSAGE = "Couldn't pause automations - check the connection";
+export const AUTOMATIONS_RESUME_FAILED_MESSAGE = "Couldn't resume automations - check the connection";
 
 function messageForActionError(error: unknown, fallback: string): string {
   return error instanceof CapabilityError ? error.message : error instanceof Error ? error.message : fallback;
@@ -95,20 +100,23 @@ export function TaskActionsScreen(): React.JSX.Element {
   // answers on ACCEPT while the agent shuts down behind it (protocol 0.18.0).
   const [pausing, setPausing] = useState(false);
   // The column automations switch (protocol 0.22.0), the desktop card menu's
-  // Disable/Enable automations. Left out rather than disabled where the
-  // desktop leaves it out: a workflow task, which its workflow's Pause holds
-  // instead, and a desktop older than the switch, whose row cannot say which
-  // way it is set. `typeof` rather than a null check, because a row can lack
-  // the key as well as carry null.
+  // Pause/Resume automations. On a workflow task it is that task's own hold:
+  // the rest of its workflow keeps running (protocol 0.25.0, kangentic #923).
+  // Left out rather than disabled where it cannot work: a desktop older than
+  // the switch, whose row cannot say which way it is set, and, for a workflow
+  // task, a desktop that does not send `automations_pausable: true`, which
+  // refuses to hold one. `typeof` rather than a null check, because a row can
+  // lack the key as well as carry null.
   const automationsDisabled = task?.automations_disabled;
-  const automationsOffered = workflow === null && typeof automationsDisabled === 'boolean';
+  const automationsOffered =
+    typeof automationsDisabled === 'boolean' && (workflow === null || workflow.automations_pausable === true);
   // What a tap on the row writes, from the row as the store has it now.
-  const tapDisablesAutomations = automationsDisabled !== true;
+  const tapPausesAutomations = automationsDisabled !== true;
   // The value a tap is writing, held until the desktop answers. The store
   // flips the row at once (optimistic, rolled back on a refusal), so without
   // this the row would relabel itself under the finger while the sheet waits.
   const [automationsWriteTarget, setAutomationsWriteTarget] = useState<boolean | null>(null);
-  const offersDisableAutomations = automationsWriteTarget ?? tapDisablesAutomations;
+  const offersPauseAutomations = automationsWriteTarget ?? tapPausesAutomations;
   const busy = actionInFlight || pausing || automationsWriteTarget !== null;
 
   /**
@@ -245,16 +253,21 @@ export function TaskActionsScreen(): React.JSX.Element {
       setErrorMessage(MISSING_TASK_CONTEXT);
       return;
     }
-    setAutomationsWriteTarget(tapDisablesAutomations);
+    // The direction is fixed at the tap, so the failure line names what was
+    // asked even after the optimistic flip has been rolled back.
+    const pauseRequested = tapPausesAutomations;
+    setAutomationsWriteTarget(pauseRequested);
     setErrorMessage(null);
-    void updateTaskFields({ projectId, taskId, automationsDisabled: tapDisablesAutomations })
+    void updateTaskFields({ projectId, taskId, automationsDisabled: pauseRequested })
       .then(() => closeIfStillOpen())
       .catch((error: unknown) => {
         reportHandledError('task-automations', error);
         setAutomationsWriteTarget(null);
-        setErrorMessage(messageForActionError(error, AUTOMATIONS_FAILED_MESSAGE));
+        setErrorMessage(
+          messageForActionError(error, pauseRequested ? AUTOMATIONS_PAUSE_FAILED_MESSAGE : AUTOMATIONS_RESUME_FAILED_MESSAGE),
+        );
       });
-  }, [taskId, projectId, tapDisablesAutomations, closeIfStillOpen]);
+  }, [taskId, projectId, tapPausesAutomations, closeIfStillOpen]);
 
   const onMove = useCallback(() => {
     if (!taskId || !projectId) {
@@ -377,13 +390,13 @@ export function TaskActionsScreen(): React.JSX.Element {
             testID="task-action-view-pr"
           />
         ) : null}
-        {/* In View workflow's slot (design decision A1): the desktop puts the
-            switch just before the row that goes somewhere else, and the two
-            never show together, since a workflow task has no switch. */}
+        {/* Directly above View workflow: the desktop's menu puts the switch
+            just before the row that goes somewhere else (Open workflow), and
+            a workflow task shows both (design change 1, task #133). */}
         {automationsOffered ? (
           <ActionRow
-            label={offersDisableAutomations ? 'Disable automations' : 'Enable automations'}
-            iconName={offersDisableAutomations ? 'disable-automations' : 'enable-automations'}
+            label={offersPauseAutomations ? 'Pause automations' : 'Resume automations'}
+            iconName={offersPauseAutomations ? 'disable-automations' : 'enable-automations'}
             onPress={onToggleAutomations}
             disabled={busy}
             testID="task-action-automations"

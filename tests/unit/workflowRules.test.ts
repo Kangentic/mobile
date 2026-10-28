@@ -108,8 +108,8 @@ describe('workflowStripLabel', () => {
 });
 
 describe('workflowAllowsMove (the desktop lock, mobile origin)', () => {
-  const move = (workflow: BoardTaskWorkflowWire | null, toColumnId: string, toRole: string | null = null) =>
-    workflowAllowsMove({ workflow, fromColumnId: 'lane-doing', toColumnId, toRole });
+  const move = (workflow: BoardTaskWorkflowWire | null, toColumnId: string, toRole: string | null = null, held = false) =>
+    workflowAllowsMove({ workflow, fromColumnId: 'lane-doing', toColumnId, toRole, held });
 
   it('lets an ordinary task go anywhere', () => {
     expect(move(null, 'lane-todo', 'todo')).toBe(true);
@@ -148,6 +148,31 @@ describe('workflowAllowsMove (the desktop lock, mobile origin)', () => {
   it('treats an unknown state as running, so a new desktop state never unlocks a card', () => {
     expect(move(workflowFixture({ state: 'archived', lock_reason: null }), 'lane-review')).toBe(false);
   });
+
+  /**
+   * Kangentic #923 (protocol 0.25.0): a card whose own automations are paused
+   * moves by hand like a paused workflow's card while the rest of its workflow
+   * runs (the desktop's `byHand && taskHeld`). Mutation seen failing: dropping
+   * `|| check.held` from workflowAllowsMove left every one of these refused.
+   */
+  it('lets a held card of a running workflow go anywhere but To Do', () => {
+    const running = workflowFixture({ lock_reason: null });
+    expect(move(running, 'lane-review', null, true)).toBe(true);
+    expect(move(running, 'lane-done', 'done', true)).toBe(true);
+    expect(move(running, 'lane-todo', 'todo', true)).toBe(false);
+  });
+
+  // The hold is checked before the gate, as on the desktop, so a stale gate
+  // (the optimistic flip lands before the snapshot that drops it) cannot pin it.
+  it('does not limit a held card to a human gate it still carries', () => {
+    const gated = workflowFixture({ lock_reason: null, gate_target_id: 'lane-review' });
+    expect(move(gated, 'lane-merge', null, true)).toBe(true);
+    expect(move(gated, 'lane-merge')).toBe(false);
+  });
+
+  it('leaves a held card of a draft or finished workflow free, To Do included', () => {
+    expect(move(workflowFixture({ state: 'done', lock_reason: null }), 'lane-todo', 'todo', true)).toBe(true);
+  });
 });
 
 describe('workflowMoveTargetIds (the columns the Move sheet and the long-press hub offer)', () => {
@@ -184,6 +209,13 @@ describe('workflowMoveTargetIds (the columns the Move sheet and the long-press h
     }
   });
 
+  // The hold comes from the row's own `automations_disabled`, so the hub's Move
+  // and the Move sheet open for a held card without any caller passing it.
+  it('offers a held running card every other column but To Do, read from the row', () => {
+    const heldTask = boardTaskFixture({ swimlane_id: 'lane-doing', workflow: workflowFixture({ lock_reason: null }), automations_disabled: true });
+    expect([...workflowMoveTargetIds(heldTask, columns)].sort()).toEqual(['lane-done', 'lane-merge', 'lane-review']);
+  });
+
   /**
    * Mutation seen failing: removing `if (column.id === task.swimlane_id) continue;`.
    * `workflowAllowsMove` accepts a move within the card's own column for every
@@ -217,21 +249,33 @@ describe('workflowBlocksArchive', () => {
 
 describe('workflowWaitingFooter (the desktop waitingLabel)', () => {
   it('names one blocker, counts several, and lets a blocker win over the pause', () => {
-    expect(workflowWaitingFooter(workflowFixture({ waiting_for: ['#14'] }), 'todo')).toEqual({ label: 'Blocked by #14...', paused: false });
-    expect(workflowWaitingFooter(workflowFixture({ waiting_for: ['#14', '#15'] }), 'todo')).toEqual({ label: 'Blocked by 2 tasks...', paused: false });
-    expect(workflowWaitingFooter(workflowFixture({ state: 'paused', waiting_for: ['#14'] }), 'todo')).toEqual({ label: 'Blocked by #14...', paused: false });
+    expect(workflowWaitingFooter(workflowFixture({ waiting_for: ['#14'] }), 'todo', false)).toEqual({ label: 'Blocked by #14...', paused: false });
+    expect(workflowWaitingFooter(workflowFixture({ waiting_for: ['#14', '#15'] }), 'todo', false)).toEqual({ label: 'Blocked by 2 tasks...', paused: false });
+    expect(workflowWaitingFooter(workflowFixture({ state: 'paused', waiting_for: ['#14'] }), 'todo', false)).toEqual({ label: 'Blocked by #14...', paused: false });
   });
 
   it('says Paused or Queued when nothing blocks it', () => {
-    expect(workflowWaitingFooter(workflowFixture({ state: 'paused' }), 'todo')).toEqual({ label: 'Paused', paused: true });
-    expect(workflowWaitingFooter(workflowFixture(), 'todo')).toEqual({ label: 'Queued...', paused: false });
+    expect(workflowWaitingFooter(workflowFixture({ state: 'paused' }), 'todo', false)).toEqual({ label: 'Paused', paused: true });
+    expect(workflowWaitingFooter(workflowFixture(), 'todo', false)).toEqual({ label: 'Queued...', paused: false });
+  });
+
+  /**
+   * Kangentic #923: the engine starts no held task, so a held card in a
+   * running workflow reads Paused rather than Queued. Mutation seen failing:
+   * dropping `|| held` turned the first expectation back into "Queued...".
+   */
+  it('says Paused for a held task in a running workflow, while a blocker still wins', () => {
+    expect(workflowWaitingFooter(workflowFixture(), 'todo', true)).toEqual({ label: 'Paused', paused: true });
+    expect(workflowWaitingFooter(workflowFixture({ waiting_for: ['#6'] }), 'todo', true)).toEqual({ label: 'Blocked by #6...', paused: false });
   });
 
   it('says nothing outside To Do, for a draft or done workflow, or an ordinary task', () => {
-    expect(workflowWaitingFooter(workflowFixture(), null)).toBeNull();
-    expect(workflowWaitingFooter(workflowFixture({ state: 'done' }), 'todo')).toBeNull();
-    expect(workflowWaitingFooter(workflowFixture({ state: 'draft' }), 'todo')).toBeNull();
-    expect(workflowWaitingFooter(null, 'todo')).toBeNull();
+    expect(workflowWaitingFooter(workflowFixture(), null, false)).toBeNull();
+    expect(workflowWaitingFooter(workflowFixture({ state: 'done' }), 'todo', false)).toBeNull();
+    expect(workflowWaitingFooter(workflowFixture({ state: 'draft' }), 'todo', false)).toBeNull();
+    expect(workflowWaitingFooter(null, 'todo', false)).toBeNull();
+    expect(workflowWaitingFooter(workflowFixture(), null, true)).toBeNull();
+    expect(workflowWaitingFooter(workflowFixture({ state: 'draft' }), 'todo', true)).toBeNull();
   });
 });
 

@@ -70,8 +70,13 @@ export function MoveTaskScreen(): React.JSX.Element {
   // gate itself, never on "one column open": a paused card on a three-column
   // board has only Done open, and pre-choosing it would put the archive the
   // hub refuses one tap away. A pick a newer row has since refused falls back
-  // to the gate, or to nothing.
-  const gateTargetId = task?.workflow && normalizeWorkflowState(task.workflow.state) === 'running' ? task.workflow.gate_target_id : null;
+  // to the gate, or to nothing. A held card (its own automations paused) gets
+  // no gate either: the desktop names no next step for one, since the person
+  // moves it on, and the optimistic hold can briefly leave a stale gate here.
+  const gateTargetId =
+    task?.workflow && normalizeWorkflowState(task.workflow.state) === 'running' && task.automations_disabled !== true
+      ? task.workflow.gate_target_id
+      : null;
   const gateColumnId = gateTargetId !== null && allowedColumnIds.has(gateTargetId) ? gateTargetId : null;
   const selectedColumnId = chosenColumnId !== null && allowedColumnIds.has(chosenColumnId) ? chosenColumnId : gateColumnId;
   const [moveInFlight, setMoveInFlight] = useState(false);

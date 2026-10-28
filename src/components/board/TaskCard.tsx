@@ -92,13 +92,13 @@ export interface TaskCardProps {
   /** A workflow task's wait in To Do, for the footer when its session has nothing to say (see cardStatusFooter). */
   waiting?: WorkflowWaitingFooter | null;
   /**
-   * The task's column automations are disabled (protocol 0.22.0): the
-   * desktop's "Automations disabled" strip across the top of the card. With a
+   * The task's column automations are paused (protocol 0.22.0): the
+   * desktop's "Automations paused" strip across the top of the card. With a
    * `columnStrip` it stacks above that band, as the desktop's Agent Monitor
-   * card stacks it above its project strip (kangentic #877), so a held Agents
-   * card is one strip taller than its neighbours, as the desktop's is. The
-   * flag alone decides, as on the desktop: a workflow task never carries it,
-   * since joining a workflow clears it.
+   * card stacks it above its project strip (kangentic #877) and a held
+   * workflow card above its workflow strip (#923), so a held card is one strip
+   * taller than its neighbours, as the desktop's is. The flag alone decides,
+   * as on the desktop. A workflow task's strip speaks the workflow's tip.
    */
   automationsDisabled?: boolean;
   /**
@@ -168,10 +168,13 @@ export function TaskCard({
       {/* Outside the Stack on purpose: the bleed sets its own 8 below the
           strips (the desktop's gap), and the Stack's xs would add to that.
           The automations strip goes on top, as the desktop's Agent Monitor
-          card stacks it above its project strip (kangentic #877). */}
+          card stacks it above its project strip (kangentic #877) and a held
+          workflow card above its workflow strip (#923). */}
       {automationsDisabled || columnStrip ? (
         <CardStripBleed testID={`${testID}-strips`}>
-          {automationsDisabled ? <AutomationsDisabledStrip testID={`${testID}-automations-disabled`} /> : null}
+          {automationsDisabled ? (
+            <AutomationsDisabledStrip testID={`${testID}-automations-disabled`} inWorkflow={(task.workflow ?? null) !== null} />
+          ) : null}
           {columnStrip ? (
             <ColumnStrip
               column={columnStrip.column}

@@ -461,8 +461,8 @@ describe('TriageHomeScreen', () => {
   });
 
   /**
-   * A held task (column automations disabled, protocol 0.22.0) wears the
-   * Board's "Automations disabled" strip on the feed too, stacked above the
+   * A held task (column automations paused, protocol 0.22.0) wears the
+   * Board's "Automations paused" strip on the feed too, stacked above the
    * card's band, as the desktop's Agent Monitor card stacks it (kangentic
    * #877). Only `true` draws it: null is a desktop older than the field.
    *
