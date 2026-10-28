@@ -31,7 +31,8 @@ app/                           # expo-router route wrappers (thin - render the s
   _layout.tsx, (tabs)/         # root Stack + native bottom Tabs (Home, Board); boots connection + notifications + splash
   task/[taskId]/               # index.tsx = the SESSION view (terminal/chat/changes segments)
   file-diff.tsx                 # per-file unified diff, pushed over the session's changes segment
-  completed-task.tsx            # a finished task's transcript + run summary
+  completed-task.tsx            # a finished task: Conversation, Summary (the desktop's header
+                                #   strip + report cards) and Description segments
   create-task.tsx, edit-task.tsx, move-task.tsx, task-actions.tsx, project-picker.tsx,
   section-filter.tsx            #   native form-sheet routes (they replaced the custom board sheets;
                                 #   section-filter is the Agents feed's Show sections sheet)
@@ -166,7 +167,8 @@ src/
                   #   terminals/ (the Command Terminal screen and the Board header's Terminals
                   #   button), board/ (BoardTaskCard, the card connector the Board and the workflow
                   #   view share, and the Board header's Workflows button), workflow/ (the
-                  #   workflow view)
+                  #   workflow view), completed/ (a completed task's Summary: the header strip,
+                  #   the report cards as one FlashList, and its Description segment)
   components/     # Design system primitives (incl. the shared SegmentedSwitcher) + brand/ (Overseer,
                   #   Brandmark, EmptyState), motion/ (presets, Skeleton, PressScale), conversation/
                   #   cells and prompt cards, terminal/ xterm pane + quick keys, board/ cards and
@@ -218,6 +220,9 @@ src/
                   #   slot, who may move a card (workflowMove.ts, the desktop's workflow-lock.ts),
                   #   the waiting footer, the
                   #   list_workflows / get_workflow readers and the workflow view's sections
+  taskReport/     # Pure completed-task Summary rules ported from the desktop's completed view
+                  #   (protocol 0.24.0's get_task_report): its number and date formats, the
+                  #   header strip, the find_task fallback reader, and the Summary list's rows
   notifications/  # Push key + registration, E2E envelope decrypt, notifee channels, background task,
                   #   local notifier, foreground service, sharedKeychain (permission, registration,
                   #   tap routing, Settings status and RICH display are all cross-platform; iOS

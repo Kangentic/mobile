@@ -377,8 +377,13 @@ export class VerbClient {
     });
   }
 
-  async boardToolRead(tool: BoardToolReadName, params: JsonValue): Promise<JsonValue> {
-    const response = await this.requireOk('board-tool-read', { tool, params });
+  /**
+   * `options.timeoutMs` overrides the capability timeout for one read whose
+   * desktop handler is known to take longer than a lookup: `get_task_report`
+   * can wait on the desktop's index before it reads git.
+   */
+  async boardToolRead(tool: BoardToolReadName, params: JsonValue, options?: { timeoutMs?: number }): Promise<JsonValue> {
+    const response = await this.requireOk('board-tool-read', { tool, params }, options);
     return this.parsePayload('board-tool-read', response, (value) => {
       if (!isRecord(value) || !('result' in value)) throw new Error('board-tool response is missing "result"');
       return value.result;

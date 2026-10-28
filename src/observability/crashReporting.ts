@@ -190,6 +190,7 @@ export function reportCaughtError(error: Error, boundary: string): void {
  */
 export type HandledErrorSite =
   | 'board-archived-read'
+  | 'completed-task-report'
   | 'composer-send'
   | 'connection-open'
   | 'crash-test'
@@ -245,6 +246,8 @@ const CAPABILITY_ERROR_CODES = {
   'not-command-terminal': true,
   'agent-unavailable': true,
   'command-terminal-start-failed': true,
+  'conversation-gone': true,
+  'conversation-open': true,
 } as const satisfies Record<CapabilityErrorCode, true>;
 
 function isCapabilityErrorCode(candidate: unknown): candidate is CapabilityErrorCode {

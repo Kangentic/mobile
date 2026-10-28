@@ -34,7 +34,8 @@ export type RetentionProbeVariant =
   | 'no-swap-veil'
   | 'composer-no-dictation'
   | 'measured-fit'
-  | 'autofillable-terminal-input';
+  | 'autofillable-terminal-input'
+  | 'description-commonmark';
 
 export const RETENTION_PROBE_VARIANTS: {
   variant: RetentionProbeVariant;
@@ -111,6 +112,16 @@ export const RETENTION_PROBE_VARIANTS: {
     variant: 'autofillable-terminal-input',
     label: 'Terminal long-press menu',
     description: 'Long-press shows the Autofill menu',
+  },
+  {
+    // The control arm of the completed task Description's GitHub flavor
+    // (task #130): the library's container-based renderer, which draws task
+    // list checkboxes, against the single-TextView CommonMark renderer every
+    // other surface uses. Open and close a completed task's Description in
+    // each arm and compare the GC-forced Views count and the frame read.
+    variant: 'description-commonmark',
+    label: 'Description as CommonMark',
+    description: 'No GitHub flavor on a completed task',
   },
 ];
 

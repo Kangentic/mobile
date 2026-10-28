@@ -17,6 +17,23 @@ jest.mock('react-native-enriched-markdown', () => {
 });
 
 describe('MarkdownBlock', () => {
+  it('renders CommonMark unless a surface asks for the GitHub flavor, and never lets a checkbox toggle', async () => {
+    await render(
+      <ThemeProvider>
+        <MarkdownBlock markdown="- [ ] Main is green." testID="default-markdown" />
+        <MarkdownBlock markdown="- [ ] Main is green." flavor="github" testID="github-markdown" />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByTestId('default-markdown').props.flavor).toBe('commonmark');
+    expect(screen.getByTestId('github-markdown').props.flavor).toBe('github');
+    // A local toggle would never reach the desktop's description.
+    expect(screen.getByTestId('github-markdown').props.enableTaskListItemToggle).toBe(false);
+    expect(screen.getByTestId('github-markdown').props.markdownStyle.taskList).toEqual(
+      expect.objectContaining({ checkedStrikethrough: false }),
+    );
+  });
+
   it('passes the markdown string through to the renderer', async () => {
     await render(
       <ThemeProvider>

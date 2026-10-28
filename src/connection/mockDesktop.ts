@@ -1,6 +1,7 @@
 import {
   generateX25519KeyPair,
   parseCapabilityRequestPayload,
+  type BoardColumnWire,
   type BoardTaskWire,
   type BoardTaskWorkflowWire,
   type BridgeEvent,
@@ -14,6 +15,8 @@ import {
   type ReadStreamResponsePayload,
   type ReadStreamSessionStatusWire,
   type SessionUsageWire,
+  type TaskReportRouteColumnWire,
+  type TaskReportWire,
   type TranscriptWindowResponsePayload,
   type Transport,
   type TranscriptEntryWire,
@@ -3151,6 +3154,12 @@ export interface CreateMockDesktopOptions {
    */
   identity?: X25519KeyPair;
   desktopStatic?: X25519KeyPair;
+  /**
+   * Answer `get_task_report` as a desktop older than protocol 0.24.0 does:
+   * refused as not allowed, with no refusal code. The phone then falls back to
+   * `find_task`, which this mock answers either way.
+   */
+  refuseTaskReport?: boolean;
 }
 
 /**
@@ -3202,9 +3211,22 @@ export function archivedTasksFor(projectId: string): BoardTaskWire[] {
       id: `${projectId}-archived-1`,
       display_id: 901,
       title: 'Cache the product-grid query on the storefront home',
+      // A checklist with one item left unticked, so the completed task's
+      // Description shows both of the GitHub flavor's checkbox states.
+      description: [
+        'The storefront home runs the full product-grid query on every request, so the first paint waits about 240 ms on the catalog database.',
+        '',
+        '### Done when',
+        '- [x] The grid query is cached with a short TTL.',
+        '- [x] Catalog writes purge the cache.',
+        '- [ ] A benchmark shows the cached render under 20 ms.',
+      ].join('\n'),
       swimlane_id: 'lane-done',
       session_id: null,
       paused: true,
+      pr_number: 48,
+      pr_url: 'https://github.com/Kangentic/kangentic-mobile/pull/48',
+      pr_state: 'merged',
       archived_at: '2026-07-20T18:30:00.000Z',
     }),
     boardTaskFixture({
@@ -3217,6 +3239,240 @@ export function archivedTasksFor(projectId: string): BoardTaskWire[] {
       archived_at: '2026-07-19T09:15:00.000Z',
     }),
   ];
+}
+
+/** One working column's stays, for an archived task's route. */
+function routeColumn(
+  column: Pick<BoardColumnWire, 'id' | 'name' | 'color' | 'icon' | 'role'>,
+  visits: { startedAt: string; durationMs: number }[],
+): TaskReportRouteColumnWire {
+  return {
+    swimlaneId: column.id,
+    name: column.name,
+    color: column.color,
+    icon: column.icon,
+    role: column.role,
+    totalMs: visits.reduce((total, visit) => total + visit.durationMs, 0),
+    visits,
+    visitCount: visits.length,
+  };
+}
+
+const MINUTE = 60_000;
+
+/** The desktop's column for `id` on the project's board; the route copies its name, color and icon as the desktop's report does. */
+function archivedRouteColumn(projectId: string, id: string): BoardColumnWire {
+  const column = mockColumnsFor(projectId).find((candidate) => candidate.id === id);
+  if (column === undefined) throw new Error(`no column ${id} on ${projectId}`);
+  return column;
+}
+
+/** What `get_task_report` and `find_task` know about one archived row. */
+interface ArchivedTaskRecord {
+  report: TaskReportWire;
+  /** The written summary's date, for `find_task`'s `knowledge.summary`. */
+  summaryWrittenAt: string | null;
+}
+
+/**
+ * The completed task view's record for an archived row: its route, span,
+ * commits and per-file changes, as the desktop's task report reads them.
+ *
+ * Each task's figures agree with its session summary in `archivedPage` (the
+ * same line and file counts), and its span with its moves and `archived_at`,
+ * so the header strip and the cards never contradict each other. The
+ * storefront task has a written summary and a column it visited twice; the
+ * checkout-api one has its summary still pending, which is the case the Last
+ * message stands in for. The two tasks that ran no agent have a route and no
+ * commits. At module scope, beside `archivedTasksFor`, so the fixture
+ * vocabulary guard reaches its prose.
+ */
+export function archivedTaskRecordFor(projectId: string, taskId: string): ArchivedTaskRecord | null {
+  const column = (id: string): BoardColumnWire => archivedRouteColumn(projectId, id);
+  if (projectId === MOCK_PROJECT_2.id) {
+    if (taskId === `${projectId}-archived-1`) {
+      return {
+        summaryWrittenAt: null,
+        report: {
+          taskId,
+          startedAt: '2026-07-22T14:52:00.000Z',
+          endedAt: '2026-07-22T15:45:00.000Z',
+          route: [
+            routeColumn(column('lane2-planning'), [{ startedAt: '2026-07-22T14:52:00.000Z', durationMs: 8 * MINUTE }]),
+            routeColumn(column('lane2-executing'), [{ startedAt: '2026-07-22T15:00:00.000Z', durationMs: 34 * MINUTE }]),
+            routeColumn(column('lane2-code-review'), [{ startedAt: '2026-07-22T15:34:00.000Z', durationMs: 8 * MINUTE }]),
+            routeColumn(column('lane2-merge'), [{ startedAt: '2026-07-22T15:42:00.000Z', durationMs: 3 * MINUTE }]),
+          ],
+          commits: [
+            {
+              sha: 'c5e8a1f4d29b6370e8f1a2b3c4d5e6f708192a3b',
+              subject: 'test(totals): cover the per-item fallback when the batch call fails',
+              committedAt: '2026-07-22T15:33:00.000Z',
+            },
+            {
+              sha: '8b2f6d04a7e91c3d5f6a7b8c9d0e1f2a3b4c5d6e',
+              subject: 'perf(totals): batch the tax lookup into one request per checkout',
+              committedAt: '2026-07-22T15:30:00.000Z',
+            },
+          ],
+          commitCount: 2,
+          changes: {
+            files: [
+              { path: 'src/totals/tax.ts', status: 'M', insertions: 58, deletions: 19, binary: false },
+              { path: 'tests/unit/taxBatch.test.ts', status: 'A', insertions: 27, deletions: 0, binary: false },
+              { path: 'src/totals/checkoutTotals.ts', status: 'M', insertions: 11, deletions: 12, binary: false },
+            ],
+            fileCount: 3,
+            totals: { insertions: 96, deletions: 31, filesChanged: 3 },
+            emptyReason: null,
+          },
+          changesError: null,
+          summaryState: { kind: 'pending' },
+        },
+      };
+    }
+    if (taskId === `${projectId}-archived-2`) {
+      return {
+        summaryWrittenAt: null,
+        report: {
+          taskId,
+          startedAt: '2026-07-18T09:50:00.000Z',
+          endedAt: '2026-07-18T10:05:00.000Z',
+          route: [routeColumn(column('lane2-executing'), [{ startedAt: '2026-07-18T09:50:00.000Z', durationMs: 15 * MINUTE }])],
+          commits: [],
+          commitCount: 0,
+          changes: { files: [], fileCount: 0, totals: null, emptyReason: 'no-commits' },
+          changesError: null,
+          summaryState: { kind: 'pending' },
+        },
+      };
+    }
+    return null;
+  }
+  if (taskId === `${projectId}-archived-1`) {
+    return {
+      summaryWrittenAt: '2026-07-20T18:40:00.000Z',
+      report: {
+        taskId,
+        startedAt: '2026-07-20T16:52:00.000Z',
+        endedAt: '2026-07-20T18:30:00.000Z',
+        route: [
+          routeColumn(column('lane-planning'), [{ startedAt: '2026-07-20T16:52:00.000Z', durationMs: 8 * MINUTE }]),
+          // Code Review sent it back once, so Executing lists its two stays.
+          routeColumn(column('lane-executing'), [
+            { startedAt: '2026-07-20T17:00:00.000Z', durationMs: 46 * MINUTE },
+            { startedAt: '2026-07-20T17:58:00.000Z', durationMs: 18 * MINUTE },
+          ]),
+          routeColumn(column('lane-code-review'), [{ startedAt: '2026-07-20T17:46:00.000Z', durationMs: 12 * MINUTE }]),
+          routeColumn(column('lane-testing'), [{ startedAt: '2026-07-20T18:16:00.000Z', durationMs: 9 * MINUTE }]),
+          routeColumn(column('lane-merge'), [{ startedAt: '2026-07-20T18:25:00.000Z', durationMs: 5 * MINUTE }]),
+        ],
+        commits: [
+          {
+            sha: 'a41c9e2f0b7d4c1e9a3f5b6c7d8e9f0a1b2c3d4e',
+            subject: 'test(home): cover the grid purge on product and price writes',
+            committedAt: '2026-07-20T18:12:00.000Z',
+          },
+          {
+            sha: '7d03b18e5c2a4f6b8d9e0f1a2b3c4d5e6f7a8b9c',
+            subject: 'fix(home): purge the grid after the catalog write commits, not before',
+            committedAt: '2026-07-20T17:56:00.000Z',
+          },
+          {
+            sha: '3be5f40a9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f',
+            subject: 'feat(home): cache the product-grid query for 60 seconds',
+            committedAt: '2026-07-20T17:40:00.000Z',
+          },
+          {
+            sha: '91f2c07d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b',
+            subject: 'chore(bench): add a home-grid render benchmark',
+            committedAt: '2026-07-20T17:10:00.000Z',
+          },
+        ],
+        commitCount: 4,
+        changes: {
+          files: [
+            { path: 'src/home/productGrid.ts', status: 'M', insertions: 64, deletions: 12, binary: false },
+            { path: 'src/home/gridCache.ts', status: 'A', insertions: 58, deletions: 0, binary: false },
+            { path: 'tests/unit/gridCache.test.ts', status: 'A', insertions: 41, deletions: 0, binary: false },
+            { path: 'bench/homeGrid.bench.ts', status: 'A', insertions: 19, deletions: 0, binary: false },
+            { path: 'src/catalog/writeProduct.ts', status: 'M', insertions: 14, deletions: 2, binary: false },
+            { path: 'src/catalog/writePrice.ts', status: 'M', insertions: 11, deletions: 2, binary: false },
+            { path: 'docs/caching.md', status: 'M', insertions: 3, deletions: 2, binary: false },
+          ],
+          fileCount: 7,
+          totals: { insertions: 210, deletions: 18, filesChanged: 7 },
+          emptyReason: null,
+        },
+        changesError: null,
+        summaryState: {
+          kind: 'written',
+          text: "Cached the storefront home's product-grid query for 60 seconds and purged it on every catalog write, product edits and price changes alike. The cold render went from 240 ms to 11 ms cached. Added a render benchmark and tests for the purge.",
+        },
+      },
+    };
+  }
+  if (taskId === `${projectId}-archived-2`) {
+    return {
+      summaryWrittenAt: null,
+      report: {
+        taskId,
+        startedAt: '2026-07-19T08:58:00.000Z',
+        endedAt: '2026-07-19T09:15:00.000Z',
+        route: [routeColumn(column('lane-executing'), [{ startedAt: '2026-07-19T08:58:00.000Z', durationMs: 17 * MINUTE }])],
+        commits: [],
+        commitCount: 0,
+        changes: { files: [], fileCount: 0, totals: null, emptyReason: 'no-commits' },
+        changesError: null,
+        summaryState: { kind: 'pending' },
+      },
+    };
+  }
+  return null;
+}
+
+/** `find_task`'s caps on what it says about a finished task (the desktop's TASK_KNOWLEDGE_COMMITS and TASK_KNOWLEDGE_FILES). */
+const FIND_TASK_KNOWLEDGE_COMMITS = 3;
+const FIND_TASK_KNOWLEDGE_FILES = 8;
+
+/**
+ * `find_task`'s answer for an archived row asked by id: the row and, for a
+ * finished task, its `knowledge` cut to the desktop's caps (three commits,
+ * eight bare paths). What an older desktop answers in place of a task report.
+ */
+export function archivedFindTaskResultFor(projectId: string, taskId: string): JsonValue {
+  const task = archivedTasksFor(projectId).find((candidate) => candidate.id === taskId);
+  const record = archivedTaskRecordFor(projectId, taskId);
+  if (task === undefined || record === null) return { tasks: [], backlog: [] };
+  const { report } = record;
+  const commits = report.commits ?? [];
+  const files = report.changes?.files ?? [];
+  return {
+    tasks: [
+      {
+        id: task.id,
+        displayId: task.display_id,
+        title: task.title,
+        description: task.description,
+        column: 'Done',
+        branchName: task.branch_name,
+        prNumber: task.pr_number,
+        prUrl: task.pr_url,
+        status: 'completed',
+        knowledge: {
+          summary:
+            report.summaryState.kind === 'written' && record.summaryWrittenAt !== null
+              ? { text: report.summaryState.text, writtenAt: record.summaryWrittenAt }
+              : null,
+          commits: commits.slice(0, FIND_TASK_KNOWLEDGE_COMMITS),
+          commitCount: report.commitCount ?? commits.length,
+          changedFiles: files.slice(0, FIND_TASK_KNOWLEDGE_FILES).map((file) => file.path),
+          changedFileCount: report.changes?.fileCount ?? files.length,
+        },
+      },
+    ],
+    backlog: [],
+  } as unknown as JsonValue;
 }
 
 /** The desktop's per-project cap (MAX_COMMAND_TERMINALS), mirrored for the mock's own refusal. */
@@ -4874,6 +5130,26 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         if (payload.tool === 'get_workflow') {
           const detail = mockWorkflowDetail(readParams.workflow);
           return detail === null ? failWith(request, `No workflow "${readParams.workflow ?? ''}".`) : ok(request, { result: detail });
+        }
+        if (payload.tool === 'get_task_report') {
+          if (options.refuseTaskReport === true) return failWith(request, `Tool not allowed for board-tool-read: ${payload.tool}`);
+          const reportParams = (payload.params ?? {}) as { project?: string; taskId?: string };
+          const record =
+            reportParams.project !== undefined && reportParams.taskId !== undefined
+              ? archivedTaskRecordFor(reportParams.project, reportParams.taskId)
+              : null;
+          return record === null
+            ? failWith(request, `Task not found: ${reportParams.taskId ?? ''}`)
+            : ok(request, { result: record.report as unknown as JsonValue });
+        }
+        if (payload.tool === 'find_task') {
+          const findParams = (payload.params ?? {}) as { project?: string; id?: string };
+          return ok(request, {
+            result:
+              findParams.project !== undefined && findParams.id !== undefined
+                ? archivedFindTaskResultFor(findParams.project, findParams.id)
+                : { tasks: [], backlog: [] },
+          });
         }
         return ok(request, { result: { note: `${payload.tool} completed.` } });
       }
