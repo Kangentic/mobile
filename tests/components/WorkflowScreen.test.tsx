@@ -387,6 +387,25 @@ describe('WorkflowScreen', () => {
         expect(screen.getByTestId('workflow-card-task-c-wait')).toHaveTextContent('5m');
         expect(screen.queryByTestId('workflow-card-task-b-wait')).toBeNull();
       });
+
+      /**
+       * Kangentic #923: a task of a RUNNING workflow held by its own automations
+       * switch wears the "Automations paused" strip over its band here too, and
+       * its To Do footer reads Paused rather than the engine's queue. The
+       * unheld cards beside it wear neither.
+       *
+       * Mutations seen failing: BoardTaskCard passing `held` as false to
+       * workflowWaitingFooter (the footer label was not "Paused"), and passing
+       * `automationsDisabled={false}` to TaskCard (the strip testID was not found).
+       */
+      it('stacks the paused strip over a held task\'s band and reads Paused in its To Do footer', async () => {
+        patchHomeRows({ 'task-d': { automations_disabled: true } });
+        await renderWorkflow();
+
+        expect(screen.getByTestId('workflow-card-task-d-automations-disabled')).toHaveTextContent('Automations paused');
+        expect(screen.getByTestId('workflow-card-task-d-status-bar-label')).toHaveTextContent('Paused');
+        expect(screen.queryByTestId('workflow-card-task-b-automations-disabled')).toBeNull();
+      });
     });
 
     it('opens every board a task of the workflow sits on, in full', async () => {

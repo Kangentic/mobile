@@ -175,6 +175,51 @@ describe('useResumeOffer and a task of a paused workflow', () => {
   });
 
   /**
+   * Protocol 0.25.0 (kangentic #923). A workflow's Pause and Resume leave a HELD
+   * task's agent alone, so the workflow's Resume would not bring this one back:
+   * it keeps its own Resume session and is not sent to View workflow.
+   *
+   * Mutation seen failing: dropping `&& !held` from `pausedWorkflow` in the hook
+   * (the held task was sent to View workflow: "Expected: true, Received: false"
+   * on `offered`, with `pausedWorkflow` non-null).
+   */
+  it('keeps Resume, and names no workflow, for a held task of a paused workflow', async () => {
+    publishRow({ workflow: workflowOf('paused'), automations_disabled: true });
+
+    const { result } = await renderCountedOffer();
+
+    expect(result.current.offered).toBe(true);
+    expect(result.current.pausedWorkflow).toBeNull();
+  });
+
+  it('still names the workflow for a task whose automations are not held', async () => {
+    publishRow({ workflow: workflowOf('paused'), automations_disabled: false });
+
+    const { result } = await renderCountedOffer();
+
+    expect(result.current.offered).toBe(false);
+    expect(result.current.pausedWorkflow).not.toBeNull();
+  });
+
+  it('follows the hold as the board rows flip it', async () => {
+    publishRow({ workflow: workflowOf('paused'), automations_disabled: false });
+    const { result } = await renderCountedOffer();
+    expect(result.current.pausedWorkflow).not.toBeNull();
+
+    await act(async () => {
+      publishRow({ workflow: workflowOf('paused'), automations_disabled: true });
+    });
+    expect(result.current.offered).toBe(true);
+    expect(result.current.pausedWorkflow).toBeNull();
+
+    await act(async () => {
+      publishRow({ workflow: workflowOf('paused'), automations_disabled: false });
+    });
+    expect(result.current.offered).toBe(false);
+    expect(result.current.pausedWorkflow).not.toBeNull();
+  });
+
+  /**
    * The hook reads the workflow as primitives, because every snapshot replaces
    * the row's `workflow` OBJECT. That is invisible in what the hook returns, so
    * this counts renders, as the block above does.

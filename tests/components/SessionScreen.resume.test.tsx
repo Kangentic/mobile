@@ -266,6 +266,39 @@ describe('SessionScreen Resume (a paused session)', () => {
     expect(resumeTaskSessionMock).not.toHaveBeenCalled();
   });
 
+  /**
+   * Protocol 0.25.0 (kangentic #923). A HELD task (its own automations paused)
+   * is left alone by the workflow's Pause and Resume, so the panel keeps its own
+   * Resume session instead of sending the person to a workflow whose Resume
+   * would not bring it back. Both surfaces read the one hook: the panel and the
+   * header's Resume.
+   *
+   * Mutation seen failing: dropping `&& !held` from `pausedWorkflow` in
+   * useResumeOffer: the panel drew View workflow and no Resume session.
+   */
+  it('keeps Resume session, with no View workflow, for a held task of a paused workflow', async () => {
+    seedPausedSession({
+      resumable: true,
+      workflow: workflowWireFixture({ id: 'workflow-9', project_id: 'project-home', state: 'paused' }),
+    });
+    const board = useBoardStore.getState().boardsByProjectId['project-1'];
+    useBoardStore.setState({
+      boardsByProjectId: {
+        'project-1': { ...board, tasksById: { 'task-1': { ...board.tasksById['task-1'], automations_disabled: true } } },
+      },
+    });
+    await renderSessionScreen();
+
+    expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
+    expect(screen.queryByTestId('session-view-workflow')).toBeNull();
+
+    await act(async () => {
+      await fireEvent.press(screen.getByTestId('session-resume-button'));
+    });
+    expect(resumeTaskSessionMock).toHaveBeenCalledWith('task-1', 'project-1');
+    expect(mockRouter.push).not.toHaveBeenCalled();
+  });
+
   it('reads "Resuming agent..." with a spinner, and takes no second tap, while the resume runs', async () => {
     seedPausedSession({ resumable: true });
     useResumeStore.getState().markResuming('task-1', Date.now());
