@@ -1,3 +1,4 @@
-- The workflow view's header now fits on one row, with Pause or Resume beside the name.
-- Agents feed cards say "Automations disabled" when a task's column automations are off.
-- A message sent just after its session ended now shows "Session ended" and keeps your text.
+- A finished task's Summary now matches the desktop, with its times, cost and changes up top and cards for the summary, route, commits, files and usage.
+- Pause automations now works on a workflow task, holding that one task while the rest of its workflow runs.
+- Tapping a link in a chat or task description now opens it in your browser.
+- A Command Terminal started from the phone no longer wraps its rows at the wrong width.
