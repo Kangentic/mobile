@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
   owner: 'kangentic',
-  version: '1.2.1',
+  version: '1.3.0',
   orientation: 'portrait',
   scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
@@ -226,7 +226,19 @@ const config: ExpoConfig = {
     // Native dependencies moved with the SDK 57 drift (expo 57.0.31,
     // expo-router 57.0.29, expo-notifications 57.0.24), so this is a new
     // native build.
-    buildNumber: '20',
+    //
+    // 21 is the v1.3.0 release cut 2026-10-29, for an App Store submission. 20
+    // is spent, tagged ios-b20, and 1.2.1 is live. Nothing in it is iOS-only;
+    // it is all cross-platform: a completed task's Summary follows the
+    // desktop's completed view (protocol 0.24.0's get_task_report: a header
+    // strip, then Task summary, Route, Commits, Files changed and Usage cards),
+    // Pause automations works on a workflow task and holds that one task out
+    // of its workflow (0.25.0), tapped https links in markdown open in the OS
+    // handler, and a Command Terminal started from the phone no longer keeps
+    // an 80-column grid against the desktop's 210x48 park. No native
+    // dependency moved since 1.2.1 (only the protocol pin), but there is no
+    // OTA path, so it is a new build.
+    buildNumber: '21',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
@@ -474,13 +486,18 @@ const config: ExpoConfig = {
     // Android-only; it is the cross-platform patch list on ios.buildNumber's 20
     // above.
     //
+    // 19 is the v1.3.0 release cut 2026-10-29, going to the PRODUCTION track as
+    // a full release. 18 is spent, tagged android-vc18. Nothing in it is
+    // Android-only; it is the cross-platform list on ios.buildNumber's 21
+    // above.
+    //
     // Keep this list current on the way OUT of a release, not the way in. The
     // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
     // into 2026-07-28 and cost a failed release run, because build 3 had in
     // fact already been uploaded. scripts/checkPlayVersionCode.mjs catches a
     // duplicate, but only in the submit job, which is after the ~25 minute
     // build AND after the approval gate.
-    versionCode: 18,
+    versionCode: 19,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
