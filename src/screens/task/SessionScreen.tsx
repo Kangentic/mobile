@@ -35,7 +35,7 @@ import {
 import { SessionInputBar } from './SessionInputBar';
 import { ResumePanel } from './ResumePanel';
 import { RESUME_FAILED_MESSAGE, useResumeOffer } from './useResumeOffer';
-import { resolveCurrentSessionId } from './sessionResolution';
+import { pausedComposerSessionId, resolveCurrentSessionId } from './sessionResolution';
 import type { SessionMode } from './SessionModeToggle';
 
 /**
@@ -893,10 +893,20 @@ export function SessionScreen(): React.JSX.Element {
   // it points at the dead session (keys to a dead PTY are silently swallowed
   // and the composer would show an error), live again the moment a successor
   // binds, veil or not; in the waiting phase it is the switcher alone, in
-  // every mode, since keys and messages have nowhere to go.
+  // every mode, since keys and messages have nowhere to go. The one exception
+  // is a PAUSED task's Chat composer (pausedComposerLive, below): a message
+  // there does have somewhere to go, held for the task's next agent.
   const footerSuspended = quietWindowOpen && !quietWindowWaiting && displaySessionId === quietWindowSessionId;
   // The launch face has no live PTY to send keys or messages to either.
   const footerSwitcherOnly = quietWindowWaiting || launchFace;
+  // Chat on a paused task (protocol 0.26.0): the desktop HOLDS a message to the
+  // session the pause took, for the task's next agent, so while this screen
+  // still holds that session the Chat composer stays live on it instead of
+  // going inert and then switcher-only with the window above. Chat only: the
+  // terminal lens has its Resume panel, and keys have nowhere to go. See
+  // pausedComposerSessionId for when there is one.
+  const pausedComposerLive =
+    mode === 'chat' && !launchFace && pausedComposerSessionId({ row: taskRow, currentSessionId: sessionId, lastBoundSessionId }) !== null;
   // The terminal pane stays DRAWN under the veil for the whole window. For a
   // few hours on 2026-09-18 it was hidden through the waiting phase, on a
   // measurement that said a dead session's page kept the WebView painting at
@@ -1012,8 +1022,8 @@ export function SessionScreen(): React.JSX.Element {
           mode={mode}
           onModeChange={onModeChange}
           chatAttention={chatAttention}
-          suspended={footerSuspended}
-          switcherOnly={footerSwitcherOnly}
+          suspended={footerSuspended && !pausedComposerLive}
+          switcherOnly={footerSwitcherOnly && !pausedComposerLive}
           quickKeysHidden={resumePanelShown}
           notice={resumeFailureNotice}
         />

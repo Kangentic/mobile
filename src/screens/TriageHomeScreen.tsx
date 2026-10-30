@@ -9,7 +9,7 @@ import { useRouter } from 'expo-router';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import type { BoardTaskWire } from '@kangentic/protocol';
 import { AppHeader, Screen, ConnectionBanner, EmptyState, Button, NowTickProvider, SectionHeader, useTheme } from '@/components';
-import type { AgentStatusKind } from '@/components/AgentStatusIcon';
+import { agentStatusKindFor, type AgentStatusKind } from '@/components/AgentStatusIcon';
 import { TaskCard } from '@/components/board/TaskCard';
 import { cardSessionDisplay, toCardSession } from '@/components/board/cardSessionDisplay';
 import { buildJourneyTrack } from '@/components/board/columnTrack';
@@ -723,14 +723,15 @@ const ActivityRow = React.memo(function ActivityRow({
     onLongPressTask(task, entry.projectId);
   }, [onLongPressTask, task, entry.projectId]);
 
-  // Desktop-parity status treatment: green spinner while the agent works,
-  // the yellow mail envelope for EVERY idle session (a pending prompt is
-  // idle too - all idle rows are equal priority, first come first served).
-  // None at all for a session that is not running, as the desktop card draws
-  // it: a queued session in particular sits at `state: 'idle'` (the desktop
-  // holds a placeholder with no PTY, so it never reports thinking), and only
+  // Desktop-parity status treatment (agentStatusKindFor): green spinner while
+  // the agent works, and in amber the bubble for a question, the shield for an
+  // approval, the envelope for a finished turn. All waiting rows are equal
+  // priority, first come first served; the shape only says why. None at all for
+  // a session that is not running, as the desktop card draws it: a queued
+  // session in particular sits at `state: 'idle'` (the desktop holds a
+  // placeholder with no PTY, so it never reports thinking), and only
   // `sessionStatus` keeps it from wearing the envelope.
-  const statusKind: AgentStatusKind | null = !isRunning ? null : working ? 'working' : entry.unreadCount > 0 ? 'idle-unread' : 'idle';
+  const statusKind: AgentStatusKind | null = isRunning ? agentStatusKindFor(entry.state, entry.reason, entry.unreadCount > 0) : null;
 
   // Inbox-style snippet, the row's body for EVERY state: the pending
   // decision when a prompt waits, otherwise the agent's last message

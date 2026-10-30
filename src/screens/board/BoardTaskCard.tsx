@@ -1,13 +1,13 @@
 import React, { useCallback, useMemo } from 'react';
 import { useRouter } from 'expo-router';
 import type { BoardColumnWire, BoardTaskWire } from '@kangentic/protocol';
-import type { AgentStatusKind } from '@/components';
+import { agentStatusKindFor, type AgentStatusKind } from '@/components';
 import { collapseToSnippetText } from '@/conversation/pendingPromptSummary';
 import { TaskCard } from '@/components/board/TaskCard';
 import { cardSessionDisplay, toCardSession } from '@/components/board/cardSessionDisplay';
 import { buildJourneyTrack } from '@/components/board/columnTrack';
 import { sessionlessTaskStatus, useBoardStore } from '@/state/boardStore';
-import { useActivityStore, sectionForEntry, selectTaskRespawn, selectWaitingSince } from '@/state/activityStore';
+import { useActivityStore, selectTaskRespawn, selectWaitingSince } from '@/state/activityStore';
 import { workflowStripLabel } from '@/workflow/workflowState';
 import { workflowWaitingFooter } from '@/workflow/workflowWaiting';
 
@@ -113,19 +113,15 @@ export const BoardTaskCard = React.memo(function BoardTaskCard({
   const respawn = useActivityStore((state) => selectTaskRespawn(state, task.id));
   const sessionDisplay = cardSessionDisplay({ session: toCardSession(activityEntry), respawn, task });
 
-  // Desktop TaskCard parity: spinner while thinking, mail while the
-  // session waits on the user (permission or idle), and no icon for a
-  // session that is not running (queued, paused, mid-respawn, ended): its
-  // footer says which. A queued session reports idle (no PTY, so it never
-  // thinks), so `sessionStatus`, not the activity state, is what keeps it
-  // from wearing the envelope.
+  // Desktop TaskCard parity: spinner while thinking, the bubble or the shield
+  // while the session waits on the user, the envelope for a finished turn
+  // (agentStatusKindFor), and no icon for a session that is not running
+  // (queued, paused, mid-respawn, ended): its footer says which. A queued
+  // session reports idle (no PTY, so it never thinks), so `sessionStatus`, not
+  // the activity state, is what keeps it from wearing the envelope.
   const statusKind: AgentStatusKind | null =
     activityEntry !== null && sessionDisplay.kind === 'running'
-      ? sectionForEntry(activityEntry) === 'working'
-        ? 'working'
-        : sectionForEntry(activityEntry) === 'needs-you' || activityEntry.unreadCount > 0
-          ? 'idle-unread'
-          : 'idle'
+      ? agentStatusKindFor(activityEntry.state, activityEntry.reason, activityEntry.unreadCount > 0)
       : null;
   const descriptionPreview = task.description.length > 0 ? collapseToSnippetText(task.description) : '';
   const running = sessionDisplay.kind === 'running';

@@ -7,7 +7,7 @@ export { IconButton, fabDiameter, type IconButtonProps, type IconButtonVariant }
 export { Card, type CardProps } from './Card';
 export { Badge, type BadgeProps } from './Badge';
 export { StatusDot, type StatusDotProps, type StatusDotVariant } from './StatusDot';
-export { AgentStatusIcon, type AgentStatusIconProps, type AgentStatusKind } from './AgentStatusIcon';
+export { AgentStatusIcon, agentStatusKindFor, type AgentStatusIconProps, type AgentStatusKind } from './AgentStatusIcon';
 export { ActivityMarkIcon, type ActivityMarkIconProps, type ActivityMarkTone, type CommandTerminalMarkName } from './ActivityMarkIcon';
 export { StatusSpinner, type StatusSpinnerProps } from './StatusSpinner';
 export { Row, type RowProps } from './Row';

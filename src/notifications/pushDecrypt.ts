@@ -8,8 +8,8 @@ import {
 } from '@kangentic/protocol';
 import { getPushKeyIfExists } from './pushKeys';
 import { getPushIdentityPublicKey } from './pushIdentity';
-import { titleForCategory } from './categoryCopy';
-import { SENT_AT_DATA_KEY } from './notificationRouting';
+import { titleForAlert } from './categoryCopy';
+import { AUTHORED_DATA_KEY, SENT_AT_DATA_KEY } from './notificationRouting';
 
 /**
  * On-device decryption of a push envelope blob. Everything the OS-visible
@@ -131,7 +131,9 @@ export async function decryptPushClear(blob: string): Promise<PushClearEntry[] |
  * which reads only this `data`, can route a workflow-complete (protocol
  * 0.21.0), whose task and session ids are EMPTY, to its home project's Board.
  * `sentAt` is the envelope's own desktop-clock seal time, kept so a later
- * sealed clear can bound what it removes (SENT_AT_DATA_KEY).
+ * sealed clear can bound what it removes (SENT_AT_DATA_KEY). `authored` marks a
+ * Notify me push (protocol 0.26.0), which the reconciler keeps until its task
+ * is opened (AUTHORED_DATA_KEY).
  * A type alias rather than an interface, so it assigns to notifee's
  * string-keyed `data` as it is.
  */
@@ -141,6 +143,7 @@ export type DecryptedPushRouting = {
   projectId: string;
   sessionId: string;
   sessionKind?: PushSessionKind;
+  [AUTHORED_DATA_KEY]?: 'true';
   [SENT_AT_DATA_KEY]: string;
 };
 
@@ -153,6 +156,11 @@ export interface DecryptedPushNotification {
   sentAt: number;
   /** Older alerts this push resolves (protocol 0.23.0); applied BEFORE this one is presented. Empty when none. */
   clears: PushClearEntry[];
+  /**
+   * A Notify me push (protocol 0.26.0): the user asked to be told, so it shows
+   * even while the app is open (backgroundPushTask, foregroundPresentation).
+   */
+  authored: boolean;
 }
 
 export async function decryptPushBlob(blob: string): Promise<DecryptedPushNotification | null> {
@@ -169,9 +177,14 @@ export async function decryptPushBlob(blob: string): Promise<DecryptedPushNotifi
     // nseConstantsParity.test.ts holds the two platforms to one expression.
     const isCommandTerminal = plaintext.sessionKind === 'command-terminal';
     const taskTitle = plaintext.taskTitle.length > 0 ? plaintext.taskTitle : 'Agent session';
+    // A Notify me row's own Title and Body (protocol 0.26.0), set together;
+    // shown as written. Everything else is titled by its wait kind, else its
+    // category, over the task title and detail.
+    const notifyMeText = plaintext.title !== undefined && plaintext.body !== undefined ? { title: plaintext.title, body: plaintext.body } : null;
+    const composedBody = plaintext.detail.length > 0 ? `${taskTitle} - ${plaintext.detail}` : taskTitle;
     return {
-      title: titleForCategory(plaintext.category),
-      body: plaintext.detail.length > 0 ? `${taskTitle} - ${plaintext.detail}` : taskTitle,
+      title: notifyMeText?.title ?? titleForAlert(plaintext.category, plaintext.waitKind),
+      body: notifyMeText?.body ?? composedBody,
       category: plaintext.category,
       data: {
         category: plaintext.category,
@@ -179,10 +192,12 @@ export async function decryptPushBlob(blob: string): Promise<DecryptedPushNotifi
         projectId: plaintext.projectId,
         sessionId: plaintext.sessionId,
         ...(isCommandTerminal ? { sessionKind: plaintext.sessionKind } : {}),
+        ...(notifyMeText !== null ? { [AUTHORED_DATA_KEY]: 'true' as const } : {}),
         [SENT_AT_DATA_KEY]: String(plaintext.sentAt),
       },
       sentAt: plaintext.sentAt,
       clears: plaintext.clears ?? [],
+      authored: notifyMeText !== null,
     };
   } catch {
     // Deliberately swallowed without logging: the error message can echo

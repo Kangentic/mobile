@@ -152,7 +152,7 @@ function sessionAlertNote(
 ): DisplayedNotificationNote {
   return {
     platformId: sessionAlertId(category, sessionId),
-    routing: { category, taskId, projectId: 'project-1', sessionId, sessionKind: null },
+    routing: { category, taskId, projectId: 'project-1', sessionId, sessionKind: null, authored: false },
     postedAt,
     promptIdAtPost,
   };
@@ -313,7 +313,7 @@ describe('notificationReconciler', () => {
 
     modules.signals.noteNotificationDisplayed({
       platformId: 'kangentic:input-required:session:sess-1',
-      routing: { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null },
+      routing: { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null, authored: false },
       postedAt: Date.now() - 1,
       promptIdAtPost: 'prompt-1',
     });
@@ -326,7 +326,7 @@ describe('notificationReconciler', () => {
     expect(notifeeMock.cancelNotification.mock.calls).toEqual([['kangentic:input-required:session:sess-1']]);
     expect(notifeeMock.getDisplayedNotifications).not.toHaveBeenCalled();
     expect(dismissed).toEqual([
-      { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null },
+      { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null, authored: false },
     ]);
   });
 
@@ -346,7 +346,7 @@ describe('notificationReconciler', () => {
     ]);
     modules.signals.noteNotificationDisplayed({
       platformId: 'kangentic:turn-complete:session:sess-1',
-      routing: { category: 'turn-complete', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null },
+      routing: { category: 'turn-complete', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null, authored: false },
       postedAt,
       promptIdAtPost: null,
     });
@@ -455,7 +455,7 @@ describe('notificationReconciler', () => {
     await settle();
     modules.signals.noteNotificationDisplayed({
       platformId: 'kangentic:input-required:session:sess-1',
-      routing: { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null },
+      routing: { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null, authored: false },
       postedAt: firstPostedAt,
       promptIdAtPost: 'prompt-0',
     });
@@ -486,7 +486,7 @@ describe('notificationReconciler', () => {
 
     modules.signals.noteNotificationDisplayed({
       platformId: 'kangentic:turn-complete:session:sess-1',
-      routing: { category: 'turn-complete', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null },
+      routing: { category: 'turn-complete', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null, authored: false },
       postedAt: Date.now() - 1,
       promptIdAtPost: null,
     });
@@ -1202,7 +1202,7 @@ describe('notificationReconciler', () => {
 
       await modules.reconciler.dismissNotificationsClearedBy([clearEntry('input-required', 'sess-1', 'task-1', sentAt)]);
 
-      expect(dismissed).toEqual([{ category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null }]);
+      expect(dismissed).toEqual([{ category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null, authored: false }]);
     });
 
     /**
@@ -1260,8 +1260,8 @@ describe('notificationReconciler', () => {
       expect(notifeeMock.getDisplayedNotifications).toHaveBeenCalledTimes(2);
       expect(notifeeMock.cancelNotification.mock.calls).toEqual([[clearedAlertId], [uncoveredAlertId]]);
       expect(dismissed).toEqual([
-        { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null },
-        { category: 'input-required', taskId: 'task-2', projectId: 'project-1', sessionId: 'sess-2', sessionKind: null },
+        { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null, authored: false },
+        { category: 'input-required', taskId: 'task-2', projectId: 'project-1', sessionId: 'sess-2', sessionKind: null, authored: false },
       ]);
     });
 

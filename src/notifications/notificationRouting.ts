@@ -19,7 +19,22 @@ export interface NotificationRouting {
   projectId: string;
   sessionId: string;
   sessionKind: PushSessionKind | null;
+  /**
+   * True for a notification the user wrote: a Notify me automation row's own
+   * Title and Body (protocol 0.26.0). It shares a workflow task's notice shape
+   * (`input-required`, an empty session) but not its lifecycle: the desktop
+   * never clears it, so only opening its task does (notificationStaleness.ts).
+   */
+  authored: boolean;
 }
+
+/**
+ * The key the authored flag rides under in notifee `data` ('true' when set,
+ * absent otherwise, since notifee `data` values are strings). On-device only:
+ * an Android alert's data never leaves the phone, and on iOS the flag is
+ * re-derived from the sealed envelope rather than written to `userInfo`.
+ */
+export const AUTHORED_DATA_KEY = 'authored';
 
 /**
  * The key a notification's own posting time rides under in notifee `data`
@@ -59,6 +74,7 @@ export function routingFromNotificationData(data: unknown): NotificationRouting 
     projectId: typeof data.projectId === 'string' ? data.projectId : '',
     sessionId: typeof data.sessionId === 'string' ? data.sessionId : '',
     sessionKind: isPushSessionKind(data.sessionKind) ? data.sessionKind : null,
+    authored: data[AUTHORED_DATA_KEY] === 'true',
   };
 }
 

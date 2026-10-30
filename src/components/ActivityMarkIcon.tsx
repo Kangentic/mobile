@@ -29,7 +29,7 @@ function colorForTone(tone: ActivityMarkTone, colors: ReturnType<typeof useTheme
 }
 
 /** The marks this component draws: everything but the agent's own, which AgentStatusIcon owns. */
-export type CommandTerminalMarkName = Exclude<ActivityMarkName, 'agent-idle' | 'agent-working'>;
+export type CommandTerminalMarkName = Exclude<ActivityMarkName, `agent-${string}`>;
 
 export interface ActivityMarkIconProps {
   mark: CommandTerminalMarkName;

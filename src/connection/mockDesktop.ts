@@ -11,6 +11,7 @@ import {
   type DiffFileContentWire,
   type DiffFileListWire,
   type JsonValue,
+  type PermissionWaitKindWire,
   type ReadBoardView,
   type ReadStreamResponsePayload,
   type ReadStreamSessionStatusWire,
@@ -164,6 +165,15 @@ const PERMISSION_TOOL_ID = 'mock-tool-2';
 const QUESTION_TOOL_ID = 'mock-tool-3';
 const PERMISSION_PROMPT_ID = `${MOCK_SESSION_ID}:${PERMISSION_TOOL_ID}`;
 const QUESTION_PROMPT_ID = `${MOCK_SESSION_ID}:${QUESTION_TOOL_ID}`;
+
+/**
+ * The wait kind a real desktop reports for each mock prompt (protocol 0.26.0):
+ * the AskUserQuestion card is a question, the Bash permission trio an
+ * approval. So the rig and the shipped demo draw both the bubble and the shield.
+ */
+function mockWaitKind(promptId: string | null): PermissionWaitKindWire {
+  return promptId === QUESTION_PROMPT_ID ? 'question' : 'approval';
+}
 const MOCK_CONTEXT_WINDOW_SIZE = 200_000;
 // Model variety across the mock's sessions - both the Agents feed and the
 // board read the SAME activityStore usage data per session, so varying it
@@ -3607,6 +3617,13 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
    */
   const pausingTaskIds = new Set<string>();
   /**
+   * Sessions the mock paused. A message sent to one is HELD for the task's next
+   * agent (protocol 0.26.0) and answered delivered, as the desktop holds it, so
+   * the rig and the demo exercise a paused task's composer the way a real
+   * desktop answers it. The hold itself is shown nowhere, on either side.
+   */
+  const pausedSessionIds = new Set<string>();
+  /**
    * Tasks archived DURING this connection (a move into the done-role column),
    * per project. archivedPage serves these ahead of the fixed fixtures, so an
    * archived card lands in the Done column instead of vanishing entirely.
@@ -3910,7 +3927,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
     const since = waitingSinceFor(activeSessionId, state !== 'thinking');
     const reason =
       state === 'permission'
-        ? { kind: 'permission' as const, since }
+        ? { kind: 'permission' as const, since, waitKind: mockWaitKind(pendingPromptId) }
         : state === 'idle'
           ? { kind: 'idle' as const, since }
           : { kind: 'turn-active' as const };
@@ -3992,6 +4009,13 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
     const pausedSessionId = activeSessionId;
     if (pausedSessionId === null) return;
     pausingTaskIds.add(MOCK_TASK_ID);
+    pausedSessionIds.add(pausedSessionId);
+    // The pause takes a pending prompt with it, and the desktop's read-stream
+    // reports a prompt that clears as `permission` pending:false. Without it
+    // the paused agent's prompt card stayed answerable on the phone.
+    if (pendingPromptId !== null) {
+      emit({ kind: 'activity', sessionId: pausedSessionId, taskId: MOCK_TASK_ID, payload: { type: 'permission', promptId: pendingPromptId, pending: false } });
+    }
     pendingPromptId = null;
     pendingTickResult = null;
     emit({
@@ -4029,6 +4053,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
     const pausedState = pausedSessionId !== null ? staticSessionStates.get(pausedSessionId) : undefined;
     if (pausedSessionId === null || pausedState === undefined) return;
     pausingTaskIds.add(task.id);
+    pausedSessionIds.add(pausedSessionId);
     emit({
       kind: 'activity',
       sessionId: pausedSessionId,
@@ -4881,7 +4906,10 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         const snapshot: ReadStreamResponsePayload = {
           scrollback: wantsTerminal ? mockTerminalScrollback() : '',
           activity: pendingPromptId
-            ? { state: 'permission', reason: { kind: 'permission', since: waitingSinceFor(activeSessionId, true) } }
+            ? {
+                state: 'permission',
+                reason: { kind: 'permission', since: waitingSinceFor(activeSessionId, true), waitKind: mockWaitKind(pendingPromptId) },
+              }
             : { state: 'thinking', reason: { kind: 'turn-active' } },
           usage: activeSessionUsageReported ? mockUsage(streamingUsedTokens(feedTick), MOCK_MODEL_SONNET) : null,
           awaitedPromptId: pendingPromptId,
@@ -4951,6 +4979,12 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
           // No echo: the submitted frame draws the prompt in Claude Code's own
           // transcript, and a raw line written first would scroll it.
           submitCommandTerminalPrompt(chatTerminal, payload.text);
+          return ok(request, { delivered: true });
+        }
+        // Held for the task's next agent, never delivered to the paused one
+        // (pausedSessionIds). Checked before the static sessions: a paused
+        // static session's state lingers until its suspend completes.
+        if (pausedSessionIds.has(payload.sessionId)) {
           return ok(request, { delivered: true });
         }
         const staticChatState = staticSessionStates.get(payload.sessionId);

@@ -224,7 +224,9 @@ src/
                   #   (protocol 0.24.0's get_task_report): its number and date formats, the
                   #   header strip, the find_task fallback reader, and the Summary list's rows
   notifications/  # Push key + registration, E2E envelope decrypt, notifee channels, background task,
-                  #   local notifier, foreground service, sharedKeychain (permission, registration,
+                  #   local notifier, foreground service, foregroundPresentation (iOS: a Notify me
+                  #   push, protocol 0.26.0, shows while the app is open; nothing else does),
+                  #   sharedKeychain (permission, registration,
                   #   tap routing, Settings status and RICH display are all cross-platform; iOS
                   #   decrypts in the targets/nse/ extension, Android in the Notifee handler),
                   #   and the stale-notification reconciler (cross-platform: stable Android ids,
@@ -254,9 +256,11 @@ src/
                   #   the signal as a plain callback the Sentry-banned directories can subscribe
                   #   to. A breadcrumb is scope data, so the two-capture-call count is unchanged
   lib/            # Shared pure utilities (crypto polyfills, haptics, the bounded task queue that
-                  #   caps the Home feed's cold-start snippet pre-warm, and runWhenFirstActive:
+                  #   caps the Home feed's cold-start snippet pre-warm, runWhenFirstActive:
                   #   the root layout's guard against hydrating settings in an iOS background
-                  #   launch, where the phone may be locked and WHEN_UNLOCKED reads throw)
+                  #   launch, where the phone may be locked and WHEN_UNLOCKED reads throw, and
+                  #   agentWait: the desktop's wait-kind rule (protocol 0.26.0) that picks the
+                  #   bubble, shield or envelope and the Command Terminal activity line)
 tests/
   unit/           # vitest (pure TS, no RN runtime) - includes the loopback-transport + stub-desktop-peer helpers
   components/     # Jest + React Native Testing Library

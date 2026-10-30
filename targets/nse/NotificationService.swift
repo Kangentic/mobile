@@ -77,9 +77,9 @@ final class NotificationService: UNNotificationServiceExtension {
       return
     }
 
-    if let title = CategoryCopy.title(forCategory: decrypted.category) {
-      mutableContent.title = title
-      mutableContent.body = CategoryCopy.body(taskTitle: decrypted.taskTitle, detail: decrypted.detail)
+    if let content = CategoryCopy.content(for: decrypted) {
+      mutableContent.title = content.title
+      mutableContent.body = content.body
       if let threadIdentifier = NotificationPruning.threadIdentifier(for: decrypted, pushKey: keys.pushKey) {
         mutableContent.threadIdentifier = threadIdentifier
       }

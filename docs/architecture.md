@@ -782,6 +782,25 @@ residual risk rather than a covered case.
 | `spawn-stalled` | "Still preparing" | **off** |
 | `workflow-complete` | "Workflow complete" | on |
 
+An `input-required` push whose envelope carries a `waitKind` (protocol 0.26.0) is titled by it:
+"Agent has a question" for `question`, "Agent needs your approval" for `approval`
+(`titleForWaitKind`). Absent, or a kind this build does not know, keeps "Agent needs your
+input". The body is unchanged, and the local notifier titles from the activity reason's own
+`waitKind` the same way, so a local and a remote alert for one wait agree. The iOS extension
+duplicates both strings in `CategoryCopy.swift`, pinned by `nseConstantsParity.test.ts`.
+
+A **Notify me** push (protocol 0.26.0) is an `input-required` envelope carrying an automation
+row's own `title` and `body`, with an empty `sessionId`, which the desktop sends to every paired
+phone whatever its registered categories, connected or not. Both platforms show the Title over the
+Body as written, and a tap opens the task (the session screen resolves the session from the
+board). It is marked `authored` in the alert's on-device routing data, and that flag changes two
+things. The stale-notification reconciler judges it by clear-on-open alone, because the desktop
+never clears it and every board or session rule would misread an alert that names no session.
+And it shows while the app is open: Android lets it past the headless task's in-app drop
+(`watchingAlready()`), and iOS presents it through a foreground handler
+(`foregroundPresentation.ts`) that keeps every other push hidden there, as before. A workflow
+task's notice has the same shape without the Title and Body, and keeps the existing rules.
+
 `spawn-stalled` ("slow starts") is the one default-off category. It stays in the protocol, the
 Settings list, and the `stalls` channel - defaulted off, not removed, so re-enabling it sticks.
 The defaults live in `PUSH_CATEGORY_DEFAULTS` (`src/state/settingsStore.ts`) as a
@@ -1093,7 +1112,21 @@ failure line in its Resume panel and the other two lenses in the footer, above t
 in the muted caption the desktop uses for that line. There is no toast: the desktop also raises
 one, and the phone deliberately does not. A screen with no session keeps that switcher (the footer is the switcher alone), so a paused task
 opened on a remembered Chat lens, which has no session to read and says so, can still reach its
-Resume panel and its diff. While the task reads as preparing and no quiet window
+Resume panel and its diff.
+
+**Chat on a paused task** (protocol 0.26.0). A `send-user-message` to a task's session with no
+running agent (paused, queued or exited) is HELD by the desktop for the task's next agent and
+answered `delivered: true`; nothing on the phone shows the hold. A queued session and an
+idle-timeout suspend keep the row's `session_id`, so their composer already sends. A desktop pause
+clears it, but the paused session stays in the desktop's registry for the rest of that desktop
+run, so a screen that was bound when its task paused keeps its Chat composer live on that session
+(`pausedComposerSessionId` in `sessionResolution.ts`, while the row reads `resumable` with no spawn
+label) instead of going inert and then switcher-only with the quiet window. Terminal and Changes
+are unchanged. That id feeds the composer only, never the screen's binding, the stream or the
+resume watch. A screen opened fresh on an already-paused task holds no id, so its footer stays the
+switcher alone until the board row names the paused session, a desktop protocol addition; and
+after a desktop restart the paused session is re-registered under a new id, so a send to the
+remembered one is refused and reads "Session ended", as any refused send does. While the task reads as preparing and no quiet window
 covers the pane, the session screen draws the same `SessionSwapVeil` in its waiting face (the
 desktop's launch overlay, the screen's "launch face", with no deadline and the footer down to the
 switcher): on a screen that never bound a session (opened from a sessionless Paused card, or onto a

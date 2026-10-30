@@ -175,6 +175,21 @@ describe('tapRouter - iOS push responses', () => {
     decryptPushBlobMock.mockResolvedValue(DECRYPTED);
   });
 
+  it('opens the task for a decrypted Notify me envelope, whose session id is empty (protocol 0.26.0)', async () => {
+    decryptPushBlobMock.mockResolvedValue({
+      title: 'Cap retries in the sync client',
+      body: 'Blocked',
+      category: 'input-required',
+      data: { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: '', authored: 'true' },
+    });
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+
+    await tapRouter.routeFromPushResponse(pushResponse({ blob: 'sealed-blob' }));
+
+    expect(published).toEqual([{ kind: 'open-task', taskId: 'task-1', projectId: 'project-1', sessionId: '' }]);
+  });
+
   it('decrypts the tapped blob and publishes the task open, with no lens, so the screen opens the remembered one', async () => {
     const { tapRouter, pendingNavigation } = await loadModules();
     const published = recordPublished(pendingNavigation);
@@ -698,6 +713,27 @@ describe('tapRouter - Android notifee presses', () => {
     expect(published).toEqual([
       { kind: 'open-task', taskId: 'task-9', projectId: 'project-9', sessionId: 'sess-9' },
     ]);
+  });
+
+  /**
+   * A Notify me push (protocol 0.26.0) names its task and an EMPTY session, as
+   * a workflow task's notice does: the tap opens the task, and the session
+   * screen resolves its session from the board (an empty param reads as none).
+   */
+  it('opens the task for a Notify me press, whose session id is empty', async () => {
+    const { tapRouter, pendingNavigation } = await loadModules();
+    const published = recordPublished(pendingNavigation);
+    tapRouter.registerNotificationTapHandlers();
+
+    const onForegroundEvent = notifeeMock.onForegroundEvent.mock.calls[0][0] as (event: unknown) => void;
+    onForegroundEvent({
+      type: 1,
+      detail: {
+        notification: { data: { category: 'input-required', taskId: 'task-9', projectId: 'project-9', sessionId: '', authored: 'true' } },
+      },
+    });
+
+    expect(published).toEqual([{ kind: 'open-task', taskId: 'task-9', projectId: 'project-9', sessionId: '' }]);
   });
 
   /**

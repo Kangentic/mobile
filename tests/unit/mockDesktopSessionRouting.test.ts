@@ -224,6 +224,29 @@ describe('send-user-message routing', () => {
     expect(window.revision).toBe(3);
   });
 
+  /**
+   * Protocol 0.26.0: a message to a task whose agent is paused is HELD for the
+   * task's next agent and answered delivered, as the desktop holds it, never
+   * refused as an unknown session. So the demo's paused-task composer sends.
+   */
+  it('holds a message sent to a session it paused, rather than refusing it', async () => {
+    await controller.verbs.readStreamSubscribe(MOCK_STREAMING_SESSION_ID, { terminal: false });
+    await controller.verbs.sendUserMessage(MOCK_STREAMING_SESSION_ID, '/pause');
+    await waitUntil(
+      () =>
+        eventsFor('activity', MOCK_STREAMING_SESSION_ID).some(
+          (event) => event.kind === 'activity' && event.payload.type === 'session-ended',
+        ),
+      { label: 'the paused session ends its feed', timeoutMs: 5000 },
+    );
+    const transcriptEventsBefore = eventsFor('transcript', MOCK_STREAMING_SESSION_ID).length;
+
+    await expect(controller.verbs.sendUserMessage(MOCK_STREAMING_SESSION_ID, 'Lower the cap to 3.')).resolves.toEqual({ delivered: true });
+
+    // Held, not delivered: the paused agent's transcript gains nothing.
+    expect(eventsFor('transcript', MOCK_STREAMING_SESSION_ID)).toHaveLength(transcriptEventsBefore);
+  });
+
   it('refuses a message to an unknown session with the typed unknown-session code', async () => {
     // Ordinary text, not a magic dev command: /stall-resume and /fail-resume
     // are accepted from ANY session before the lookup, so they would never

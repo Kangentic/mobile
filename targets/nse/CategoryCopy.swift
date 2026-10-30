@@ -34,10 +34,39 @@ enum CategoryCopy {
     }
   }
 
+  /// The title of an `input-required` wait whose kind the desktop reported
+  /// (protocol 0.26.0). A deliberate duplicate of `titleForWaitKind`, pinned by
+  /// the same parity test. Nil for a kind this build does not know, which keeps
+  /// the category's title, as the protocol's parser drops such a kind.
+  static func title(forWaitKind waitKind: String) -> String? {
+    switch waitKind {
+    case "question":
+      return "Agent has a question"
+    case "approval":
+      return "Agent needs your approval"
+    default:
+      return nil
+    }
+  }
+
   /// Mirrors `decryptPushBlob`'s body composition so a notification reads the
   /// same on both platforms.
   static func body(taskTitle: String, detail: String) -> String {
     let resolvedTitle = taskTitle.isEmpty ? "Agent session" : taskTitle
     return detail.isEmpty ? resolvedTitle : "\(resolvedTitle) - \(detail)"
+  }
+
+  /// What an alert shows, in `decryptPushBlob`'s precedence: a Notify me row's
+  /// own Title and Body when the envelope carries both (protocol 0.26.0), shown
+  /// as written; else the wait kind's title on an `input-required` that names
+  /// one, else the category's, over the composed body. Nil for a category this
+  /// build does not know, which leaves the placeholder untouched.
+  static func content(for envelope: PushEnvelopePlaintext) -> (title: String, body: String)? {
+    guard let categoryTitle = title(forCategory: envelope.category) else { return nil }
+    if let authoredTitle = envelope.title, let authoredBody = envelope.body {
+      return (authoredTitle, authoredBody)
+    }
+    let waitTitle = envelope.category == "input-required" ? envelope.waitKind.flatMap { title(forWaitKind: $0) } : nil
+    return (waitTitle ?? categoryTitle, body(taskTitle: envelope.taskTitle, detail: envelope.detail))
   }
 }

@@ -10,12 +10,35 @@ import {
   withTiming,
 } from 'react-native-reanimated';
 import Svg, { Circle } from 'react-native-svg';
+import type { ActivityReasonWire, ActivityStateWire } from '@kangentic/protocol';
 import { ACTIVITY_VIEW_BOX, activityMarks, type ActivityMark, type ActivityMarkName } from '@/brand/activityMarks.generated';
+import { agentWaitKind, waitMarkKind } from '@/lib/agentWait';
 import { SpinningMark, renderMarkSvg } from './activityMarkRendering';
 import { useScreenMotionActive } from './motion/ScreenMotion';
 import { useTheme } from './theme/ThemeProvider';
 
-export type AgentStatusKind = 'working' | 'idle-unread' | 'idle';
+/**
+ * `question` and `approval` are the two waits on the user (protocol 0.26.0);
+ * `idle` and `idle-unread` are a finished turn.
+ */
+export type AgentStatusKind = 'working' | 'question' | 'approval' | 'idle-unread' | 'idle';
+
+/**
+ * The kind a running agent session wears, as the desktop's `agentActivityMark`
+ * picks its mark: the working ring while it thinks; while it waits on the user,
+ * the bubble for a question or a wait of unknown kind and the crested shield for
+ * an approval (src/lib/agentWait.ts); otherwise the envelope of a finished
+ * turn. Every surface that draws an agent's own status asks this one function,
+ * so the board card, the Agents feed and the session header cannot draw the
+ * same wait two ways. The project picker's needs-you COUNT does not: it keeps
+ * one envelope for all three waits, as the desktop's sidebar count does.
+ */
+export function agentStatusKindFor(state: ActivityStateWire, reason: ActivityReasonWire | null, unread: boolean): AgentStatusKind {
+  if (state === 'thinking') return 'working';
+  const waitKind = agentWaitKind(state, reason);
+  if (waitKind !== null) return waitMarkKind(waitKind);
+  return unread ? 'idle-unread' : 'idle';
+}
 
 export interface AgentStatusIconProps {
   kind: AgentStatusKind;
@@ -43,17 +66,21 @@ const DOT_RADIUS_UNITS = 3;
 
 const MARK_BY_KIND: Record<AgentStatusKind, ActivityMarkName> = {
   working: 'agent-working',
+  question: 'agent-question',
+  approval: 'agent-approval',
   'idle-unread': 'agent-idle',
   idle: 'agent-idle',
 };
 
 /**
  * The testID a caller gets when it passes none. A `Record` like the mark map
- * above rather than a ternary chain, so a fifth kind fails the build here
+ * above rather than a ternary chain, so a new kind fails the build here
  * instead of silently falling through to the idle id.
  */
 const FALLBACK_TESTID_BY_KIND: Record<AgentStatusKind, string> = {
   working: 'agent-status-working',
+  question: 'agent-status-question',
+  approval: 'agent-status-approval',
   'idle-unread': 'agent-status-idle-unread',
   idle: 'agent-status-idle',
 };
@@ -115,13 +142,16 @@ function MarchingMark({
 
 /**
  * Desktop-parity session status, drawn from @kangentic/branding's activity
- * marks: a green ring that SPINS while the agent thinks, and the amber
- * envelope for an idle session (the turn ended, the user's move). All idle
- * sessions carry the SAME static envelope: they are equal priority, first come
- * first served ('idle-unread' is kept as a semantic kind for testing/telemetry
- * but renders identically). A session that is not running (queued, paused,
- * mid-respawn) draws no agent icon at all, as on the desktop: its card footer
- * and the session header say what it is instead.
+ * marks: a green ring that SPINS while the agent thinks, and in amber, the
+ * user's move, one of three static marks saying why: the speech bubble for a
+ * question (or a wait whose kind the agent does not report), the crested
+ * shield for a tool or plan to approve, and the envelope for a finished turn.
+ * The shape alone tells them apart; all three share the needs-you tone, the
+ * grid and the size (the shield's ink is a unit taller than its siblings on
+ * purpose, and is never scaled down to match). 'idle-unread' is kept as a
+ * semantic kind for testing/telemetry but renders as 'idle'. A session that is
+ * not running (queued, paused, mid-respawn) draws no agent icon at all, as on
+ * the desktop: its card footer and the session header say what it is instead.
  *
  * The geometry, the 1400ms period and the reduced-motion rendering all arrive
  * as generated data, so none of them can drift from the assets the desktop and
@@ -205,6 +235,6 @@ export function AgentStatusIcon({ kind, size = 16, testID, still = false }: Agen
     );
   }
 
-  // Idle envelope, reduced motion, a blurred screen, a legend: static, no animated hooks.
+  // A wait's mark, reduced motion, a blurred screen, a legend: static, no animated hooks.
   return renderMarkSvg({ mark, markName, size, color, testID: resolvedTestID, spinning: false, marching: false });
 }

@@ -4,6 +4,7 @@ import { registerBackgroundPushTask } from './backgroundPushTask';
 import { registerForegroundServiceRunner, stopOrphanedForegroundServiceAtBoot } from './foregroundService';
 import { registerNotificationTapHandlers } from './tapRouter';
 import { startNotificationReconciler } from './notificationReconciler';
+import { registerForegroundPresentation } from './foregroundPresentation';
 
 export { openSystemNotificationSettings, refreshNotificationPermission, requestNotificationPermission } from './channels';
 export {
@@ -83,6 +84,9 @@ export function initializeNotifications(): void {
   // entry, because an iOS background launch for a clear never mounts a screen
   // that could do it later.
   registerBackgroundPushTask();
+  // iOS: a Notify me push shows while the app is open; every other push stays
+  // hidden there, as before (foregroundPresentation.ts).
+  registerForegroundPresentation();
   if (Platform.OS !== 'android') return;
   registerForegroundServiceRunner();
   // Process start, so nothing can have declared a keepalive yet: any dataSync

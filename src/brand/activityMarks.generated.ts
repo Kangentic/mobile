@@ -21,7 +21,7 @@
  * attributes rather than passing SVG through.
  */
 
-export type ActivityMarkName = 'agent-idle' | 'agent-working' | 'terminal-idle' | 'terminal-new' | 'control-stop-idle' | 'control-stop-working';
+export type ActivityMarkName = 'agent-idle' | 'agent-working' | 'agent-question' | 'agent-approval' | 'terminal-idle' | 'terminal-new' | 'control-stop-idle' | 'control-stop-working';
 
 /** How a mark renders when the OS asks for reduced motion. */
 export type ActivityRestRendering = 'static' | 'keep-dash' | 'drop-dash';
@@ -107,6 +107,20 @@ export const activityMarks: Record<ActivityMarkName, ActivityMark> = {
     ],
     spin: { durationMs: 1400 },
     restRendering: 'keep-dash',
+    minPx: 12,
+  },
+  'agent-question': {
+    shapes: [
+      { kind: 'path', d: 'M5 3 H19 A2 2 0 0 1 21 5 V15 A2 2 0 0 1 19 17 H11 L8 21 V17 H5 A2 2 0 0 1 3 15 V5 A2 2 0 0 1 5 3 Z' },
+    ],
+    restRendering: 'static',
+    minPx: 12,
+  },
+  'agent-approval': {
+    shapes: [
+      { kind: 'path', d: 'M3 6 A1 1 0 0 1 4 5 A12.1667 12.1667 0 0 0 12 2 A12.1667 12.1667 0 0 0 20 5 A1 1 0 0 1 21 6 V11 A11.2222 11.2222 0 0 1 12 22 A11.2222 11.2222 0 0 1 3 11 Z' },
+    ],
+    restRendering: 'static',
     minPx: 12,
   },
   'terminal-idle': {

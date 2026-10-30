@@ -122,10 +122,16 @@ const BRANDMARK_SOURCES = [
 /**
  * The activity marks this app renders, and only those.
  *
- * The package ships nine. The Command Terminal surfaces (task #113) draw the
- * terminal silhouette (`terminal-idle`, and `terminal-new` on the Board's
- * Terminals button) and the desktop's stop control (`control-stop-*`, the open
- * terminal's Stop). Left out, each for a reason:
+ * The package ships eleven. An agent session wears the working ring or one of
+ * its three waits (2.12.0): the envelope for a finished turn, the speech
+ * bubble (`agent-question`) for a question or a wait of unknown kind, and the
+ * crested shield (`agent-approval`) for a tool or plan to approve. The shield's
+ * ink is 18 x 20, a unit taller than the 18 slot at the peak and the point, a
+ * recorded overshoot upstream; it draws on the same grid at the same size as
+ * its siblings, never scaled down to fit. The Command Terminal surfaces (task
+ * #113) draw the terminal silhouette (`terminal-idle`, and `terminal-new` on
+ * the Board's Terminals button) and the desktop's stop control
+ * (`control-stop-*`, the open terminal's Stop). Left out, each for a reason:
  *
  * - `terminal-working`: the same geometry as `terminal-idle` plus a `blink`,
  *   and the approved design draws a working terminal STATIC in the working
@@ -140,7 +146,16 @@ const BRANDMARK_SOURCES = [
  * consumer appears, unless it brings an element or a motion this script does
  * not know, which stops the run by design.
  */
-const ACTIVITY_MARKS = ['agent-idle', 'agent-working', 'terminal-idle', 'terminal-new', 'control-stop-idle', 'control-stop-working'];
+const ACTIVITY_MARKS = [
+  'agent-idle',
+  'agent-working',
+  'agent-question',
+  'agent-approval',
+  'terminal-idle',
+  'terminal-new',
+  'control-stop-idle',
+  'control-stop-working',
+];
 
 /**
  * The SVG elements the activity renderer knows how to draw as react-native-svg

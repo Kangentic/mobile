@@ -265,6 +265,66 @@ const cases = [
     blob: sealPushEnvelope(pushKey, identityPublicKey, { ...basePlaintext, clears: 'not-a-list' }),
     expected: { ...basePlaintext, clears: [] },
   },
+  // Protocol 0.26.0's optional fields. Each EXPECTED is what the protocol's own
+  // parser keeps (round-tripped below), and the harness also checks which title
+  // and body the extension presents for it.
+  {
+    name: 'question-wait-kind-titles-the-question',
+    blob: sealPushEnvelope(pushKey, identityPublicKey, { ...basePlaintext, waitKind: 'question' }),
+    expected: { ...basePlaintext, waitKind: 'question' },
+  },
+  {
+    name: 'approval-wait-kind-titles-the-approval',
+    blob: sealPushEnvelope(pushKey, identityPublicKey, { ...basePlaintext, waitKind: 'approval' }),
+    expected: { ...basePlaintext, waitKind: 'approval' },
+  },
+  {
+    // A kind a newer desktop adds is dropped, never a reason to lose the alert:
+    // it opens with the category's title.
+    name: 'unknown-wait-kind-is-dropped-and-still-opens',
+    blob: sealPushEnvelope(pushKey, identityPublicKey, { ...basePlaintext, waitKind: 'not-a-kind' }),
+    expected: basePlaintext,
+  },
+  {
+    // The kind titles only an input-required; any other category keeps its own.
+    name: 'wait-kind-on-another-category-keeps-the-category-title',
+    blob: sealPushEnvelope(pushKey, identityPublicKey, { ...basePlaintext, category: 'turn-complete', waitKind: 'question' }),
+    expected: { ...basePlaintext, category: 'turn-complete', waitKind: 'question' },
+  },
+  {
+    // A Notify me row: its own Title and Body, an empty session (a tap opens the
+    // task), and `detail` carrying the Body too for a phone that predates them.
+    name: 'notify-me-shows-its-own-title-and-body',
+    blob: sealPushEnvelope(pushKey, identityPublicKey, {
+      ...basePlaintext,
+      sessionId: '',
+      detail: 'Blocked',
+      title: 'Cap retries in the sync client',
+      body: 'Blocked',
+    }),
+    expected: { ...basePlaintext, sessionId: '', detail: 'Blocked', title: 'Cap retries in the sync client', body: 'Blocked' },
+  },
+  {
+    // A malformed Title is dropped on its own; with only a Body left the alert
+    // is titled and composed as any input-required.
+    name: 'notify-me-malformed-title-is-dropped-and-still-opens',
+    blob: sealPushEnvelope(pushKey, identityPublicKey, { ...basePlaintext, sessionId: '', detail: 'Blocked', title: 7, body: 'Blocked' }),
+    expected: { ...basePlaintext, sessionId: '', detail: 'Blocked', body: 'Blocked' },
+  },
+  {
+    // The other half of "set together": a Title with no Body is not authored
+    // either. The harness checks the alert takes its category's title over the
+    // composed body, so binding only the Title fails it.
+    name: 'notify-me-title-without-body-is-not-authored',
+    blob: sealPushEnvelope(pushKey, identityPublicKey, { ...basePlaintext, sessionId: '', detail: 'Blocked', title: 'Cap retries' }),
+    expected: { ...basePlaintext, sessionId: '', detail: 'Blocked', title: 'Cap retries' },
+  },
+  {
+    // A malformed Body is dropped on its own, leaving the same lone Title.
+    name: 'notify-me-malformed-body-is-dropped-and-still-opens',
+    blob: sealPushEnvelope(pushKey, identityPublicKey, { ...basePlaintext, sessionId: '', detail: 'Blocked', title: 'Cap retries', body: 7 }),
+    expected: { ...basePlaintext, sessionId: '', detail: 'Blocked', title: 'Cap retries' },
+  },
   {
     name: 'tampered-tag',
     blob: tamper(sealPushEnvelope(pushKey, identityPublicKey, basePlaintext)),
@@ -304,6 +364,11 @@ for (const testCase of cases) {
   }
   if (JSON.stringify(opened.clears ?? []) !== JSON.stringify(testCase.expected.clears ?? [])) {
     throw new Error(`Fixture "${testCase.name}" clears do not round-trip through openPushEnvelope.`);
+  }
+  for (const optionalField of ['waitKind', 'title', 'body']) {
+    if (opened[optionalField] !== testCase.expected[optionalField]) {
+      throw new Error(`Fixture "${testCase.name}" ${optionalField} does not round-trip through openPushEnvelope.`);
+    }
   }
 }
 

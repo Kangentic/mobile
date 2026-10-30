@@ -299,6 +299,14 @@ export function judgeNotification(notification: JudgedNotification, context: Sta
     case 'routed': {
       const routing = notification.routing;
       if (context.openSurfaces.some((surface) => notificationMatchesSurface(routing, surface))) return 'dismiss';
+      // A Notify me push (protocol 0.26.0) is the user's own request to be
+      // told, not a claim about the desktop's state, and the desktop never
+      // clears it: only opening its task does (the surface rule above). Every
+      // rule below would misread it. It names no session, so the session rules
+      // see an empty id that no board row holds and dismiss it on the first
+      // newer board, and a row fired by a move to Done would die on the
+      // Done/archived check the moment it arrived.
+      if (routing.authored) return 'keep';
       if (postedAt === null) return 'keep';
       // The cold-start floor: a project this phone has no board for is not
       // judged at all.

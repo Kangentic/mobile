@@ -264,7 +264,7 @@ describe('backgroundPushTask', () => {
     expect(notes).toEqual([
       {
         platformId: 'notification-id',
-        routing: { category: 'turn-complete', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null },
+        routing: { category: 'turn-complete', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null, authored: false },
         postedAt: Number(notification.data?.postedAt),
         promptIdAtPost: null,
       },
@@ -383,7 +383,7 @@ describe('backgroundPushTask', () => {
     expect(notes).toEqual([
       {
         platformId: 'rich-platform-id',
-        routing: { category: null, taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null },
+        routing: { category: null, taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null, authored: false },
         postedAt: Number(notification.data?.postedAt),
         promptIdAtPost: null,
       },
@@ -406,7 +406,7 @@ describe('backgroundPushTask', () => {
       title: 'Agent needs your input',
       body: 'Fix The Flaky Test',
       category: 'input-required',
-      data: { category: 'input-required', taskId: '', projectId: 'project-1', sessionId: 'terminal-sess-1', sessionKind: 'command-terminal' },
+      data: { category: 'input-required', taskId: '', projectId: 'project-1', sessionId: 'terminal-sess-1', sessionKind: 'command-terminal', authored: false },
       ...NO_PIGGYBACKED_CLEARS,
     });
     const { registerBackgroundPushTask } = await loadModule();
@@ -429,7 +429,7 @@ describe('backgroundPushTask', () => {
     expect(notes).toEqual([
       {
         platformId: 'notification-id',
-        routing: { category: 'input-required', taskId: '', projectId: 'project-1', sessionId: 'terminal-sess-1', sessionKind: 'command-terminal' },
+        routing: { category: 'input-required', taskId: '', projectId: 'project-1', sessionId: 'terminal-sess-1', sessionKind: 'command-terminal', authored: false },
         postedAt: Number(notification.data?.postedAt),
         promptIdAtPost: null,
       },
@@ -660,6 +660,53 @@ describe('backgroundPushTask', () => {
     });
 
     expect(taskManagerState.displayNotification).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A Notify me push (protocol 0.26.0) is the one exception: the user asked to
+   * be told, the desktop sends it to a connected phone on purpose, and nothing
+   * in the app shows it instead. An ordinary decrypted alert in the same state
+   * stays suppressed, so the exemption is the flag and nothing wider.
+   */
+  it('displays a Notify me push while the app is foregrounded and connected, and nothing else', async () => {
+    appStateMock.currentState = 'active';
+    await setChannelState({ established: true, transportState: 'connected' });
+    decryptPushBlobMock.mockResolvedValueOnce({
+      title: 'Cap retries in the sync client',
+      body: 'Blocked',
+      category: 'input-required',
+      data: { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: '', authored: 'true' },
+      ...NO_PIGGYBACKED_CLEARS,
+      authored: true,
+    });
+    decryptPushBlobMock.mockResolvedValueOnce({
+      title: 'Agent needs your input',
+      body: 'Ship the release',
+      category: 'input-required',
+      data: { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' },
+      ...NO_PIGGYBACKED_CLEARS,
+      authored: false,
+    });
+    const { registerBackgroundPushTask } = await loadModule();
+    registerBackgroundPushTask();
+    const executor = taskManagerState.defineTask.mock.calls[0][1] as TaskExecutor;
+
+    await executor({
+      data: { notification: null, data: { blob: 'a-notify-me-envelope' } },
+      error: null,
+      executionInfo: { taskName: 'kangentic-background-push' },
+    });
+    await executor({
+      data: { notification: null, data: { blob: 'an-ordinary-envelope' } },
+      error: null,
+      executionInfo: { taskName: 'kangentic-background-push' },
+    });
+
+    expect(taskManagerState.displayNotification).toHaveBeenCalledTimes(1);
+    const notification = taskManagerState.displayNotification.mock.calls[0][0] as { id?: string; title: string; body: string };
+    expect(notification.title).toBe('Cap retries in the sync client');
+    expect(notification.body).toBe('Blocked');
+    expect(notification.id).toBe('kangentic:input-required:task:task-1');
   });
 
   /**
