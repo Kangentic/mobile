@@ -133,7 +133,7 @@ describe('CommandTerminalsScreen', () => {
       expect(screen.getByTestId('command-terminal-row-terminal-1-activity')).toHaveTextContent('Running Bash');
     });
 
-    it('reads "Awaiting permission" for a terminal that is asking', async () => {
+    it('reads "Waiting on you" for a terminal that is asking without a wait kind', async () => {
       observeTerminal('terminal-1');
       await renderSheet();
 
@@ -146,7 +146,7 @@ describe('CommandTerminalsScreen', () => {
         });
       });
 
-      expect(screen.getByTestId('command-terminal-row-terminal-1-activity')).toHaveTextContent('Awaiting permission');
+      expect(screen.getByTestId('command-terminal-row-terminal-1-activity')).toHaveTextContent('Waiting on you');
     });
 
     it('draws a start in flight as a disabled row with no Stop, taking its predicted slot', async () => {

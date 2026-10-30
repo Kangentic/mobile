@@ -31,8 +31,8 @@ const NO_TRACK: readonly never[] = [];
  *   amber needs you) and has no #number.
  *
  * Its body is the agent's last line when the desktop pushes one, else the
- * desktop's words for what it is doing ("Running Bash", "Awaiting
- * permission"), without a duration, which the band already shows. No branch
+ * desktop's words for what it is doing ("Running Bash", "Asking you a
+ * question"), without a duration, which the band already shows. No branch
  * anywhere (decision E1).
  *
  * Tap opens the terminal; long-press opens its two actions (design change 19).
