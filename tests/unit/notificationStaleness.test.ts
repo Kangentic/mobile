@@ -87,7 +87,7 @@ function context(overrides: Partial<StalenessContext> = {}): StalenessContext {
 }
 
 function routing(category: PushCategory | null, overrides: Partial<NotificationRouting> = {}): NotificationRouting {
-  return { category, taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null, ...overrides };
+  return { category, taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null, authored: false, ...overrides };
 }
 
 function routed(
@@ -829,5 +829,53 @@ describe('observeAtFirstSight', () => {
    */
   it('records nothing for an alert whose posting time is unknown', () => {
     expect(observeAtFirstSight(routed('input-required', { postedAt: null }), context())).toEqual({ swimlaneId: null, promptId: null });
+  });
+});
+
+/**
+ * A Notify me push (protocol 0.26.0): `input-required` with an EMPTY session,
+ * the user's own Title and Body, and the authored flag. The desktop never
+ * clears it, so only opening its task does. Before the flag, the session rules
+ * compared the board row's session to the alert's empty one and dismissed it on
+ * the first newer board, and the Done check wiped a row fired by a move to Done.
+ */
+describe('a Notify me push', () => {
+  const notifyMe = (): Extract<JudgedNotification, { kind: 'routed' }> =>
+    routed('input-required', {}, { sessionId: '', authored: true });
+
+  it.each<[string, StalenessContext]>([
+    ['a newer board that names a live session for the task', context()],
+    [
+      'a newer board whose row has no session',
+      context({ boardsByProjectId: { 'project-1': board({ tasksById: { 'task-1': boardTaskFixture({ id: 'task-1', swimlane_id: 'lane-doing', session_id: null }) } }) } }),
+    ],
+    [
+      'the task moving to Done',
+      context({ boardsByProjectId: { 'project-1': board({ tasksById: { 'task-1': boardTaskFixture({ id: 'task-1', swimlane_id: 'lane-done', session_id: null }) } }) } }),
+    ],
+    [
+      'the task archived',
+      context({
+        boardsByProjectId: {
+          'project-1': board({ tasksById: { 'task-1': boardTaskFixture({ id: 'task-1', swimlane_id: 'lane-doing', archived_at: '2026-10-30T00:00:00Z' }) } }),
+        },
+      }),
+    ],
+    ['the task gone from a full board', context({ boardsByProjectId: { 'project-1': board({ view: 'full', tasksById: {} }) } })],
+  ])('is kept through %s', (_label, staleLooking) => {
+    expect(judgeNotification(notifyMe(), staleLooking)).toBe('keep');
+  });
+
+  it('clears when its task is opened', () => {
+    expect(judgeNotification(notifyMe(), context({ openSurfaces: [{ kind: 'task', taskId: 'task-1' }] }))).toBe('dismiss');
+    expect(judgeNotification(notifyMe(), context({ openSurfaces: [{ kind: 'task', taskId: 'task-2' }] }))).toBe('keep');
+  });
+
+  /**
+   * A workflow task's notice has the same shape but no Title and Body, and the
+   * desktop clears it itself; its verdicts are left exactly as they were.
+   */
+  it('leaves a workflow task notice (same shape, not authored) on the existing rules', () => {
+    expect(judgeNotification(routed('input-required', {}, { sessionId: '' }), context())).toBe('dismiss');
   });
 });

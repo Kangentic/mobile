@@ -175,6 +175,33 @@ describe('startLocalNotifier', () => {
     expect(displayNotification).not.toHaveBeenCalled();
   });
 
+  /**
+   * Protocol 0.26.0: the wait's kind titles the local alert as the desktop's
+   * push titles it, so a local and a remote alert for one wait agree. The
+   * desktop sends the activity event carrying the reason BEFORE the prompt
+   * event (read-stream.ts), which is the order driven here.
+   */
+  it.each([
+    ['question', 'Agent has a question'],
+    ['approval', 'Agent needs your approval'],
+  ] as const)('titles the %s wait by its kind', (waitKind, expectedTitle) => {
+    seedSession();
+    stopNotifier = startLocalNotifier();
+    appStateMock.emit('background');
+
+    useActivityStore.getState().applyActivityEvent({
+      kind: 'activity',
+      sessionId: 'sess-1',
+      taskId: 'task-1',
+      payload: { type: 'activity', state: 'permission', reason: { kind: 'permission', since: nowMs, waitKind } },
+    });
+    useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-1'));
+
+    expect(displayNotification).toHaveBeenCalledTimes(1);
+    expect(displayNotification.mock.calls[0][0].title).toBe(expectedTitle);
+    expect(displayNotification.mock.calls[0][0].body).toBe('Ship the release');
+  });
+
   it('fires on a background transition into permission, on the needs-attention channel with the task title', () => {
     seedSession();
     stopNotifier = startLocalNotifier();
@@ -675,6 +702,7 @@ describe('startLocalNotifier', () => {
       projectId: 'project-1',
       sessionId: 'sess-1',
       sessionKind: null,
+      authored: false,
     });
 
     nowMs += 5_000;
@@ -699,7 +727,7 @@ describe('startLocalNotifier', () => {
     expect(notes).toEqual([
       {
         platformId: 'notification-id',
-        routing: { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null },
+        routing: { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null, authored: false },
         postedAt: nowMs,
         promptIdAtPost: 'prompt-1',
       },
@@ -778,7 +806,7 @@ describe('startLocalNotifier', () => {
     expect(notes).toEqual([
       {
         platformId: 'notification-id',
-        routing: { category: 'turn-complete', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null },
+        routing: { category: 'turn-complete', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null, authored: false },
         postedAt: nowMs,
         promptIdAtPost: null,
       },
@@ -808,7 +836,7 @@ describe('startLocalNotifier', () => {
 
     useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-1'));
     expect(displayNotification).toHaveBeenCalledTimes(1);
-    publishNotificationDismissed({ category: null, taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null });
+    publishNotificationDismissed({ category: null, taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null, authored: false });
 
     nowMs += 5_000;
     useActivityStore.getState().applyActivityEvent(permissionEvent('prompt-1', false));
@@ -864,6 +892,7 @@ describe('startLocalNotifier', () => {
           projectId: 'project-1',
           sessionId: 'sess-1',
           sessionKind: null,
+          authored: false,
         }),
       ).not.toThrow();
 

@@ -12,8 +12,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { PUSH_CATEGORIES, PUSH_ENVELOPE_MAX_AGE_MS, PUSH_ENVELOPE_MAX_FUTURE_SKEW_MS } from '@kangentic/protocol';
-import { titleForCategory } from '@/notifications/categoryCopy';
+import { PERMISSION_WAIT_KINDS, PUSH_CATEGORIES, PUSH_ENVELOPE_MAX_AGE_MS, PUSH_ENVELOPE_MAX_FUTURE_SKEW_MS } from '@kangentic/protocol';
+import { titleForCategory, titleForWaitKind } from '@/notifications/categoryCopy';
 
 const targetsDir = join(__dirname, '..', '..', 'targets', 'nse');
 const categoryCopySwift = readFileSync(join(targetsDir, 'CategoryCopy.swift'), 'utf8');
@@ -30,16 +30,39 @@ const pushDecryptTypeScript = readFileSync(
   'utf8',
 );
 
-/** Pulls `case "<category>": return "<title>"` pairs out of the Swift switch. */
-function swiftCategoryTitles(): Map<string, string> {
+/**
+ * The body of one `static func <signature>` in CategoryCopy.swift, from its
+ * opening line to the next `static func`. Scoped per function because the file
+ * holds two switches of the same `case "x": return "y"` shape (categories and,
+ * since protocol 0.26.0, wait kinds), and a file-wide scan would read each
+ * one's keys as the other's.
+ */
+function swiftFunctionBody(signaturePrefix: string): string {
+  const start = categoryCopySwift.indexOf(`static func ${signaturePrefix}`);
+  if (start === -1) throw new Error(`CategoryCopy.swift has no "static func ${signaturePrefix}"; cannot check parity`);
+  const next = categoryCopySwift.indexOf('static func ', start + 1);
+  return categoryCopySwift.slice(start, next === -1 ? undefined : next);
+}
+
+/** Pulls `case "<key>": return "<title>"` pairs out of one Swift switch. */
+function swiftSwitchTitles(signaturePrefix: string): Map<string, string> {
+  const source = swiftFunctionBody(signaturePrefix);
   const titles = new Map<string, string>();
   const pattern = /case "([a-z-]+)":\s*return "([^"]+)"/g;
-  let match = pattern.exec(categoryCopySwift);
+  let match = pattern.exec(source);
   while (match !== null) {
     titles.set(match[1], match[2]);
-    match = pattern.exec(categoryCopySwift);
+    match = pattern.exec(source);
   }
   return titles;
+}
+
+function swiftCategoryTitles(): Map<string, string> {
+  return swiftSwitchTitles('title(forCategory');
+}
+
+function swiftWaitKindTitles(): Map<string, string> {
+  return swiftSwitchTitles('title(forWaitKind');
 }
 
 describe('NSE category copy parity', () => {
@@ -55,6 +78,26 @@ describe('NSE category copy parity', () => {
     for (const category of PUSH_CATEGORIES) {
       expect(titles.get(category)).toBe(titleForCategory(category));
     }
+  });
+
+  it('titles every wait kind the protocol defines exactly as titleForWaitKind does (protocol 0.26.0)', () => {
+    // A kind missing here would title an iPhone's push "Agent needs your
+    // input" while the Android one names the question or the approval.
+    const titles = swiftWaitKindTitles();
+    expect([...titles.keys()].sort()).toEqual([...PERMISSION_WAIT_KINDS].sort());
+    for (const waitKind of PERMISSION_WAIT_KINDS) {
+      expect(titles.get(waitKind)).toBe(titleForWaitKind(waitKind));
+    }
+  });
+
+  it('applies the same precedence as decryptPushBlob: an authored Title and Body, then the wait kind, then the category', () => {
+    // BOTH sides, as the body check below: the Swift literals alone would pass
+    // after the TypeScript changed its order.
+    const content = swiftFunctionBody('content(for');
+    expect(content).toContain('if let authoredTitle = envelope.title, let authoredBody = envelope.body');
+    expect(content).toContain('envelope.category == "input-required" ? envelope.waitKind');
+    expect(pushDecryptTypeScript).toContain('plaintext.title !== undefined && plaintext.body !== undefined');
+    expect(pushDecryptTypeScript).toContain('titleForAlert(plaintext.category, plaintext.waitKind)');
   });
 
   it('composes the body the same way decryptPushBlob does', () => {

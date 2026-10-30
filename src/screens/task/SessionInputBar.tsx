@@ -68,7 +68,10 @@ export interface SessionInputBarProps {
  * in the swap window's waiting phase: there is nothing to type into, but the
  * task's diff and its Resume panel are a lens away, and a screen that opened
  * on a remembered Chat lens (which reads "No active session" there) has no
- * other way back to them.
+ * other way back to them. A screen that was bound when its task paused still
+ * holds the paused session, and its Chat composer stays live on it (protocol
+ * 0.26.0 holds the message for the task's next agent; SessionScreen's
+ * pausedComposerLive).
  */
 export function SessionInputBar({
   sessionId,

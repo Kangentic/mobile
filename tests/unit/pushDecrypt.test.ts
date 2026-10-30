@@ -90,6 +90,125 @@ describe('decryptPushBlob', () => {
     });
     expect(decrypted?.sentAt).toBe(plaintext.sentAt);
     expect(decrypted?.clears).toEqual([]);
+    expect(decrypted?.authored).toBe(false);
+  });
+
+  /**
+   * Protocol 0.26.0: the wait's kind titles an input-required push, as the
+   * desktop's own notification does. The body stays the task title and detail.
+   */
+  it.each([
+    ['question', 'Agent has a question'],
+    ['approval', 'Agent needs your approval'],
+  ] as const)('titles an input-required %s by its kind over the same body', async (waitKind, expectedTitle) => {
+    const pushKey = randomBytes(32);
+    const identity = generateX25519KeyPair();
+    secureStoreState.storedValues.set('push.decrypt.key', bytesToHex(pushKey));
+    const { pushDecrypt, pushIdentity } = await loadModules();
+    pushIdentity.setActivePushIdentityPublicKey(identity.publicKey);
+
+    const decrypted = await pushDecrypt.decryptPushBlob(sealPushEnvelope(pushKey, identity.publicKey, plaintextFixture({ waitKind })));
+
+    expect(decrypted?.title).toBe(expectedTitle);
+    expect(decrypted?.body).toBe('Fix the flaky test - Bash: npm run test');
+    expect(decrypted?.authored).toBe(false);
+  });
+
+  it('keeps the category title for a wait kind this build does not know, or one on another category', async () => {
+    const pushKey = randomBytes(32);
+    const identity = generateX25519KeyPair();
+    secureStoreState.storedValues.set('push.decrypt.key', bytesToHex(pushKey));
+    const { pushDecrypt, pushIdentity } = await loadModules();
+    pushIdentity.setActivePushIdentityPublicKey(identity.publicKey);
+
+    const newerKind = { ...plaintextFixture(), waitKind: 'plan' } as unknown as PushEnvelopePlaintext;
+    expect((await pushDecrypt.decryptPushBlob(sealPushEnvelope(pushKey, identity.publicKey, newerKind)))?.title).toBe('Agent needs your input');
+    const otherCategory = plaintextFixture({ category: 'turn-complete', waitKind: 'question' });
+    expect((await pushDecrypt.decryptPushBlob(sealPushEnvelope(pushKey, identity.publicKey, otherCategory)))?.title).toBe('Agent went idle');
+  });
+
+  /**
+   * A Notify me automation row (protocol 0.26.0): its own Title over its own
+   * Body, an empty session so a tap opens the task, and the authored flag that
+   * keeps the reconciler and the foreground gates off it.
+   */
+  it('shows a Notify me push as its own Title over its own Body, and marks it authored', async () => {
+    const pushKey = randomBytes(32);
+    const identity = generateX25519KeyPair();
+    secureStoreState.storedValues.set('push.decrypt.key', bytesToHex(pushKey));
+    const { pushDecrypt, pushIdentity } = await loadModules();
+    pushIdentity.setActivePushIdentityPublicKey(identity.publicKey);
+
+    const plaintext = plaintextFixture({ sessionId: '', detail: 'Blocked', title: 'Cap retries in the sync client', body: 'Blocked' });
+    const decrypted = await pushDecrypt.decryptPushBlob(sealPushEnvelope(pushKey, identity.publicKey, plaintext));
+
+    expect(decrypted?.title).toBe('Cap retries in the sync client');
+    expect(decrypted?.body).toBe('Blocked');
+    expect(decrypted?.authored).toBe(true);
+    expect(decrypted?.data).toStrictEqual({
+      category: 'input-required',
+      taskId: 'task-1',
+      projectId: 'project-1',
+      sessionId: '',
+      authored: 'true',
+      sentAt: String(plaintext.sentAt),
+    });
+  });
+
+  it('reads a Body with no Title as an ordinary input-required push, not an authored one', async () => {
+    const pushKey = randomBytes(32);
+    const identity = generateX25519KeyPair();
+    secureStoreState.storedValues.set('push.decrypt.key', bytesToHex(pushKey));
+    const { pushDecrypt, pushIdentity } = await loadModules();
+    pushIdentity.setActivePushIdentityPublicKey(identity.publicKey);
+
+    const malformedTitle = { ...plaintextFixture({ sessionId: '', detail: 'Blocked', body: 'Blocked' }), title: 7 } as unknown as PushEnvelopePlaintext;
+    const decrypted = await pushDecrypt.decryptPushBlob(sealPushEnvelope(pushKey, identity.publicKey, malformedTitle));
+
+    expect(decrypted?.title).toBe('Agent needs your input');
+    expect(decrypted?.body).toBe('Fix the flaky test - Blocked');
+    expect(decrypted?.authored).toBe(false);
+    expect(decrypted?.data).not.toHaveProperty('authored');
+  });
+
+  /**
+   * The other half of "set together" (protocol 0.26.0): a Title with no usable
+   * Body is not a Notify me push either. The protocol's parser keeps each field
+   * only when it is a string, independently, so an absent Body and a malformed
+   * one both leave a lone Title, and showing it would pair a written Title with
+   * the composed body of a different alert. The whole alert reads as an ordinary
+   * input-required instead.
+   *
+   * Mutation that reddens both rows (the existing Body-with-no-Title test stays
+   * green under it): bind only the Title in `notifyMeText`, i.e. drop
+   * `&& plaintext.body !== undefined` from its condition. Seen red on `title`
+   * ('Cap retries' for 'Agent needs your input'), `authored` and the `authored` data key.
+   */
+  it.each([
+    ['no Body at all', plaintextFixture({ sessionId: '', detail: 'Blocked', title: 'Cap retries' })],
+    [
+      'a Body that is not a string',
+      { ...plaintextFixture({ sessionId: '', detail: 'Blocked', title: 'Cap retries' }), body: 7 } as unknown as PushEnvelopePlaintext,
+    ],
+  ])('reads a Title with %s as an ordinary input-required push, not an authored one', async (_label, plaintext) => {
+    const pushKey = randomBytes(32);
+    const identity = generateX25519KeyPair();
+    secureStoreState.storedValues.set('push.decrypt.key', bytesToHex(pushKey));
+    const { pushDecrypt, pushIdentity } = await loadModules();
+    pushIdentity.setActivePushIdentityPublicKey(identity.publicKey);
+
+    const decrypted = await pushDecrypt.decryptPushBlob(sealPushEnvelope(pushKey, identity.publicKey, plaintext));
+
+    expect(decrypted?.title).toBe('Agent needs your input');
+    expect(decrypted?.body).toBe('Fix the flaky test - Blocked');
+    expect(decrypted?.authored).toBe(false);
+    expect(decrypted?.data).toStrictEqual({
+      category: 'input-required',
+      taskId: 'task-1',
+      projectId: 'project-1',
+      sessionId: '',
+      sentAt: String(plaintext.sentAt),
+    });
   });
 
   it('maps every category to its human title', async () => {

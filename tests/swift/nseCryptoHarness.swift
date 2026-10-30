@@ -178,6 +178,36 @@ struct NseCryptoHarness {
         "case \"\(name)\": no title for category \(opened.category)"
       )
 
+      // Protocol 0.26.0's optional fields, against the protocol's own parse: an
+      // unknown wait kind or a non-string title is dropped, never the alert.
+      check(opened.waitKind == expected["waitKind"] as? String, "case \"\(name)\": waitKind mismatch")
+      check(opened.title == expected["title"] as? String, "case \"\(name)\": title mismatch")
+      check(opened.body == expected["body"] as? String, "case \"\(name)\": body mismatch")
+
+      // What the alert presents, in decryptPushBlob's precedence. The title
+      // TEXT is pinned against the TypeScript by nseConstantsParity.test.ts; this
+      // pins which source wins.
+      if let content = CategoryCopy.content(for: opened) {
+        if let authoredTitle = opened.title, let authoredBody = opened.body {
+          check(
+            content.title == authoredTitle && content.body == authoredBody,
+            "case \"\(name)\": a Notify me push should show its own Title and Body"
+          )
+        } else if opened.category == "input-required", let waitKind = opened.waitKind {
+          check(
+            content.title == CategoryCopy.title(forWaitKind: waitKind) && content.body == body,
+            "case \"\(name)\": an input-required with a wait kind should take the kind's title over the composed body"
+          )
+        } else {
+          check(
+            content.title == CategoryCopy.title(forCategory: opened.category) && content.body == body,
+            "case \"\(name)\": the alert should take its category's title over the composed body"
+          )
+        }
+      } else {
+        failures.append("case \"\(name)\": no content for category \(opened.category)")
+      }
+
       // The piggybacked clears, against the protocol package's own tolerant
       // parse. A case that sealed none must parse none.
       let expectedClears = (expected["clears"] as? [[String: Any]]) ?? []

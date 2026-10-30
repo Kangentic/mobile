@@ -1,4 +1,4 @@
-import type { PushCategory } from '@kangentic/protocol';
+import type { PermissionWaitKindWire, PushCategory } from '@kangentic/protocol';
 
 /**
  * Pure category -> channel-id / title mapping, deliberately split out of
@@ -65,4 +65,30 @@ export function titleForCategory(category: PushCategory): string {
     case 'workflow-complete':
       return 'Workflow complete';
   }
+}
+
+/**
+ * The title of an `input-required` wait whose kind the desktop reported
+ * (protocol 0.26.0). One phrase per kind, as the desktop's own notification
+ * titles them; a wait with no kind keeps the category's "Agent needs your
+ * input". targets/nse/CategoryCopy.swift duplicates this, pinned by
+ * nseConstantsParity.test.ts.
+ */
+export function titleForWaitKind(waitKind: PermissionWaitKindWire): string {
+  switch (waitKind) {
+    case 'question':
+      return 'Agent has a question';
+    case 'approval':
+      return 'Agent needs your approval';
+  }
+}
+
+/**
+ * The title for one alert: the wait kind's on an `input-required` that carries
+ * one, the category's otherwise. Shared by the decrypt path and the local
+ * notifier, so a remote push and a local alert for the same wait agree.
+ */
+export function titleForAlert(category: PushCategory, waitKind: PermissionWaitKindWire | null | undefined): string {
+  if (category === 'input-required' && waitKind !== null && waitKind !== undefined) return titleForWaitKind(waitKind);
+  return titleForCategory(category);
 }

@@ -259,8 +259,11 @@ export function registerBackgroundPushTask(): void {
     } catch {
       // Never costs the notification it rode on.
     }
-    // Nothing fires over the top of a live session the user is watching.
-    if (watchingAlready()) return;
+    // Nothing fires over the top of a live session the user is watching, except
+    // a Notify me push (protocol 0.26.0): the user asked to be told, the
+    // desktop sends it to a connected phone on purpose, and nothing in the app
+    // shows it instead.
+    if (watchingAlready() && decrypted?.authored !== true) return;
     // The channels displayed into are created by initializeNotifications(),
     // but as an UNAWAITED `void` call (index.ts) issued immediately after
     // this task is registered - so on a cold headless launch the display

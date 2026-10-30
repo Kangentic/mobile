@@ -1,7 +1,8 @@
 import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { CirclePlay, Clock, LoaderCircle } from 'lucide-react-native';
-import type { BoardTaskWire } from '@kangentic/protocol';
+import type { ActivityReasonWire, BoardTaskWire } from '@kangentic/protocol';
+import { activityMarks, type ActivityMarkName } from '@/brand/activityMarks.generated';
 import { ThemeProvider, darkTerminalTheme } from '@/components';
 import { TaskHeader } from '@/screens/task/TaskHeader';
 import { useActivityStore } from '@/state/activityStore';
@@ -179,6 +180,47 @@ describe('TaskHeader status glyph', () => {
     if (color === darkTerminalTheme.colors.statusNeedsYou) return 'idle';
     return `unknown:${String(color)}`;
   };
+
+  /**
+   * Which MARK rendered, read off the path data under the status icon. The tone
+   * above cannot tell the three amber marks apart (the bubble, the shield and
+   * the envelope share it by design), and the icon's per-kind fallback testIDs
+   * are overridden by this header's own, so the drawn shape is what differs.
+   * react-native-svg is unmocked here, and its path host carries `d`.
+   */
+  const renderedStatusPaths = (): string[] =>
+    screen
+      .getByTestId('task-header-status')
+      .queryAll((node) => typeof node.props.d === 'string')
+      .map((node) => String(node.props.d));
+  const markPaths = (markName: ActivityMarkName): string[] =>
+    activityMarks[markName].shapes.flatMap((shape) => (shape.kind === 'path' ? [shape.d] : []));
+
+  /**
+   * The header draws a running session's wait the way the desktop's task view
+   * does (protocol 0.26.0): the bubble for a question or a wait of no kind, the
+   * crested shield for an approval, and the envelope once the turn is done.
+   * The session is `running`, so the icon draws at all (a queued or paused one
+   * draws none), and the board row names no session so nothing but the activity
+   * entry speaks.
+   */
+  it.each<{ label: string; state: 'permission' | 'idle'; reason: ActivityReasonWire | null; mark: ActivityMarkName }>([
+    { label: 'an approval wait', state: 'permission', reason: { kind: 'permission', waitKind: 'approval' }, mark: 'agent-approval' },
+    { label: 'a question wait', state: 'permission', reason: { kind: 'permission', waitKind: 'question' }, mark: 'agent-question' },
+    { label: 'a wait of no reported kind', state: 'permission', reason: { kind: 'permission' }, mark: 'agent-question' },
+    { label: 'a settled turn', state: 'idle', reason: { kind: 'idle' }, mark: 'agent-idle' },
+  ])('draws the $mark mark for $label', async ({ state, reason, mark }) => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore
+      .getState()
+      .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ activity: { state, reason }, sessionStatus: 'running' }));
+
+    await renderTaskHeader({ sessionId: 'sess-1' });
+
+    // Amber for all three: only the shape says which wait it is.
+    expect(renderedStatusTone()).toBe('idle');
+    expect(renderedStatusPaths()).toEqual(markPaths(mark));
+  });
 
   it('shows the desktop\'s still clock for a queued session, and no agent icon', async () => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');

@@ -5,10 +5,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CirclePlay, Clock, GitCompareArrows } from 'lucide-react-native';
 import { useShallow } from 'zustand/react/shallow';
 import type { BoardColumnWire } from '@kangentic/protocol';
-import { AgentStatusIcon, ConnectionBanner, IconButton, MonoText, Row, StatusSpinner, Text, useTheme } from '@/components';
+import { AgentStatusIcon, agentStatusKindFor, ConnectionBanner, IconButton, MonoText, Row, StatusSpinner, Text, useTheme } from '@/components';
 import { cardSessionDisplay, toCardSession, toCardTaskRow } from '@/components/board/cardSessionDisplay';
 import { getColumnIcon } from '@/components/board/columnIcons';
-import { sectionForEntry, selectTaskRespawn, useActivityStore } from '@/state/activityStore';
+import { selectTaskRespawn, useActivityStore } from '@/state/activityStore';
 import { findTaskById, selectTaskColumn, selectTaskRow, useBoardStore } from '@/state/boardStore';
 import { resumeTaskSession } from '@/connection/actions';
 import { useResumeOffer } from './useResumeOffer';
@@ -91,7 +91,8 @@ export function TaskHeader({ taskTitle, sessionId, displayId = null, taskId = nu
         <IconButton iconName="chevron-back" onPress={() => router.back()} testID="task-back-button" accessibilityLabel="Back" />
         {/* The desktop task view header's glyph for each state
             (TaskDetailHeader.tsx): the agent's own icon while it runs (green
-            spinner working, yellow mail otherwise), a still clock while
+            spinner working; in amber the bubble for a question, the shield
+            for an approval, the envelope for a finished turn), a still clock while
             queued, the spinner while a respawn is in flight, the Resume
             control for a paused session the desktop offers Resume for, and
             nothing once the session has ended. A paused session WITHOUT the
@@ -109,7 +110,7 @@ export function TaskHeader({ taskTitle, sessionId, displayId = null, taskId = nu
         ) : sessionDisplay.kind === 'preparing' ? (
           <StatusSpinner size={STATUS_GLYPH_SIZE} color={theme.colors.textMuted} testID="task-header-status-preparing" />
         ) : activityEntry !== null && sessionDisplay.kind === 'running' ? (
-          <AgentStatusIcon kind={sectionForEntry(activityEntry) === 'working' ? 'working' : 'idle'} testID="task-header-status" />
+          <AgentStatusIcon kind={agentStatusKindFor(activityEntry.state, activityEntry.reason, false)} testID="task-header-status" />
         ) : null}
         <Text variant="bodyStrong" numberOfLines={1} style={styles.title}>
           {taskTitle}

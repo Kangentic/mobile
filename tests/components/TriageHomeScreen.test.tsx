@@ -1,6 +1,7 @@
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
-import type { BoardTaskWire } from '@kangentic/protocol';
+import type { ActivityReasonWire, BoardTaskWire } from '@kangentic/protocol';
+import { activityMarks, type ActivityMarkName } from '@/brand/activityMarks.generated';
 import { NOW_TICK_MS, ThemeProvider, darkTerminalTheme } from '@/components';
 import { SNIPPET_WARM_CONCURRENCY, TriageHomeScreen } from '@/screens/TriageHomeScreen';
 import { useActivityStore } from '@/state/activityStore';
@@ -288,6 +289,41 @@ describe('TriageHomeScreen', () => {
       pathname: '/task/[taskId]',
       params: { taskId: 'task-1', sessionId: 'sess-1', projectId: 'project-1', mode: 'chat' },
     });
+  });
+
+  /**
+   * A running session that needs the user wears the mark that says why
+   * (protocol 0.26.0, as the desktop card does): the bubble for a question or
+   * a wait of no reported kind, the crested shield for an approval, and the
+   * envelope once the turn is done. All three are the same amber at the same
+   * size, so the SHAPE is the assertion: the path data under the row's status
+   * icon (react-native-svg is unmocked here and its path host carries `d`).
+   * The settled turn is the control that the feed still draws the envelope.
+   * The snapshot is `running` so the icon draws at all, and carries no awaited
+   * prompt so the row peeks no prompt card.
+   */
+  it.each<{ label: string; state: 'permission' | 'idle'; reason: ActivityReasonWire | null; mark: ActivityMarkName }>([
+    { label: 'an approval wait', state: 'permission', reason: { kind: 'permission', waitKind: 'approval' }, mark: 'agent-approval' },
+    { label: 'a question wait', state: 'permission', reason: { kind: 'permission', waitKind: 'question' }, mark: 'agent-question' },
+    { label: 'a wait of no reported kind', state: 'permission', reason: { kind: 'permission' }, mark: 'agent-question' },
+    { label: 'a settled turn', state: 'idle', reason: { kind: 'idle' }, mark: 'agent-idle' },
+  ])('draws the $mark mark on a running row for $label', async ({ state, reason, mark }) => {
+    useActivityStore
+      .getState()
+      .applySnapshot(
+        'sess-1',
+        'task-1',
+        'project-1',
+        streamSnapshotFixture({ activity: { state, reason }, awaitedPromptId: null, sessionStatus: 'running' }),
+      );
+
+    await renderHome();
+    await act(async () => {});
+
+    const statusIcon = screen.getByTestId('activity-row-sess-1-status');
+    expect(statusIcon.props.color).toBe(darkTerminalTheme.colors.statusNeedsYou);
+    const drawnPaths = statusIcon.queryAll((node) => typeof node.props.d === 'string').map((node) => String(node.props.d));
+    expect(drawnPaths).toEqual(activityMarks[mark].shapes.flatMap((shape) => (shape.kind === 'path' ? [shape.d] : [])));
   });
 
   it('renders board-card parity (project in the band, ticket number in the title row) and the context-usage bar', async () => {

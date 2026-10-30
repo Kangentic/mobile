@@ -4,7 +4,8 @@ import type { PushCategory, PushSessionKind } from '@kangentic/protocol';
 import { useActivityStore, type SessionActivityEntry } from '@/state/activityStore';
 import { COMMAND_TERMINAL_FALLBACK_NAME, selectCommandTerminal, useBoardStore } from '@/state/boardStore';
 import { useSettingsStore } from '@/state/settingsStore';
-import { channelIdForCategory, titleForCategory } from './categoryCopy';
+import { agentWaitKind } from '@/lib/agentWait';
+import { channelIdForCategory, titleForAlert } from './categoryCopy';
 import { ANDROID_NOTIFICATION_PRESENTATION } from './channels';
 import { stampPosting } from './notificationRouting';
 import { noteNotificationDisplayed, subscribeToNotificationDismissals } from './notificationSignals';
@@ -166,10 +167,15 @@ export function startLocalNotifier(): () => void {
     // that prompt resolves with none after it, or the session leaves
     // permission: the question was answered.
     const promptIdAtPost = category === 'input-required' ? entry.awaitedPromptId : null;
+    // The wait's kind titles an input-required alert as the desktop's push
+    // titles it (protocol 0.26.0). The desktop sends the activity event that
+    // carries the reason before the prompt event, so the entry entering
+    // permission already holds it; an unknown kind keeps the category's title.
+    const waitKind = agentWaitKind(entry.state, entry.reason);
     void notifee
       .displayNotification({
         ...posting.idField,
-        title: titleForCategory(category),
+        title: titleForAlert(category, waitKind === 'unknown' ? null : waitKind),
         body: resolveTaskTitle(entry),
         data: posting.data,
         android: {

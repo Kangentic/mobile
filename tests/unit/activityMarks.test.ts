@@ -37,6 +37,8 @@ interface ActivityManifestMark {
   reducedMotion: string;
   minPx: number;
   motion: string | null;
+  /** 'attention', 'active' or 'rest': which of the surface's tokens tints it. */
+  tone: string;
 }
 
 interface ActivityManifest {
@@ -97,7 +99,7 @@ const MARK_NAMES = Object.keys(activityMarks) as ActivityMarkName[];
 const KNOWN_REST_RENDERINGS = new Set(['static', 'keep-dash', 'drop-dash']);
 
 /**
- * The six marks the app draws, and no others. The package ships nine; the
+ * The eight marks the app draws, and no others. The package ships eleven; the
  * rest are left out on purpose, each for a reason that is a design decision and
  * not an oversight (scripts/syncBranding.mjs, ACTIVITY_MARKS):
  *
@@ -108,7 +110,9 @@ const KNOWN_REST_RENDERINGS = new Set(['static', 'keep-dash', 'drop-dash']);
  *   desktop's ring control.
  */
 const EXPECTED_MARK_NAMES = [
+  'agent-approval',
   'agent-idle',
+  'agent-question',
   'agent-working',
   'control-stop-idle',
   'control-stop-working',
@@ -194,10 +198,10 @@ describe('activityMarks', () => {
     // Non-vacuity guard: every cross-check below compares against this object,
     // and all of them would pass trivially against an empty or wrong-shaped one.
     expect(manifest.grid.pathLength).toBe(100);
-    expect(Object.keys(manifest.marks).length).toBe(9);
+    expect(Object.keys(manifest.marks).length).toBe(11);
   });
 
-  it('generates exactly the six marks the app draws, and deliberately not terminal-working or the pause controls', () => {
+  it('generates exactly the eight marks the app draws, and deliberately not terminal-working or the pause controls', () => {
     expect([...MARK_NAMES].sort()).toEqual(EXPECTED_MARK_NAMES);
     // The omissions are decisions, so they are pinned by name: a package bump
     // or a generator edit that quietly started shipping a blinking terminal
@@ -207,7 +211,7 @@ describe('activityMarks', () => {
       // ...while still existing upstream, so "unsynced" is a choice and not a missing file.
       expect(Object.keys(manifest.marks), `${omittedMarkName} exists in the package`).toContain(omittedMarkName);
     }
-    // And every one of the six is a real manifest entry, not a name the
+    // And every one of the eight is a real manifest entry, not a name the
     // generator invented.
     for (const markName of EXPECTED_MARK_NAMES) expect(Object.keys(manifest.marks)).toContain(markName);
   });
@@ -501,6 +505,107 @@ describe('the stop control (control-stop-idle, control-stop-working)', () => {
         expect(square.width / 2 + ACTIVITY_STROKE_WIDTH / 2).toBeLessThan(ringOf(markName).r);
       }
     });
+  });
+});
+
+/**
+ * Every point a path's commands land on, in absolute user units. Enough for the
+ * two wait marks, which upstream draws with absolute M, L, H, V, A and Z only
+ * (2.12.0's ACTIVITY gate bounds such outlines exactly); a relative command
+ * throws rather than being misread.
+ */
+function pathEndpoints(pathData: string): { x: number; y: number }[] {
+  const points: { x: number; y: number }[] = [];
+  let currentX = 0;
+  let currentY = 0;
+  for (const commandMatch of pathData.matchAll(/([A-Za-z])([^A-Za-z]*)/g)) {
+    const command = commandMatch[1];
+    const values = commandMatch[2].trim().length > 0 ? commandMatch[2].trim().split(/[\s,]+/).map(Number) : [];
+    switch (command) {
+      case 'M':
+      case 'L':
+        [currentX, currentY] = values;
+        break;
+      case 'H':
+        [currentX] = values;
+        break;
+      case 'V':
+        [currentY] = values;
+        break;
+      case 'A':
+        currentX = values[5];
+        currentY = values[6];
+        break;
+      case 'Z':
+        continue;
+      default:
+        throw new Error(`pathEndpoints does not read the "${command}" command`);
+    }
+    points.push({ x: currentX, y: currentY });
+  }
+  return points;
+}
+
+function endpointExtents(pathData: string): { minX: number; maxX: number; minY: number; maxY: number } {
+  const points = pathEndpoints(pathData);
+  return {
+    minX: Math.min(...points.map((point) => point.x)),
+    maxX: Math.max(...points.map((point) => point.x)),
+    minY: Math.min(...points.map((point) => point.y)),
+    maxY: Math.max(...points.map((point) => point.y)),
+  };
+}
+
+describe('the wait marks (agent-question, agent-approval)', () => {
+  const waitMarkNames = ['agent-question', 'agent-approval'] as const;
+
+  /** One stroked path each, verbatim: the bubble and the crested shield. */
+  it.each(waitMarkNames)('%s is the upstream outline: one stroked path, verbatim', (markName) => {
+    const upstream = upstreamElements(markName);
+    expect(upstream.map((element) => element.tagName)).toEqual(['path']);
+    expect(activityMarks[markName].shapes).toEqual([{ kind: 'path', d: upstream[0].attributes.d }]);
+  });
+
+  it.each(waitMarkNames)('%s is static, in the attention tone, at the indicator floor', (markName) => {
+    const mark = activityMarks[markName];
+    expect(mark.spin).toBeUndefined();
+    expect(mark.march).toBeUndefined();
+    expect(mark.restRendering).toBe('static');
+    expect(movingShapes(markName)).toEqual([]);
+    expect(manifest.marks[markName].motion).toBeNull();
+    expect(manifest.marks[markName].tone).toBe('attention');
+    expect(mark.minPx).toBe(manifest.floors.indicator);
+  });
+
+  /** The one path a wait mark is drawn with. */
+  function waitMarkPath(markName: (typeof waitMarkNames)[number]): string {
+    const [shape] = activityMarks[markName].shapes;
+    if (shape?.kind !== 'path') throw new Error(`${markName} is not drawn as a single path`);
+    return shape.d;
+  }
+
+  it('draws the bubble inside the 18 slot, centred on the grid', () => {
+    const [, , gridWidth, gridHeight] = ACTIVITY_VIEW_BOX.split(' ').map(Number);
+    const extents = endpointExtents(waitMarkPath('agent-question'));
+    expect(extents.maxX - extents.minX).toBe(manifest.grid.inkBox);
+    expect(extents.maxY - extents.minY).toBe(manifest.grid.inkBox);
+    expect((extents.minX + extents.maxX) / 2).toBe(gridWidth / 2);
+    expect((extents.minY + extents.maxY) / 2).toBe(gridHeight / 2);
+  });
+
+  /**
+   * The shield is the one indicator taller than the 18 slot, by a unit at the
+   * peak and the point (branding 2.12.0, a recorded overshoot). It shares the
+   * grid and is drawn at the same size as its siblings, never scaled down to
+   * fit, so its ink is 18 x 20 on the same 24-unit viewBox.
+   */
+  it('draws the shield 18 wide and 20 tall on the same grid, centred', () => {
+    const [, , gridWidth, gridHeight] = ACTIVITY_VIEW_BOX.split(' ').map(Number);
+    const extents = endpointExtents(waitMarkPath('agent-approval'));
+    expect(extents.maxX - extents.minX).toBe(18);
+    expect(extents.maxY - extents.minY).toBe(20);
+    expect((extents.minX + extents.maxX) / 2).toBe(gridWidth / 2);
+    expect((extents.minY + extents.maxY) / 2).toBe(gridHeight / 2);
   });
 });
 

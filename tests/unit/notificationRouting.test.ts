@@ -17,7 +17,7 @@ import {
 } from '@/notifications/notificationRouting';
 
 function routing(overrides: Partial<NotificationRouting> = {}): NotificationRouting {
-  return { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null, ...overrides };
+  return { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null, authored: false, ...overrides };
 }
 
 describe('routingFromNotificationData', () => {
@@ -30,14 +30,27 @@ describe('routingFromNotificationData', () => {
         sessionId: '',
         sessionKind: 'command-terminal',
       }),
-    ).toEqual({ category: 'workflow-complete', taskId: '', projectId: 'project-1', sessionId: '', sessionKind: 'command-terminal' });
-    expect(routingFromNotificationData({ category: 'not-a-category', sessionKind: 'not-a-kind', taskId: 7 })).toEqual({
+    ).toEqual({ category: 'workflow-complete', taskId: '', projectId: 'project-1', sessionId: '', sessionKind: 'command-terminal', authored: false });
+    expect(routingFromNotificationData({ category: 'not-a-category', sessionKind: 'not-a-kind', taskId: 7, authored: true })).toEqual({
       category: null,
       taskId: '',
       projectId: '',
       sessionId: '',
       sessionKind: null,
+      // Only the string notifee data carries counts: a non-string is not the flag.
+      authored: false,
     });
+  });
+
+  it('reads the authored flag a Notify me push stamps into its data (protocol 0.26.0)', () => {
+    const data = { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: '', authored: 'true' };
+    expect(routingFromNotificationData(data)?.authored).toBe(true);
+    expect(routingFromNotificationData({ ...data, authored: undefined })?.authored).toBe(false);
+    // The flag rides through a posting untouched, and changes nothing about the
+    // stable id: a Notify me keys on its task, as a workflow task's notice does.
+    const posting = stampPosting(data, 1_700_000_000_000);
+    expect(posting.routing?.authored).toBe(true);
+    expect(posting.idField).toEqual({ id: 'kangentic:input-required:task:task-1' });
   });
 
   it('is null for anything that is not a record (the placeholder posts no data)', () => {
@@ -107,6 +120,7 @@ describe('stampPosting', () => {
       projectId: 'project-1',
       sessionId: 'sess-1',
       sessionKind: 'command-terminal',
+      authored: false,
     });
     expect(posting.idField).toStrictEqual({ id: 'kangentic:input-required:session:sess-1' });
   });

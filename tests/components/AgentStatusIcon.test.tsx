@@ -1,6 +1,7 @@
 /**
  * AgentStatusIcon draws @kangentic/branding's activity marks: a green ring that
- * spins while the agent thinks, and the yellow envelope for an idle session.
+ * spins while the agent thinks, and in amber the bubble for a question, the
+ * crested shield for an approval and the envelope for a finished turn.
  *
  * Every expected value is read from the generated mark data rather than typed as
  * a literal. That is deliberate and it is the point of the module: the geometry,
@@ -43,7 +44,8 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react-native';
 import * as Reanimated from 'react-native-reanimated';
-import { AgentStatusIcon, ThemeProvider, darkTerminalTheme } from '@/components';
+import type { ActivityReasonWire } from '@kangentic/protocol';
+import { AgentStatusIcon, ThemeProvider, agentStatusKindFor, darkTerminalTheme } from '@/components';
 import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
 import {
   ACTIVITY_STROKE_LINECAP,
@@ -51,6 +53,7 @@ import {
   ACTIVITY_STROKE_WIDTH,
   ACTIVITY_VIEW_BOX,
   activityMarks,
+  type ActivityMark,
 } from '@/brand/activityMarks.generated';
 
 // Each SVG primitive renders a View tagged with its element kind, so the marks'
@@ -107,6 +110,23 @@ const [idleFlap] = idleMark.shapes.filter((shape) => shape.kind === 'path');
 if (idleFlap === undefined || idleFlap.kind !== 'path') {
   throw new Error('agent-idle must ship a flap path; @kangentic/branding changed its activity marks');
 }
+
+// The two waits on the user (protocol 0.26.0) are each ONE path - the bubble and
+// the crested shield - where the envelope is a rect plus a flap, so "which mark
+// drew" reads straight off the path data.
+function soleMarkPath(mark: ActivityMark, markName: string): string {
+  const [shape] = mark.shapes;
+  if (mark.shapes.length !== 1 || shape === undefined || shape.kind !== 'path') {
+    throw new Error(`${markName} must ship exactly one path; @kangentic/branding changed its activity marks`);
+  }
+  return shape.d;
+}
+const questionPath = soleMarkPath(activityMarks['agent-question'], 'agent-question');
+const approvalPath = soleMarkPath(activityMarks['agent-approval'], 'agent-approval');
+const waitMarkCases: readonly { kind: 'question' | 'approval'; markName: 'agent-question' | 'agent-approval'; expectedPath: string }[] = [
+  { kind: 'question', markName: 'agent-question', expectedPath: questionPath },
+  { kind: 'approval', markName: 'agent-approval', expectedPath: approvalPath },
+];
 
 function renderIcon(props: React.ComponentProps<typeof AgentStatusIcon>): ReturnType<typeof render> {
   return render(
@@ -314,6 +334,92 @@ describe('the idle envelope', () => {
   });
 });
 
+/**
+ * The bubble (a question) and the crested shield (an approval) are the two
+ * waits on the user. They are told apart from each other and from the envelope
+ * by SHAPE alone: all three share the needs-you tone and the grid, so a kind
+ * that drew the wrong mark would still be the right amber at the right size.
+ * That is why these read the path data rather than the colour.
+ */
+describe('the wait marks (question and approval)', () => {
+  it('keeps the two paths distinct from each other and from the envelope flap', () => {
+    // Without this, two kinds mapped to one mark could satisfy every case below.
+    expect(questionPath).not.toBe(approvalPath);
+    expect(questionPath).not.toBe(idleFlap.d);
+    expect(approvalPath).not.toBe(idleFlap.d);
+  });
+
+  it.each(waitMarkCases)('draws the $kind kind as its own single path, not the envelope', async ({ kind, expectedPath }) => {
+    await renderIcon({ kind });
+
+    expect(screen.getByTestId('svg-path').props.d).toBe(expectedPath);
+    // The envelope is a rect plus a flap, and the working ring a circle: neither may ride along.
+    expect(screen.queryByTestId('svg-rect')).toBeNull();
+    expect(screen.queryByTestId('svg-circle')).toBeNull();
+  });
+
+  it.each(waitMarkCases)('falls back to an agent-status-$kind testID', async ({ kind }) => {
+    await renderIcon({ kind });
+    expect(screen.getByTestId(`agent-status-${kind}`)).toBeTruthy();
+  });
+
+  it.each(waitMarkCases)('tints the $kind kind with the needs-you token, not the working green', async ({ kind }) => {
+    await renderIcon({ kind });
+    const { props } = screen.getByTestId(`agent-status-${kind}`);
+
+    expect(props.color).toBe(darkTerminalTheme.colors.statusNeedsYou);
+    expect(props.color).not.toBe(darkTerminalTheme.colors.statusWorking);
+    expect(props.strokeWidth).toBe(ACTIVITY_STROKE_WIDTH);
+    expect(props.stroke).toBe('currentColor');
+  });
+
+  /**
+   * "The shield is never scaled down": its ink is a unit taller than the
+   * bubble's and the envelope's on purpose, and the drawn box is the caller's
+   * size on the shared grid for all three, so no kind gets a smaller frame to
+   * make its ink fit.
+   */
+  it.each(waitMarkCases)('draws the $kind kind at the same size and viewBox as the envelope', async ({ kind }) => {
+    await renderIcon({ kind: 'idle', size: 20 });
+    const envelopeProps = screen.getByTestId('agent-status-idle').props;
+    await screen.unmount();
+
+    await renderIcon({ kind, size: 20 });
+    const { props } = screen.getByTestId(`agent-status-${kind}`);
+
+    expect(props.width).toBe(20);
+    expect(props.height).toBe(20);
+    expect(props.viewBox).toBe(ACTIVITY_VIEW_BOX);
+    expect(props.width).toBe(envelopeProps.width);
+    expect(props.height).toBe(envelopeProps.height);
+    expect(props.viewBox).toBe(envelopeProps.viewBox);
+  });
+
+  it.each(waitMarkCases)('draws the $kind kind at the default size, which is the envelope\'s', async ({ kind }) => {
+    await renderIcon({ kind });
+    const { props } = screen.getByTestId(`agent-status-${kind}`);
+    expect(props.width).toBe(16);
+    expect(props.height).toBe(16);
+  });
+
+  it.each(waitMarkCases)('never animates the $kind kind: its mark declares no spin or march', async ({ kind, markName }) => {
+    const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
+    await renderIcon({ kind });
+
+    expect(activityMarks[markName].spin).toBeUndefined();
+    expect(activityMarks[markName].march).toBeUndefined();
+    expect(withTimingSpy).not.toHaveBeenCalled();
+    expect(rotatingNodeCount()).toBe(0);
+  });
+
+  it.each(waitMarkCases)('draws a filled dot instead of the $kind mark below the floor', async ({ kind, markName }) => {
+    await renderIcon({ kind, size: activityMarks[markName].minPx - 1 });
+
+    expect(screen.queryByTestId('svg-path')).toBeNull();
+    expect(screen.getByTestId('svg-circle').props.fill).toBe('currentColor');
+  });
+});
+
 describe('reduced motion', () => {
   it('rests the ring holding its arc instead of closing it into a solid circle', async () => {
     jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
@@ -494,6 +600,20 @@ describe('registered mappers (the idle-CPU lever)', () => {
     expect(animatedPropsSpy).not.toHaveBeenCalled();
   });
 
+  /**
+   * A wait is a static mark on the Agents feed's common row, so it must cost
+   * what the envelope costs. A wait kind mapped to the spinning ring (or any
+   * animated mark) would mount the spin wrapper and register a style mapper,
+   * which the drawn output would not reveal as long as the path still showed.
+   */
+  it.each(waitMarkCases)('registers no animated mapper for the $kind mark', async ({ kind }) => {
+    const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
+    const animatedPropsSpy = jest.spyOn(Reanimated, 'useAnimatedProps');
+    await renderIcon({ kind });
+    expect(animatedStyleSpy).not.toHaveBeenCalled();
+    expect(animatedPropsSpy).not.toHaveBeenCalled();
+  });
+
   it('registers no animated mapper under reduced motion', async () => {
     jest.spyOn(Reanimated, 'useReducedMotion').mockReturnValue(true);
     const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
@@ -563,5 +683,70 @@ describe('the legibility floor', () => {
     // forever on every recycled row that fell below the floor.
     expect(screen.queryByTestId('svg-g')).toBeNull();
     expect(withTimingSpy).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The one function the board card, the Agents feed row and the session header
+ * all ask which kind a running session wears, so the three cannot draw the same
+ * wait two ways. The STATE decides that a wait is open and the reason only what
+ * it is for: a prompt event sets `state` without writing `reason`, so a reason
+ * can lag the state (or linger past it).
+ */
+describe('agentStatusKindFor', () => {
+  const permissionWith = (waitKind?: 'question' | 'approval'): ActivityReasonWire =>
+    waitKind === undefined ? { kind: 'permission' } : { kind: 'permission', waitKind };
+
+  it('maps a thinking session to the working ring, whatever it carries', () => {
+    expect(agentStatusKindFor('thinking', { kind: 'turn-active' }, false)).toBe('working');
+    expect(agentStatusKindFor('thinking', null, false)).toBe('working');
+    // Unread is a finished-turn fact; it never outvotes a turn still running.
+    expect(agentStatusKindFor('thinking', { kind: 'turn-active' }, true)).toBe('working');
+  });
+
+  it('maps a permission wait the agent called a question to the bubble', () => {
+    expect(agentStatusKindFor('permission', permissionWith('question'), false)).toBe('question');
+  });
+
+  it('maps a permission wait the agent called an approval to the shield', () => {
+    expect(agentStatusKindFor('permission', permissionWith('approval'), false)).toBe('approval');
+  });
+
+  it('maps a permission wait with no waitKind to the bubble, the general "waiting on your answer"', () => {
+    expect(agentStatusKindFor('permission', permissionWith(), false)).toBe('question');
+  });
+
+  it('maps a permission wait with no reason yet to the bubble: the state decides that a wait is open', () => {
+    expect(agentStatusKindFor('permission', null, false)).toBe('question');
+  });
+
+  /**
+   * The feed keeps the RAW event, so a kind a newer desktop adds reaches the
+   * store unfiltered. Cast through `unknown` because the type (rightly) forbids
+   * writing it; the point is what the phone does when the wire does.
+   */
+  it('maps a permission wait of a kind this version does not know to the bubble', () => {
+    const futureKind = { kind: 'permission', waitKind: 'confirmation' } as unknown as ActivityReasonWire;
+    expect(agentStatusKindFor('permission', futureKind, false)).toBe('question');
+  });
+
+  it('maps a permission state carrying a stale turn-active reason to the bubble, not the working ring', () => {
+    expect(agentStatusKindFor('permission', { kind: 'turn-active' }, false)).toBe('question');
+  });
+
+  it('keeps a wait a wait when the session also has unread output', () => {
+    expect(agentStatusKindFor('permission', permissionWith('approval'), true)).toBe('approval');
+    expect(agentStatusKindFor('permission', permissionWith('question'), true)).toBe('question');
+  });
+
+  it('maps a finished turn to the unread envelope when it has unread output, and the plain envelope when not', () => {
+    expect(agentStatusKindFor('idle', { kind: 'idle' }, true)).toBe('idle-unread');
+    expect(agentStatusKindFor('idle', { kind: 'idle' }, false)).toBe('idle');
+    expect(agentStatusKindFor('idle', null, false)).toBe('idle');
+  });
+
+  it('ignores an approval reason lingering past the wait: a settled session is the envelope', () => {
+    expect(agentStatusKindFor('idle', permissionWith('approval'), false)).toBe('idle');
+    expect(agentStatusKindFor('idle', permissionWith('approval'), true)).toBe('idle-unread');
   });
 });

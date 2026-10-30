@@ -83,6 +83,13 @@ vi.mock('@/notifications/notificationReconciler', () => ({
   startNotificationReconciler: startNotificationReconcilerMock,
 }));
 
+// The iOS foreground handler (protocol 0.26.0's Notify me) gates on the
+// platform itself, so the barrel calls it ABOVE the Android-only gate.
+const registerForegroundPresentationMock = vi.hoisted(() => vi.fn());
+vi.mock('@/notifications/foregroundPresentation', () => ({
+  registerForegroundPresentation: registerForegroundPresentationMock,
+}));
+
 async function loadInitializeNotifications(): Promise<() => void> {
   const { initializeNotifications } = await import('@/notifications');
   return initializeNotifications;
@@ -99,6 +106,7 @@ describe('initializeNotifications platform split', () => {
     stopOrphanedForegroundServiceAtBootMock.mockClear();
     registerBackgroundPushTaskMock.mockClear();
     startNotificationReconcilerMock.mockClear();
+    registerForegroundPresentationMock.mockClear();
   });
 
   it('runs all seven on Android', async () => {
@@ -142,6 +150,9 @@ describe('initializeNotifications platform split', () => {
     expect(startNotificationReconcilerMock).toHaveBeenCalledTimes(1);
     expect(refreshNotificationPermissionMock).toHaveBeenCalledTimes(1);
     expect(registerBackgroundPushTaskMock).toHaveBeenCalledTimes(1);
+    // A Notify me push shows while the app is open (protocol 0.26.0): the
+    // handler that presents it has to be installed on iOS, above the gate.
+    expect(registerForegroundPresentationMock).toHaveBeenCalledTimes(1);
     expect(registerForegroundServiceRunnerMock).not.toHaveBeenCalled();
     expect(stopOrphanedForegroundServiceAtBootMock).not.toHaveBeenCalled();
     expect(createNotificationChannelsMock).not.toHaveBeenCalled();

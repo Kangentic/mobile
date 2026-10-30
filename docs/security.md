@@ -404,7 +404,12 @@ OS-visible object. The same holds for a Command Terminal's alert (protocol 0.20.
 reads `sessionKind` after decrypting to open the terminal by its session. A `workflow-complete`
 alert (protocol 0.21.0) carries the workflow's name in `taskTitle` and its home project, with
 empty task and session ids, again only inside the envelope; the tap reads the category after
-decrypting and opens that project's Board. It logs nothing, on any path. Every failure - a missing key, a Keychain read
+decrypting and opens that project's Board. A wait's kind and a Notify me row's own Title and Body
+(protocol 0.26.0) are likewise only inside the envelope. To let a Notify me push show while the app
+is open, the app's foreground handler (`src/notifications/foregroundPresentation.ts`) decrypts the
+blob in memory, exactly as a tap does, only to learn whether it is one; it writes nothing back and
+logs nothing, and on Android the `authored` flag lives in the alert's on-device notifee `data`
+beside the ids already there. The extension logs nothing, on any path. Every failure - a missing key, a Keychain read
 that returns nothing because the device is locked or the entitlement is absent, a decrypt
 failure, an unknown category, or simply running out of execution time - delivers the placeholder
 exactly as it arrived.

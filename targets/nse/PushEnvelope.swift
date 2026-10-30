@@ -1,9 +1,11 @@
 import Foundation
 
 /// The sealed push payload, mirroring `PushEnvelopePlaintext` in
-/// `@kangentic/protocol`. Every field is required except `clears`; a missing or
+/// `@kangentic/protocol`. Every `let` field is required; a missing or
 /// wrong-typed one means the blob is not something this build understands, and
-/// the caller shows the placeholder.
+/// the caller shows the placeholder. The optional ones are dropped instead when
+/// malformed or unknown, as the protocol's parser drops them, so the alert
+/// still opens.
 struct PushEnvelopePlaintext {
   let category: String
   let projectId: String
@@ -17,6 +19,13 @@ struct PushEnvelopePlaintext {
   /// presented. Parsed tolerantly (NotificationPruning.parseClearEntries): a
   /// malformed list is empty, never a reason to lose the notification.
   let clears: [PushClearEntry]
+  /// What an `input-required` wait is for (protocol 0.26.0): "question" or
+  /// "approval". Nil when absent or a kind this build does not know.
+  var waitKind: String? = nil
+  /// A Notify me automation row's own Title and Body (protocol 0.26.0), set
+  /// together. Each is nil when absent or not a string.
+  var title: String? = nil
+  var body: String? = nil
 }
 
 /// Opens the envelope the desktop seals, byte-compatible with
@@ -88,6 +97,11 @@ enum PushEnvelope {
       sentAt.isFinite
     else { return nil }
 
+    // Read OUTSIDE the guard above: a malformed optional field costs only that
+    // field, never the alert. A wait kind this build does not know reads as no
+    // kind, so the category's title stays.
+    let waitKind = (fields["waitKind"] as? String).flatMap { CategoryCopy.title(forWaitKind: $0) != nil ? $0 : nil }
+
     return PushEnvelopePlaintext(
       category: category,
       projectId: projectId,
@@ -96,7 +110,10 @@ enum PushEnvelope {
       taskTitle: taskTitle,
       detail: detail,
       sentAt: sentAt,
-      clears: NotificationPruning.parseClearEntries(fields["clears"])
+      clears: NotificationPruning.parseClearEntries(fields["clears"]),
+      waitKind: waitKind,
+      title: fields["title"] as? String,
+      body: fields["body"] as? String
     )
   }
 }

@@ -5,6 +5,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AndroidChannel } from '@notifee/react-native';
+import { titleForAlert, titleForWaitKind } from '@/notifications/categoryCopy';
 import { flushMicrotasks } from '../helpers/async';
 
 const notifeeState = vi.hoisted(() => ({
@@ -145,6 +146,21 @@ describe('notification channels', () => {
     expect(channels.titleForCategory('plan-complete')).toBe('Plan complete');
     expect(channels.titleForCategory('spawn-stalled')).toBe('Still preparing');
     expect(channels.titleForCategory('workflow-complete')).toBe('Workflow complete');
+  });
+
+  /**
+   * Protocol 0.26.0: a wait the desktop names titles its own alert, as the
+   * desktop's notification does; with no kind the category's title is the
+   * fallback, and the kind never retitles any other category.
+   */
+  it('titles an input-required wait by its kind, and keeps the category title otherwise', () => {
+    expect(titleForWaitKind('question')).toBe('Agent has a question');
+    expect(titleForWaitKind('approval')).toBe('Agent needs your approval');
+    expect(titleForAlert('input-required', 'question')).toBe('Agent has a question');
+    expect(titleForAlert('input-required', 'approval')).toBe('Agent needs your approval');
+    expect(titleForAlert('input-required', undefined)).toBe('Agent needs your input');
+    expect(titleForAlert('input-required', null)).toBe('Agent needs your input');
+    expect(titleForAlert('turn-complete', 'question')).toBe('Agent went idle');
   });
 
   it('requestNotificationPermission maps the notifee authorization status to a boolean', async () => {

@@ -1,11 +1,12 @@
 import type { ActivityReasonWire, ActivityStateWire, ReadStreamSessionStatusWire } from '@kangentic/protocol';
+import { agentWaitKind, type AgentWaitKind } from './agentWait';
 import { formatDuration } from './formatDuration';
 
 /**
  * What a session is doing, as one line: the desktop's own words for an
  * activity reason (`formatActivityReasonText` in its ActivityReasonTooltip.tsx,
  * the text its Agent Monitor and task card show), copied literally. The
- * Terminals sheet's rows read it ("Awaiting permission", "Running Bash",
+ * Terminals sheet's rows read it ("Asking you a question", "Running Bash",
  * "Thinking", "Idle for 12m").
  *
  * Two forced deviations, both about time:
@@ -13,7 +14,7 @@ import { formatDuration } from './formatDuration';
  * - The desktop prints the wait to the second ("Idle for 2m 13s"). The phone's
  *   wait labels have minute resolution on a 30 s shared clock (NowTick), so the
  *   duration here is whole minutes, truncated as WaitLabel truncates it.
- * - Under a minute the duration is left off ("Idle", "Awaiting permission")
+ * - Under a minute the duration is left off ("Idle", "Waiting on you")
  *   rather than printed as "0m", for the reason WaitLabel holds its own back.
  *
  * Plus two lines the desktop's tooltip has no case for, because its rows only
@@ -21,6 +22,13 @@ import { formatDuration } from './formatDuration';
  * started while the desktop's concurrency limit was full still holds its slot)
  * and one whose agent the desktop has not classified yet ("Starting...").
  */
+
+/** The desktop's line for each wait (`formatActivityReasonText`, activity-reason-text.ts). */
+const WAIT_LINES: Record<AgentWaitKind, string> = {
+  question: 'Asking you a question',
+  approval: 'Waiting for your approval',
+  unknown: 'Waiting on you',
+};
 
 /** Below this a wait reads as no wait at all, as WaitLabel's floor. */
 const MINIMUM_SHOWN_WAIT_MS = 60_000;
@@ -56,9 +64,13 @@ export function formatActivityLine(input: ActivityLineInput, nowMs: number | nul
   const reason = input.reason;
   // Keyed on the STATE first: a prompt arriving sets `state` without touching
   // `reason` (activityStore's permission branch), so a session that needs the
-  // user can still be carrying the turn's last reason.
-  if (input.state === 'permission') {
-    return `Awaiting permission${waitSuffix(reason?.kind === 'permission' ? reason.since : undefined, nowMs)}`;
+  // user can still be carrying the turn's last reason. One line per wait kind
+  // (protocol 0.26.0), as the desktop words it; a wait whose kind the agent did
+  // not report says only that it waits on the user.
+  const waitKind = agentWaitKind(input.state, reason);
+  if (waitKind !== null) {
+    const suffix = waitSuffix(reason?.kind === 'permission' ? reason.since : undefined, nowMs);
+    return `${WAIT_LINES[waitKind]}${suffix}`;
   }
   if (input.state === 'idle') {
     return `Idle${waitSuffix(reason?.kind === 'idle' ? reason.since : undefined, nowMs)}`;

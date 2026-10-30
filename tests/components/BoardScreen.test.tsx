@@ -1,6 +1,8 @@
 import React from 'react';
 import { StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
+import type { ActivityReasonWire } from '@kangentic/protocol';
+import { activityMarks, type ActivityMarkName } from '@/brand/activityMarks.generated';
 import { ThemeProvider, darkTerminalTheme } from '@/components';
 import { getOpenNotificationSurfaces } from '@/notifications/notificationSignals';
 import { BoardScreen } from '@/screens/BoardScreen';
@@ -690,6 +692,38 @@ describe('BoardScreen', () => {
     );
 
     expect(screen.getByTestId('board-card-task-1-status').props.color).toBe(darkTerminalTheme.colors.statusNeedsYou);
+  });
+
+  /**
+   * A running session that needs the user wears the mark that says why
+   * (protocol 0.26.0, as the desktop card does): the bubble for a question or
+   * a wait of no reported kind, the crested shield for an approval, and the
+   * envelope once the turn is done. All three are the same amber at the same
+   * size, so the SHAPE is the assertion: the path data under the status icon
+   * (react-native-svg is unmocked here and its path host carries `d`). The
+   * settled turn is the control that the board still draws the envelope.
+   */
+  it.each<{ label: string; state: 'permission' | 'idle'; reason: ActivityReasonWire | null; mark: ActivityMarkName }>([
+    { label: 'an approval wait', state: 'permission', reason: { kind: 'permission', waitKind: 'approval' }, mark: 'agent-approval' },
+    { label: 'a question wait', state: 'permission', reason: { kind: 'permission', waitKind: 'question' }, mark: 'agent-question' },
+    { label: 'a wait of no reported kind', state: 'permission', reason: { kind: 'permission' }, mark: 'agent-question' },
+    { label: 'a settled turn', state: 'idle', reason: { kind: 'idle' }, mark: 'agent-idle' },
+  ])('draws the $mark mark on a running card for $label', async ({ state, reason, mark }) => {
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore
+      .getState()
+      .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ activity: { state, reason }, sessionStatus: 'running' }));
+
+    await render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+
+    const statusIcon = screen.getByTestId('board-card-task-1-status');
+    expect(statusIcon.props.color).toBe(darkTerminalTheme.colors.statusNeedsYou);
+    const drawnPaths = statusIcon.queryAll((node) => typeof node.props.d === 'string').map((node) => String(node.props.d));
+    expect(drawnPaths).toEqual(activityMarks[mark].shapes.flatMap((shape) => (shape.kind === 'path' ? [shape.d] : [])));
   });
 
   /**

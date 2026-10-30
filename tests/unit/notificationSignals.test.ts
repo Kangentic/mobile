@@ -22,7 +22,7 @@ beforeEach(async () => {
 });
 
 function routing(overrides: Partial<NotificationRouting> = {}): NotificationRouting {
-  return { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null, ...overrides };
+  return { category: 'input-required', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1', sessionKind: null, authored: false, ...overrides };
 }
 
 describe('open surfaces', () => {

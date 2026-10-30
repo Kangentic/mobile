@@ -1,6 +1,6 @@
 /**
  * formatActivityLine: what a session is doing, as one line - the desktop's own
- * words for an activity reason ("Awaiting permission", "Running Bash",
+ * words for an activity reason ("Asking you a question", "Running Bash",
  * "Idle for 12m"), plus the two lines a terminal needs before it runs
  * ("Waiting to start", "Starting...").
  *
@@ -48,25 +48,44 @@ describe('formatActivityLine', () => {
     });
   });
 
-  describe('awaiting permission', () => {
+  /**
+   * One line per wait kind (protocol 0.26.0), the desktop's own words
+   * (activity-reason-text.ts); a wait whose kind the agent did not report says
+   * only that it waits on the user.
+   */
+  describe('waiting on the user', () => {
     it('reads plainly with no wait on record', () => {
-      expect(formatActivityLine(lineInput({ state: 'permission', reason: { kind: 'permission' } }), NOW_MS)).toBe('Awaiting permission');
+      expect(formatActivityLine(lineInput({ state: 'permission', reason: { kind: 'permission' } }), NOW_MS)).toBe('Waiting on you');
+    });
+
+    it.each<[string, 'question' | 'approval', string]>([
+      ['a question', 'question', 'Asking you a question'],
+      ['an approval', 'approval', 'Waiting for your approval'],
+    ])('names %s by its kind', (_label, waitKind, expected) => {
+      const reason: ActivityReasonWire = { kind: 'permission', since: NOW_MS - 12 * MINUTE_MS, waitKind };
+      expect(formatActivityLine(lineInput({ state: 'permission', reason: { kind: 'permission', waitKind } }), NOW_MS)).toBe(expected);
+      expect(formatActivityLine(lineInput({ state: 'permission', reason }), NOW_MS)).toBe(`${expected} for 12m`);
+    });
+
+    it('reads a kind this build does not know as an unknown wait', () => {
+      const reason = { kind: 'permission', waitKind: 'plan' } as unknown as ActivityReasonWire;
+      expect(formatActivityLine(lineInput({ state: 'permission', reason }), NOW_MS)).toBe('Waiting on you');
     });
 
     it('leaves the duration off below a minute', () => {
-      expect(formatActivityLine(waitingInput('permission', MINUTE_MS - 1), NOW_MS)).toBe('Awaiting permission');
+      expect(formatActivityLine(waitingInput('permission', MINUTE_MS - 1), NOW_MS)).toBe('Waiting on you');
     });
 
     it('shows whole minutes from exactly a minute', () => {
-      expect(formatActivityLine(waitingInput('permission', MINUTE_MS), NOW_MS)).toBe('Awaiting permission for 1m');
+      expect(formatActivityLine(waitingInput('permission', MINUTE_MS), NOW_MS)).toBe('Waiting on you for 1m');
     });
 
     it('truncates 12m59s to 12m, where rounding would say 13m', () => {
-      expect(formatActivityLine(waitingInput('permission', 12 * MINUTE_MS + 59_000), NOW_MS)).toBe('Awaiting permission for 12m');
+      expect(formatActivityLine(waitingInput('permission', 12 * MINUTE_MS + 59_000), NOW_MS)).toBe('Waiting on you for 12m');
     });
 
     it('drops the duration when the surface already shows the wait (now is null)', () => {
-      expect(formatActivityLine(waitingInput('permission', 12 * MINUTE_MS), null)).toBe('Awaiting permission');
+      expect(formatActivityLine(waitingInput('permission', 12 * MINUTE_MS), null)).toBe('Waiting on you');
     });
 
     /**
@@ -78,7 +97,7 @@ describe('formatActivityLine', () => {
       ['a stale turn-active reason', { kind: 'turn-active' }],
       ['an idle reason with its own since', { kind: 'idle', since: NOW_MS - 30 * MINUTE_MS }],
     ])('keys on the state, not the reason, when it carries %s', (_label, reason) => {
-      expect(formatActivityLine(lineInput({ state: 'permission', reason }), NOW_MS)).toBe('Awaiting permission');
+      expect(formatActivityLine(lineInput({ state: 'permission', reason }), NOW_MS)).toBe('Waiting on you');
     });
   });
 
