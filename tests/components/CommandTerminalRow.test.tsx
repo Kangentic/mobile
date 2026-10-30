@@ -242,12 +242,12 @@ describe('CommandTerminalRow', () => {
       expect(screen.getByTestId(`${ROW}-wait`)).toHaveTextContent(/10m/);
     });
 
-    it('leaves the duration off an "Awaiting permission" line too', async () => {
+    it('leaves the duration off a "Waiting on you" line too', async () => {
       const waitingSinceMs = Date.now() - 5 * 60_000;
       snapshotTerminal({ activity: { state: 'permission', reason: { kind: 'permission', since: waitingSinceMs } } });
       await renderRow();
 
-      expect(screen.getByTestId(`${ROW}-snippet`)).toHaveTextContent(/^Awaiting permission$/);
+      expect(screen.getByTestId(`${ROW}-snippet`)).toHaveTextContent(/^Waiting on you$/);
     });
   });
 
