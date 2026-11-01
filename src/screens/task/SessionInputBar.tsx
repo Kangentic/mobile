@@ -8,6 +8,13 @@ import { SessionModeToggle, type SessionMode } from './SessionModeToggle';
 
 export interface SessionInputBarProps {
   sessionId: string | null;
+  /**
+   * The session a paused task's Chat composer sends to, when the desktop names
+   * one this footer is not bound to (SessionScreen's heldSessionId). It replaces
+   * `sessionId` for the composer alone, and is what puts a composer on a footer
+   * with no session; the quick keys never read it.
+   */
+  composerSessionId?: string | null;
   mode: SessionMode;
   onModeChange: (mode: SessionMode) => void;
   chatAttention: boolean;
@@ -63,18 +70,19 @@ export interface SessionInputBarProps {
  * geometry. Typing in terminal happens directly in the terminal (tap it to
  * raise the keyboard).
  *
- * With no session (a paused task the desktop cleared `session_id` from, or a
- * first start before its agent exists) the footer is the switcher alone, as
- * in the swap window's waiting phase: there is nothing to type into, but the
+ * With no session (a first start before its agent exists, or a paused task
+ * the desktop names no session for) the footer is the switcher alone, as in
+ * the swap window's waiting phase: there is nothing to type into, but the
  * task's diff and its Resume panel are a lens away, and a screen that opened
  * on a remembered Chat lens (which reads "No active session" there) has no
- * other way back to them. A screen that was bound when its task paused still
- * holds the paused session, and its Chat composer stays live on it (protocol
- * 0.26.0 holds the message for the task's next agent; SessionScreen's
- * pausedComposerLive).
+ * other way back to them. A paused task the desktop does name a session for
+ * keeps its Chat composer, live on that session whether or not this screen was
+ * ever bound to it (protocol 0.26.0 holds the message for the task's next
+ * agent, and 0.27.0 names the session; `composerSessionId`).
  */
 export function SessionInputBar({
   sessionId,
+  composerSessionId = null,
   mode,
   onModeChange,
   chatAttention,
@@ -89,6 +97,7 @@ export function SessionInputBar({
   const insets = useSafeAreaInsets();
   const modeRowShown = mode !== 'changes' && !switcherOnly && !(mode === 'terminal' && quickKeysHidden);
   const modeRowInert = suspended || inputLocked;
+  const modeRowSessionId = mode === 'chat' ? (composerSessionId ?? sessionId) : sessionId;
   return (
     <Stack
       gap="sm"
@@ -114,7 +123,7 @@ export function SessionInputBar({
       {/* Rendered only when a mode row exists: an empty wrapper would add a
           `gap` slot above the pill in changes mode, and past the end of the
           session the pill is the whole footer. */}
-      {sessionId !== null && modeRowShown ? (
+      {modeRowSessionId !== null && modeRowShown ? (
         <View
           testID="session-input-row"
           pointerEvents={modeRowInert ? 'none' : 'auto'}
@@ -122,8 +131,8 @@ export function SessionInputBar({
           importantForAccessibility={modeRowInert ? 'no-hide-descendants' : 'auto'}
           style={dimmed ? styles.dimmed : undefined}
         >
-          {mode === 'terminal' ? <QuickKeyBar sessionId={sessionId} /> : null}
-          {mode === 'chat' ? <ComposerBar sessionId={sessionId} /> : null}
+          {mode === 'terminal' ? <QuickKeyBar sessionId={modeRowSessionId} /> : null}
+          {mode === 'chat' ? <ComposerBar sessionId={modeRowSessionId} /> : null}
         </View>
       ) : null}
       <SessionModeToggle mode={mode} onModeChange={onModeChange} chatAttention={chatAttention} />

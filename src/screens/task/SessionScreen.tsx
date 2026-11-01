@@ -102,6 +102,14 @@ const SESSION_SWAP_GRACE_MS = 20_000;
 export const SESSION_SWAP_QUIET_MS = 8_000;
 
 /**
+ * Chat's line on a paused task whose composer is live with no session on the
+ * screen to read. The default ("No active session") contradicts the composer
+ * under it, and a held send shows nothing until the next agent opens with it,
+ * so this says where a message goes.
+ */
+const PAUSED_CHAT_MESSAGE = 'Paused. Messages wait for the next agent.';
+
+/**
  * The task's SESSION view: one live session, three surfaces. Terminal (the
  * raw 1:1 desktop mirror, the default), Chat (the readable feed), and
  * Changes (the diff) are absolutely-positioned siblings with only the active
@@ -900,13 +908,25 @@ export function SessionScreen(): React.JSX.Element {
   // The launch face has no live PTY to send keys or messages to either.
   const footerSwitcherOnly = quietWindowWaiting || launchFace;
   // Chat on a paused task (protocol 0.26.0): the desktop HOLDS a message to the
-  // session the pause took, for the task's next agent, so while this screen
-  // still holds that session the Chat composer stays live on it instead of
+  // session the pause took, for the task's next agent, and the board row names
+  // that session (0.27.0), so the Chat composer stays live on it instead of
   // going inert and then switcher-only with the window above. Chat only: the
   // terminal lens has its Resume panel, and keys have nowhere to go. See
   // pausedComposerSessionId for when there is one.
-  const pausedComposerLive =
-    mode === 'chat' && !launchFace && pausedComposerSessionId({ row: taskRow, currentSessionId: sessionId, lastBoundSessionId }) !== null;
+  //
+  // Kept apart from displaySessionId on purpose. This id goes to the composer
+  // and nothing else: the panes, the header and the resume watch stay on the
+  // binding, which for a screen opened on a paused task is none at all, and
+  // after a desktop restart is an id the desktop has replaced.
+  //
+  // Selected on its own rather than off taskRow, which toCardTaskRow narrows
+  // without this field (see PausedComposerInput).
+  const rowPausedSessionId = useBoardStore((state) => selectTaskRow(state, taskId)?.paused_session_id ?? null);
+  const heldSessionId =
+    mode === 'chat' && !launchFace
+      ? pausedComposerSessionId({ row: taskRow, pausedSessionId: rowPausedSessionId, currentSessionId: sessionId })
+      : null;
+  const pausedComposerLive = heldSessionId !== null;
   // The terminal pane stays DRAWN under the veil for the whole window. For a
   // few hours on 2026-09-18 it was hidden through the waiting phase, on a
   // measurement that said a dead session's page kept the WebView painting at
@@ -996,7 +1016,13 @@ export function SessionScreen(): React.JSX.Element {
               importantForAccessibility={mode === 'chat' ? 'auto' : 'no-hide-descendants'}
               testID="session-pane-chat"
             >
-              <ChatPane taskId={taskId} sessionId={displaySessionId} projectId={projectId} agentLabel={agentLabel} />
+              <ChatPane
+                taskId={taskId}
+                sessionId={displaySessionId}
+                projectId={projectId}
+                agentLabel={agentLabel}
+                emptyMessage={pausedComposerLive ? PAUSED_CHAT_MESSAGE : undefined}
+              />
             </View>
             <View
               style={[styles.pane, mode === 'changes' ? styles.paneVisible : styles.paneHidden]}
@@ -1019,6 +1045,7 @@ export function SessionScreen(): React.JSX.Element {
 
         <SessionInputBar
           sessionId={displaySessionId}
+          composerSessionId={heldSessionId}
           mode={mode}
           onModeChange={onModeChange}
           chatAttention={chatAttention}

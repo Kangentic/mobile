@@ -57,10 +57,10 @@ function seedTranscript(sessionId: string, totalEntries: number): void {
   });
 }
 
-async function renderPane(sessionId: string | null): Promise<void> {
+async function renderPane(sessionId: string | null, emptyMessage?: string): Promise<void> {
   await render(
     <ThemeProvider>
-      <ChatPane taskId="task-1" sessionId={sessionId} projectId="project-1" agentLabel="codex" />
+      <ChatPane taskId="task-1" sessionId={sessionId} projectId="project-1" agentLabel="codex" emptyMessage={emptyMessage} />
     </ThemeProvider>,
   );
 }
@@ -141,5 +141,24 @@ describe('ChatPane lens selection', () => {
   it('shows the no-session empty state without a session', async () => {
     await renderPane(null);
     expect(screen.getByText('No active session for this task')).toBeTruthy();
+  });
+
+  /**
+   * A paused task's live composer: the screen's line replaces the default, which
+   * contradicts it. Mutation seen failing: dropping `emptyMessage` from the
+   * no-session ConversationTab (the default line stayed).
+   */
+  it('shows the line it is given in place of the no-session empty state', async () => {
+    await renderPane(null, 'Paused. Messages wait for the next agent.');
+    expect(screen.getByText('Paused. Messages wait for the next agent.')).toBeTruthy();
+    expect(screen.queryByText('No active session for this task')).toBeNull();
+  });
+
+  /** A bound pane has a conversation to show, so a line handed down for the empty state stays out of it. */
+  it('ignores that line once it has a session to read', async () => {
+    seedTranscript('sess-1', 1);
+    await renderPane('sess-1', 'Paused. Messages wait for the next agent.');
+    expect(screen.queryByText('Paused. Messages wait for the next agent.')).toBeNull();
+    expect(screen.getByText('Structured entry')).toBeTruthy();
   });
 });

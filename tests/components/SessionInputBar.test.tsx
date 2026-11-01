@@ -5,6 +5,7 @@ import { ThemeProvider } from '@/components';
 import { darkTerminalTheme } from '@/components/theme/tokens';
 import { SessionInputBar } from '@/screens/task/SessionInputBar';
 import type { SessionMode } from '@/screens/task/SessionModeToggle';
+import { useChannelStore } from '@/state/channelStore';
 
 // The footer owns the gesture-nav bottom inset.
 jest.mock('react-native-safe-area-context', () =>
@@ -24,11 +25,12 @@ jest.mock('expo-speech-recognition', () => ({
 }));
 
 // The locked-row tests press a real quick key and read whether it reached the
-// terminal write.
+// terminal write; the held-composer tests read which session a send named.
 const mockWriteTerminal = jest.fn();
+const mockSendUserMessage = jest.fn();
 jest.mock('@/connection/actions', () => ({
   writeTerminal: (sessionId: string, data: string) => mockWriteTerminal(sessionId, data),
-  sendUserMessage: jest.fn().mockResolvedValue(undefined),
+  sendUserMessage: (sessionId: string, text: string) => mockSendUserMessage(sessionId, text),
 }));
 
 async function renderBar(mode: SessionMode, sessionId: string | null = 'sess-1'): Promise<void> {
@@ -293,6 +295,96 @@ describe('SessionInputBar', () => {
       );
 
       expect(screen.getByTestId('composer-input')).toBeTruthy();
+    });
+  });
+
+  /**
+   * A paused task's Chat composer (protocol 0.27.0): the desktop names a session
+   * it holds a message on, which this footer may not be bound to. A screen opened
+   * fresh on a paused task has no session at all, and after a desktop restart the
+   * one it has is refused, so the composer has to send to this id, and it is the
+   * one thing that may: the quick keys type into a PTY, which a paused session
+   * does not have. Asserted on the id a send or a key really names, because a
+   * row that merely rendered would pass with a composer aimed at the wrong
+   * session.
+   *
+   * Mutations seen failing: `modeRowSessionId = sessionId`, which ignores the
+   * prop (no composer on a footer with no session, and a send to `sess-stale`),
+   * and `modeRowSessionId = composerSessionId ?? sessionId`, which drops the Chat
+   * gate (a key written to `held-1`, and quick keys on a footer with no session).
+   */
+  describe('composerSessionId (a session the desktop holds a message on)', () => {
+    beforeEach(() => {
+      mockSendUserMessage.mockReset();
+      mockSendUserMessage.mockResolvedValue(undefined);
+      mockWriteTerminal.mockReset();
+      mockWriteTerminal.mockResolvedValue(undefined);
+      useChannelStore.setState({ established: true });
+    });
+
+    async function renderHeldBar(props: { sessionId: string | null; mode: SessionMode; switcherOnly?: boolean }): Promise<void> {
+      await render(
+        <ThemeProvider>
+          <SessionInputBar
+            sessionId={props.sessionId}
+            composerSessionId="held-1"
+            mode={props.mode}
+            onModeChange={jest.fn()}
+            chatAttention={false}
+            switcherOnly={props.switcherOnly}
+          />
+        </ThemeProvider>,
+      );
+    }
+
+    async function sendFromComposer(): Promise<void> {
+      await fireEvent.changeText(screen.getByTestId('composer-input'), 'Lower the cap to 3.');
+      await fireEvent.press(screen.getByTestId('composer-send'));
+    }
+
+    it('puts a composer on a footer with no session, and sends to the held session', async () => {
+      await renderHeldBar({ sessionId: null, mode: 'chat' });
+
+      await sendFromComposer();
+
+      expect(mockSendUserMessage).toHaveBeenCalledTimes(1);
+      expect(mockSendUserMessage).toHaveBeenCalledWith('held-1', 'Lower the cap to 3.');
+    });
+
+    it('sends to the held session over the footer\'s own, which a desktop restart has replaced', async () => {
+      await renderHeldBar({ sessionId: 'sess-stale', mode: 'chat' });
+
+      await sendFromComposer();
+
+      expect(mockSendUserMessage).toHaveBeenCalledWith('held-1', 'Lower the cap to 3.');
+    });
+
+    it('never reaches the quick keys, which stay on the footer\'s own session', async () => {
+      await renderHeldBar({ sessionId: 'sess-1', mode: 'terminal' });
+
+      await fireEvent.press(screen.getByTestId('quick-key-esc'));
+
+      expect(mockWriteTerminal).toHaveBeenCalledWith('sess-1', expect.any(String));
+    });
+
+    it('puts no quick keys on a footer with no session', async () => {
+      await renderHeldBar({ sessionId: null, mode: 'terminal' });
+
+      expect(screen.queryByTestId('session-input-row')).toBeNull();
+      expect(screen.queryByTestId('quick-key-esc')).toBeNull();
+    });
+
+    it('leaves the switcher alone when the footer is switcher-only', async () => {
+      await renderHeldBar({ sessionId: null, mode: 'chat', switcherOnly: true });
+
+      expect(screen.queryByTestId('composer-input', { includeHiddenElements: true })).toBeNull();
+      expect(screen.getByTestId('session-mode-toggle')).toBeTruthy();
+    });
+
+    it('puts nothing above the pill in changes mode', async () => {
+      await renderHeldBar({ sessionId: null, mode: 'changes' });
+
+      expect(screen.queryByTestId('session-input-row')).toBeNull();
     });
   });
 });

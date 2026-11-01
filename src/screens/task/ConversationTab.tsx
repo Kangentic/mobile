@@ -36,6 +36,8 @@ export interface ConversationTabProps {
   taskId: string;
   sessionId: string | null;
   projectId: string | null;
+  /** The placeholder's line when there is no session; a task's by default. */
+  emptyMessage?: string;
 }
 
 const LIVE_TAIL_MAX_LINES = 12;
@@ -67,12 +69,12 @@ const SETTLE_QUIET_MS = 120;
 const SETTLE_DEADLINE_MS = 700;
 
 /** The conversation-terminal surface: the flattened transcript cell feed for the task's session. */
-export function ConversationTab({ sessionId }: ConversationTabProps): React.JSX.Element {
+export function ConversationTab({ sessionId, emptyMessage = 'No active session for this task' }: ConversationTabProps): React.JSX.Element {
   if (sessionId === null) {
     return (
       <Stack gap="sm" style={styles.emptyState}>
         <Text variant="body" color="secondary">
-          No active session for this task
+          {emptyMessage}
         </Text>
       </Stack>
     );

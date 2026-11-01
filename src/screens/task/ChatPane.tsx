@@ -12,6 +12,8 @@ export interface ChatPaneProps {
   projectId: string | null;
   /** The task's agent name (board data), shown as the reading view's caption. Never gates behavior. */
   agentLabel: string | null;
+  /** The no-session line, when the screen has a better one than ConversationTab's default. */
+  emptyMessage?: string;
 }
 
 /**
@@ -22,7 +24,7 @@ export interface ChatPaneProps {
  * cleaned live reading view derived from the terminal. One universal mental
  * model: Terminal = exact, Chat = readable.
  */
-export function ChatPane({ taskId, sessionId, projectId, agentLabel }: ChatPaneProps): React.JSX.Element {
+export function ChatPane({ taskId, sessionId, projectId, agentLabel, emptyMessage }: ChatPaneProps): React.JSX.Element {
   // Shared with SessionScreen, which gates the terminal's clean feed on the
   // same answer. See `selectChatLens` for why they must not be two predicates.
   const chatLens = useTranscriptStore((state) => selectChatLens(state, sessionId));
@@ -49,7 +51,7 @@ export function ChatPane({ taskId, sessionId, projectId, agentLabel }: ChatPaneP
 
   if (sessionId === null) {
     // ConversationTab owns the no-session empty state.
-    return <ConversationTab taskId={taskId} sessionId={sessionId} projectId={projectId} />;
+    return <ConversationTab taskId={taskId} sessionId={sessionId} projectId={projectId} emptyMessage={emptyMessage} />;
   }
   if (chatLens === 'loading') {
     return (
