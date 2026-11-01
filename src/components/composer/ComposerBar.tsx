@@ -68,11 +68,12 @@ export function ComposerBar({ sessionId }: ComposerBarProps): React.JSX.Element 
         })
         .catch((error: unknown) => {
           // Keep the text in both branches, so it can be retried or copied.
-          // The composer renders only while the session looks live, so a send
-          // that lands just after it ended is a normal condition, not a
-          // failure to report (Sentry MOBILE-C). Keyed on the code, never the
-          // text, as stopCommandTerminal does: a desktop that predates the
-          // code keeps the branch below.
+          // The composer renders only while the session looks live or the
+          // desktop holds messages for its paused task, so a send that lands
+          // just after it ended is a normal condition, not a failure to
+          // report (Sentry MOBILE-C). Keyed on the code, never the text, as
+          // stopCommandTerminal does: a desktop that predates the code keeps
+          // the branch below.
           if (error instanceof CapabilityError && error.code === UNKNOWN_SESSION_ERROR_CODE) {
             setNote({ text: 'Session ended', color: 'muted' });
             return;
