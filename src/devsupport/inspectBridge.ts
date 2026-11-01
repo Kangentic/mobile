@@ -110,8 +110,9 @@ export async function buildInspectPayload(request: Pick<InspectRequest, 'kind' |
           // The board row's lifecycle fields, for every task that carries
           // any: the preparing label and the Resume gate (protocol 0.16.0),
           // the paused fact (0.17.0), which a paused task in Done carries
-          // without the gate, and the Pause gate (0.18.0). A task the desktop
-          // keeps sessionless for one of them shows here with a null sessionId.
+          // without the gate, the session it names for held chat (0.27.0), and
+          // the Pause gate (0.18.0). A task the desktop keeps sessionless for
+          // one of them shows here with a null sessionId.
           inFlightTasks: Object.values(boards.boardsByProjectId).flatMap((board) =>
             Object.values(board.tasksById)
               .filter((task) => hasSpawnLabel(task) || task.resumable === true || task.paused === true || task.pausable === true)
@@ -121,6 +122,7 @@ export async function buildInspectPayload(request: Pick<InspectRequest, 'kind' |
                 spawnProgress: task.spawn_progress ?? null,
                 resumable: task.resumable ?? null,
                 paused: task.paused ?? null,
+                pausedSessionId: task.paused_session_id ?? null,
                 pausable: task.pausable ?? null,
               })),
           ),

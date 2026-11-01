@@ -2123,10 +2123,12 @@ export function initialTasks(): BoardTaskWire[] {
       session_id: MOCK_PAUSED_SESSION_ID,
       // The authoritative Resume gate (protocol 0.16.0): paused, in a column
       // the desktop offers Resume in, and the paused fact itself (0.17.0),
-      // which every resumable row carries too. See MOCK_PAUSED_SESSION_ID for
-      // why the session id stays on the row.
+      // which every resumable row carries too, as it does the paused session's
+      // id (0.27.0). See MOCK_PAUSED_SESSION_ID for why the session id stays on
+      // the row as well.
       resumable: true,
       paused: true,
+      paused_session_id: MOCK_PAUSED_SESSION_ID,
       branch_name: 'feature/vault-token-migration',
       labels: ['backend', 'payments', 'migration', 'breaking-change', 'p0'],
       pr_number: 103,
@@ -3197,11 +3199,12 @@ export interface CreateMockDesktopOptions {
  *
  * The first of each pair ran an agent, which its move into Done suspended, so a
  * 0.17.0 desktop sends it `paused: true` (with `resumable: false`: Done offers
- * no Resume). The phone still draws no footer on it, because the desktop draws
- * an archived card compact (see `boardRowPaused`). The second never had a
- * session. Neither row names a session: the move into Done nulls the task's
- * `session_id` on the desktop, and the completed-task screen anchors on the
- * archived summary's own `sessionId` instead.
+ * no Resume), and a 0.27.0 one names that suspended session in `paused_session_id`.
+ * The phone still draws no footer on it, because the desktop draws an archived
+ * card compact (see `boardRowPaused`). The second never had a session. Neither
+ * row's `session_id` names one: the move into Done nulls it on the desktop, and
+ * the completed-task screen anchors on the archived summary's own `sessionId`
+ * instead.
  */
 export function archivedTasksFor(projectId: string): BoardTaskWire[] {
   // Distinct rows per project: identical Done columns (and a storefront
@@ -3216,6 +3219,7 @@ export function archivedTasksFor(projectId: string): BoardTaskWire[] {
         swimlane_id: 'lane2-shipped',
         session_id: null,
         paused: true,
+        paused_session_id: `${projectId}-archived-session-1`,
         archived_at: '2026-07-22T15:45:00.000Z',
       }),
       boardTaskFixture({
@@ -3247,6 +3251,7 @@ export function archivedTasksFor(projectId: string): BoardTaskWire[] {
       swimlane_id: 'lane-done',
       session_id: null,
       paused: true,
+      paused_session_id: `${projectId}-archived-session-1`,
       pr_number: 48,
       pr_url: 'https://github.com/Kangentic/kangentic-mobile/pull/48',
       pr_state: 'merged',
@@ -4000,7 +4005,8 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
    * `status: 'suspended'` push goes first (the desktop's `suspend()` announces
    * the status before its graceful shutdown), then the PTY exit's unlabelled
    * `session-ended`, then the board row loses its `session_id` and gains
-   * `resumable: true` and `paused: true`. That last part is the shape the phone has to get right:
+   * `resumable: true`, `paused: true` and `paused_session_id` in the one update,
+   * as the desktop's single registry scan yields them. That last part is the shape the phone has to get right:
    * after a real pause it holds NO stream on the paused session, so the Paused
    * card and every Resume surface run off the board row alone. Resume then
    * flows through `start-session` with no feed to hop (resumePausedTask).
@@ -4035,6 +4041,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       if (streamingTask) {
         streamingTask.resumable = true;
         streamingTask.paused = true;
+        streamingTask.paused_session_id = pausedSessionId;
       }
       setTaskSession(null);
     });
@@ -4074,6 +4081,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       const inDone = mockColumnRoleOf(task, projectId) === 'done';
       task.session_id = null;
       task.paused = true;
+      task.paused_session_id = pausedSessionId;
       task.resumable = !inDone;
       announceTaskUpdated(task, projectId);
     });
@@ -4175,6 +4183,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       task.spawn_progress = null;
       task.resumable = false;
       task.paused = false;
+      task.paused_session_id = null;
       announceTaskUpdated(task, projectId);
     });
   }
@@ -4238,6 +4247,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
     task.spawn_progress = null;
     task.resumable = false;
     task.paused = false;
+    task.paused_session_id = null;
     task.updated_at = new Date().toISOString();
   }
 
@@ -5072,6 +5082,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
           // desktop nulls `session_id` on the move. The phone drops the feed
           // itself once the row leaves the board (reconcileSessionsFromBoards).
           located.task.paused = located.task.paused === true || located.task.session_id !== null;
+          located.task.paused_session_id = located.task.paused_session_id ?? located.task.session_id;
           located.task.resumable = false;
           located.task.session_id = null;
           const archivedList = archivedDuringSession.get(located.projectId) ?? [];

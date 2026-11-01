@@ -112,15 +112,17 @@ describe('buildInspectPayload', () => {
             spawn_progress: 'Creating worktree...',
             resumable: undefined,
             paused: undefined,
+            paused_session_id: undefined,
             pausable: undefined,
           }),
           // A live session the desktop would pause (0.18.0): listed on `pausable` alone.
           boardTaskFixture({ id: 'task-live', session_id: 'sess-live', pausable: true }),
-          boardTaskFixture({ id: 'task-paused', session_id: null, resumable: true, paused: true }),
+          // A pause clears `session_id` and names the session here instead (0.27.0).
+          boardTaskFixture({ id: 'task-paused', session_id: null, resumable: true, paused: true, paused_session_id: 'sess-held' }),
           // Paused with no Resume on offer (0.17.0, a task sitting in Done): listed on `paused` alone.
-          boardTaskFixture({ id: 'task-done-paused', session_id: null, resumable: false, paused: true }),
+          boardTaskFixture({ id: 'task-done-paused', session_id: null, resumable: false, paused: true, paused_session_id: 'sess-done' }),
           // A task that still names its session reports that session.
-          boardTaskFixture({ id: 'task-parked', session_id: 'sess-parked', resumable: true, paused: true }),
+          boardTaskFixture({ id: 'task-parked', session_id: 'sess-parked', resumable: true, paused: true, paused_session_id: 'sess-parked' }),
           // Nothing in flight and nothing to resume: not listed, and neither is a blank label.
           boardTaskFixture({ id: 'task-blank-label', session_id: null, spawn_progress: '   ' }),
           boardTaskFixture({ id: 'task-plain', session_id: null }),
@@ -136,11 +138,11 @@ describe('buildInspectPayload', () => {
 
     expect(payload.activity).toEqual([expect.objectContaining({ sessionId: 'sess-1', resuming: true, resumable: true })]);
     expect([...payload.board.inFlightTasks].sort((first, second) => first.taskId.localeCompare(second.taskId))).toEqual([
-      { taskId: 'task-done-paused', sessionId: null, spawnProgress: null, resumable: false, paused: true, pausable: false },
-      { taskId: 'task-labelled', sessionId: null, spawnProgress: 'Creating worktree...', resumable: null, paused: null, pausable: null },
-      { taskId: 'task-live', sessionId: 'sess-live', spawnProgress: null, resumable: false, paused: false, pausable: true },
-      { taskId: 'task-parked', sessionId: 'sess-parked', spawnProgress: null, resumable: true, paused: true, pausable: false },
-      { taskId: 'task-paused', sessionId: null, spawnProgress: null, resumable: true, paused: true, pausable: false },
+      { taskId: 'task-done-paused', sessionId: null, spawnProgress: null, resumable: false, paused: true, pausedSessionId: 'sess-done', pausable: false },
+      { taskId: 'task-labelled', sessionId: null, spawnProgress: 'Creating worktree...', resumable: null, paused: null, pausedSessionId: null, pausable: null },
+      { taskId: 'task-live', sessionId: 'sess-live', spawnProgress: null, resumable: false, paused: false, pausedSessionId: null, pausable: true },
+      { taskId: 'task-parked', sessionId: 'sess-parked', spawnProgress: null, resumable: true, paused: true, pausedSessionId: 'sess-parked', pausable: false },
+      { taskId: 'task-paused', sessionId: null, spawnProgress: null, resumable: true, paused: true, pausedSessionId: 'sess-held', pausable: false },
     ]);
     expect(payload.pendingSuccessors).toEqual([{ taskId: 'task-2', sessionId: 'sess-next', endedSessionId: 'sess-ended' }]);
   });

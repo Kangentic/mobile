@@ -68,11 +68,18 @@ jest.mock('@/connection/actions', () => ({
 }));
 
 // The panes are heavy and beside the point: this suite is about what the
-// terminal lens and the footer show for a paused session.
+// terminal lens and the footer show for a paused session. The label is what the
+// screen hands Chat: the session it reads, and its no-session line (`default`
+// when the screen leaves ConversationTab's own).
 jest.mock('@/screens/task/ChatPane', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
   const { View } = require('react-native');
-  return { __esModule: true, ChatPane: () => <View testID="stub-chat-pane" /> };
+  return {
+    __esModule: true,
+    ChatPane: (props: { sessionId: string | null; emptyMessage?: string }) => (
+      <View testID="stub-chat-pane" accessibilityLabel={`session=${props.sessionId ?? 'none'} empty=${props.emptyMessage ?? 'default'}`} />
+    ),
+  };
 });
 jest.mock('@/screens/task/ChangesTab', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
@@ -95,8 +102,10 @@ jest.mock('@/screens/task/TerminalTab', () => {
 // hidden by `quickKeysHidden` (the Resume panel) or by `switcherOnly` (a wait with no live PTY).
 // Also records the footer's `notice` (as the hint), and carries Chat and Terminal buttons standing
 // in for the switcher, since the route pins the terminal lens. The label is the footer's whole
-// binding in one string (lens, the session it is bound to, and the two flags that hold it inert or
-// down to the switcher), kept off `accessibilityValue` so the keys-hidden reads above are untouched.
+// binding in one string (lens, the session it is bound to, the held session its composer sends to,
+// and the two flags that hold it inert or down to the switcher), kept off `accessibilityValue` so
+// the keys-hidden reads above are untouched. `session=` and `composer=` are separate on purpose:
+// that the held id never becomes the binding can only be asserted with the two apart.
 jest.mock('@/screens/task/SessionInputBar', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
   const { Pressable, View } = require('react-native');
@@ -104,6 +113,7 @@ jest.mock('@/screens/task/SessionInputBar', () => {
     __esModule: true,
     SessionInputBar: (props: {
       sessionId: string | null;
+      composerSessionId?: string | null;
       mode: 'terminal' | 'chat' | 'changes';
       suspended?: boolean;
       quickKeysHidden?: boolean;
@@ -113,7 +123,7 @@ jest.mock('@/screens/task/SessionInputBar', () => {
     }) => (
       <View
         testID="stub-session-input-bar"
-        accessibilityLabel={`mode=${props.mode} session=${props.sessionId ?? 'none'} suspended=${String(props.suspended === true)} switcherOnly=${String(props.switcherOnly === true)}`}
+        accessibilityLabel={`mode=${props.mode} session=${props.sessionId ?? 'none'} composer=${props.composerSessionId ?? 'none'} suspended=${String(props.suspended === true)} switcherOnly=${String(props.switcherOnly === true)}`}
         accessibilityValue={{ text: props.quickKeysHidden === true || props.switcherOnly === true ? 'keys-hidden' : 'keys-shown' }}
         accessibilityHint={props.notice ?? undefined}
       >
@@ -132,19 +142,22 @@ const closeSessionScreenMock = closeSessionScreen as jest.Mock;
  * `sessionId: null` is the board's report once the desktop has paused the
  * task: it clears the task's `session_id`. `resumable` is the board row's
  * Resume gate (protocol 0.16.0), `paused` its own word for a paused task
- * (protocol 0.17.0), `spawnProgress` its preparing label, and `workflow` the
- * workflow the task belongs to (protocol 0.21.0).
+ * (protocol 0.17.0), `pausedSessionId` the session it names for held chat
+ * (protocol 0.27.0, null on an older desktop), `spawnProgress` its preparing
+ * label, and `workflow` the workflow the task belongs to (protocol 0.21.0).
  */
 function seedBoard({
   sessionId = 'sess-1',
   resumable = false,
   paused = false,
+  pausedSessionId = null,
   spawnProgress = null,
   workflow = null,
 }: {
   sessionId?: string | null;
   resumable?: boolean;
   paused?: boolean;
+  pausedSessionId?: string | null;
   spawnProgress?: string | null;
   workflow?: BoardTaskWire['workflow'];
 } = {}): void {
@@ -160,6 +173,7 @@ function seedBoard({
             swimlane_id: 'lane-review',
             resumable,
             paused,
+            paused_session_id: pausedSessionId,
             spawn_progress: spawnProgress,
             workflow,
           }),
@@ -775,23 +789,26 @@ describe('SessionScreen Resume (a paused session)', () => {
 });
 
 /**
- * Chat on a paused task (protocol 0.26.0). The desktop HOLDS a message sent to
- * a session with no running agent for the task's next agent, so a screen that
- * was bound when the task paused keeps its Chat composer LIVE on the paused
- * session, where it used to go inert for the quiet window and then down to the
- * switcher alone. The footer is read off the SessionInputBar stub's label (the
- * lens, the bound session, and the `suspended` and `switcherOnly` flags).
+ * Chat on a paused task (protocol 0.26.0, named by 0.27.0). The desktop HOLDS a
+ * message sent to a session with no running agent for the task's next agent,
+ * and the board row names that session in `paused_session_id`, so a paused
+ * task's Chat composer stays LIVE on it, where it used to go inert for the
+ * quiet window and then down to the switcher alone. The footer is read off the
+ * SessionInputBar stub's label (the lens, the bound session, the composer's
+ * held session, and the `suspended` and `switcherOnly` flags).
  *
  * The control for "live" is the same pause with nothing offered to hold it:
- * the terminal lens (the Resume panel owns it, and keys have nowhere to go) and
- * a Stop (no Resume), each of which still goes inert and then switcher-only.
- * The paused row offers Resume, so the Resume panel hides the swap veil here
- * and the footer is the only place the window shows.
+ * the terminal lens (the Resume panel owns it, and keys have nowhere to go), a
+ * Stop (no Resume), and an older desktop's row (no session named), each of
+ * which still goes inert and then switcher-only. The paused row offers Resume,
+ * so the Resume panel hides the swap veil here and the footer is the only place
+ * the window shows.
  */
 describe('SessionScreen Chat composer on a paused task', () => {
-  const LIVE_ON_SESS_1 = 'mode=chat session=sess-1 suspended=false switcherOnly=false';
-  const INERT_ON_SESS_1 = 'mode=chat session=sess-1 suspended=true switcherOnly=false';
-  const SWITCHER_ONLY_ON_SESS_1 = 'mode=chat session=sess-1 suspended=false switcherOnly=true';
+  const LIVE_ON_SESS_1 = 'mode=chat session=sess-1 composer=sess-1 suspended=false switcherOnly=false';
+  const INERT_ON_SESS_1 = 'mode=chat session=sess-1 composer=none suspended=true switcherOnly=false';
+  const SWITCHER_ONLY_ON_SESS_1 = 'mode=chat session=sess-1 composer=none suspended=false switcherOnly=true';
+  const PAUSED_LINE = 'Paused. Messages wait for the next agent.';
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -811,6 +828,11 @@ describe('SessionScreen Chat composer on a paused task', () => {
     return String(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel);
   }
 
+  /** What the screen hands the Chat pane: `includeHiddenElements`, since the terminal lens hides it. */
+  function chatPaneLabel(): string {
+    return String(screen.getByTestId('stub-chat-pane', { includeHiddenElements: true }).props.accessibilityLabel);
+  }
+
   /** A task with a live agent, the way a screen opened on a running session holds it. */
   function seedLiveSession(): void {
     seedBoard({ sessionId: 'sess-1' });
@@ -823,16 +845,25 @@ describe('SessionScreen Chat composer on a paused task', () => {
   /**
    * The desktop ends the bound session with no step, and the board stops
    * naming it. `resumable: true` is a PAUSE (the row also reads `paused`,
-   * protocol 0.17.0); `false` is a Stop, which offers no Resume.
+   * protocol 0.17.0, and names the session in `paused_session_id`, 0.27.0, in
+   * the same update, since the desktop reads all three off one registry scan);
+   * `false` is a Stop, which offers no Resume. `pausedSessionId: null` is that
+   * pause on an older desktop.
    */
-  function endBoundSession({ resumable }: { resumable: boolean }): void {
+  function endBoundSession({
+    resumable,
+    pausedSessionId = resumable ? 'sess-1' : null,
+  }: {
+    resumable: boolean;
+    pausedSessionId?: string | null;
+  }): void {
     useActivityStore.getState().applyActivityEvent({
       kind: 'activity',
       sessionId: 'sess-1',
       taskId: 'task-1',
       payload: { type: 'session-ended', intentional: true },
     });
-    seedBoard({ sessionId: null, resumable, paused: resumable });
+    seedBoard({ sessionId: null, resumable, paused: resumable, pausedSessionId });
   }
 
   async function passQuietDeadline(): Promise<void> {
@@ -846,14 +877,17 @@ describe('SessionScreen Chat composer on a paused task', () => {
    * SessionScreen (the quiet window's footer was `suspended=true`, where live
    * was expected), and, separately, passing `switcherOnly={footerSwitcherOnly}`
    * without the override (live in the window, then `switcherOnly=true` past the
-   * deadline), so each half of the window is pinned on its own.
+   * deadline), so each half of the window is pinned on its own. And never
+   * reading the id off the row, the trap in narrowing it through toCardTaskRow:
+   * `composer=none suspended=true` where live was expected, with a green
+   * typecheck, so this is what stands guard over that selector.
    */
   it('stays live on the session the desktop paused, through the quiet window and past its deadline', async () => {
     jest.useFakeTimers();
     seedLiveSession();
     await renderSessionScreen();
     await fireEvent.press(screen.getByTestId('stub-mode-chat'));
-    expect(footerLabel()).toBe(LIVE_ON_SESS_1);
+    expect(footerLabel()).toBe('mode=chat session=sess-1 composer=none suspended=false switcherOnly=false');
 
     await act(() => {
       endBoundSession({ resumable: true });
@@ -865,29 +899,55 @@ describe('SessionScreen Chat composer on a paused task', () => {
   });
 
   /**
+   * Desktop v0.51.0 (protocol 0.25.0) refuses a send to a paused session and
+   * sends no `paused_session_id`, and this phone ships ahead of the desktop that
+   * does. So the same pause on that desktop must read as it did in v1.3.0: the
+   * screen still remembers `sess-1`, and offering it is what read "Session
+   * ended".
+   *
+   * Mutation seen failing: `pausedSessionId: rowPausedSessionId ??
+   * lastBoundSessionId` in SessionScreen, the fallback this replaced
+   * (`composer=sess-1 suspended=false` where the inert footer was expected).
+   */
+  it('keeps the inert, then switcher-only, footer for a pause on a desktop that names no session', async () => {
+    jest.useFakeTimers();
+    seedLiveSession();
+    await renderSessionScreen();
+    await fireEvent.press(screen.getByTestId('stub-mode-chat'));
+
+    await act(() => {
+      endBoundSession({ resumable: true, pausedSessionId: null });
+    });
+    expect(footerLabel()).toBe(INERT_ON_SESS_1);
+
+    await passQuietDeadline();
+    expect(footerLabel()).toBe(SWITCHER_ONLY_ON_SESS_1);
+  });
+
+  /**
    * Terminal keeps today's footer: the Resume panel owns the pane and keys
    * have no live PTY. Also the control that the quiet window really opened on
    * the pause, which the Chat case above cannot show on its own (the Resume
    * panel hides the veil).
    *
    * Mutation seen failing: dropping `mode === 'chat' &&` from
-   * `pausedComposerLive`: the terminal footer stayed live (`mode=terminal
-   * session=sess-1 suspended=false switcherOnly=false` where the inert one
-   * was expected).
+   * `heldSessionId`: the terminal footer stayed live (`mode=terminal
+   * session=sess-1 composer=sess-1 suspended=false switcherOnly=false` where the
+   * inert one was expected).
    */
   it('keeps the terminal lens inert, then switcher-only, for the same pause', async () => {
     jest.useFakeTimers();
     seedLiveSession();
     await renderSessionScreen();
-    expect(footerLabel()).toBe('mode=terminal session=sess-1 suspended=false switcherOnly=false');
+    expect(footerLabel()).toBe('mode=terminal session=sess-1 composer=none suspended=false switcherOnly=false');
 
     await act(() => {
       endBoundSession({ resumable: true });
     });
-    expect(footerLabel()).toBe('mode=terminal session=sess-1 suspended=true switcherOnly=false');
+    expect(footerLabel()).toBe('mode=terminal session=sess-1 composer=none suspended=true switcherOnly=false');
 
     await passQuietDeadline();
-    expect(footerLabel()).toBe('mode=terminal session=sess-1 suspended=false switcherOnly=true');
+    expect(footerLabel()).toBe('mode=terminal session=sess-1 composer=none suspended=false switcherOnly=true');
   });
 
   /** The composer's liveness is read off the lens each render, never latched by an earlier one. */
@@ -898,40 +958,161 @@ describe('SessionScreen Chat composer on a paused task', () => {
     await act(() => {
       endBoundSession({ resumable: true });
     });
-    expect(footerLabel()).toBe('mode=terminal session=sess-1 suspended=true switcherOnly=false');
+    expect(footerLabel()).toBe('mode=terminal session=sess-1 composer=none suspended=true switcherOnly=false');
 
     await fireEvent.press(screen.getByTestId('stub-mode-chat'));
     expect(footerLabel()).toBe(LIVE_ON_SESS_1);
 
     await fireEvent.press(screen.getByTestId('stub-mode-terminal'));
-    expect(footerLabel()).toBe('mode=terminal session=sess-1 suspended=true switcherOnly=false');
+    expect(footerLabel()).toBe('mode=terminal session=sess-1 composer=none suspended=true switcherOnly=false');
   });
 
   /**
-   * A screen opened on an already-paused task never bound a session, and the
-   * board row does not name the paused one (a desktop pause clears it), so
-   * there is nothing to compose to: the footer stays the switcher alone.
+   * The case #133 could not reach: a screen opened on an already-paused task
+   * never bound a session, so only the board row can name one. The composer
+   * sends to it, and Chat says where a message goes rather than "No active
+   * session", which contradicts the composer under it.
    *
-   * Mutation seen failing: `displaySessionId = sessionId ?? lastBoundSessionId
-   * ?? paramSessionId` in SessionScreen, which binds the route's stale
-   * `sess-1` (`mode=chat session=sess-1 ...` where `session=none` was expected).
+   * The id is the composer's and nothing else's: the footer's `session=`, the
+   * Chat pane and the stream all stay on no session at all, and Resume is still
+   * on offer. Also pins that the row reads Paused, not the launch face, which
+   * would take the footer down to the switcher: the terminal lens shows the
+   * Resume panel with no veil.
+   *
+   * Mutations seen failing: handing the composer `displaySessionId` while live,
+   * which is null here (`composer=none` where `composer=held-1` was expected);
+   * feeding the row's id into `displaySessionId` (`session=held-1` where
+   * `session=none` was expected); and passing no `emptyMessage` to the pane
+   * (`empty=default`).
    */
-  it('gives a screen opened fresh on a paused task no session to compose to', async () => {
+  it('composes to the session the row names on a screen opened fresh on a paused task, and binds nothing to it', async () => {
+    seedBoard({ sessionId: null, resumable: true, paused: true, pausedSessionId: 'held-1' });
+    await renderSessionScreen();
+    expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
+    expect(screen.queryByTestId('session-swap-veil-empty')).toBeNull();
+    expect(footerLabel()).toBe('mode=terminal session=none composer=none suspended=false switcherOnly=false');
+
+    await fireEvent.press(screen.getByTestId('stub-mode-chat'));
+
+    expect(footerLabel()).toBe('mode=chat session=none composer=held-1 suspended=false switcherOnly=false');
+    expect(chatPaneLabel()).toBe(`session=none empty=${PAUSED_LINE}`);
+    expect(screen.getByTestId('task-header-resume')).toBeTruthy();
+    expect(openSessionScreenMock).not.toHaveBeenCalled();
+    expect(useActivityStore.getState().bySessionId['held-1']).toBeUndefined();
+  });
+
+  /**
+   * The same screen on a desktop that names no session: nothing to compose to,
+   * so the footer stays the switcher alone and Chat keeps its own line. The
+   * route's `sess-1` is a stale param here and must not stand in for the id.
+   *
+   * Mutations seen failing: `displaySessionId = sessionId ?? lastBoundSessionId
+   * ?? paramSessionId` in SessionScreen, which binds that stale `sess-1`
+   * (`mode=chat session=sess-1 ...` where `session=none` was expected), and
+   * `pausedSessionId: rowPausedSessionId ?? paramSessionId`, which aims the
+   * composer at it (`composer=sess-1` where `composer=none` was expected).
+   */
+  it('gives a screen opened fresh on a paused task no composer when the row names no session', async () => {
     seedBoard({ sessionId: null, resumable: true, paused: true });
     await renderSessionScreen();
     await fireEvent.press(screen.getByTestId('stub-mode-chat'));
 
-    expect(footerLabel()).toBe('mode=chat session=none suspended=false switcherOnly=false');
+    expect(footerLabel()).toBe('mode=chat session=none composer=none suspended=false switcherOnly=false');
+    expect(chatPaneLabel()).toBe('session=none empty=default');
   });
 
   /**
-   * A Stop is an end the desktop offers no Resume for, so it holds no message
-   * (To Do, Done and an archived task are the same). Today's footer: inert in
-   * the quiet window, the switcher alone past it.
+   * A desktop restart re-registers the paused session under a new id, which
+   * reaches the phone as an ordinary board update. The composer follows the
+   * row; the screen stays bound to the session it last read, because the new id
+   * is never a binding and that pane is the conversation the user is reading. A
+   * send to the old id is refused and reads "Session ended", so it is the id
+   * the composer holds that this pins, not the pane's.
    *
-   * Mutation seen failing: dropping the `resumable !== true` check in
-   * pausedComposerSessionId: the Stop's footer stayed live (`suspended=false
-   * switcherOnly=false` in the quiet window, where the inert one was expected).
+   * Mutation seen failing: handing the composer `displaySessionId` while live
+   * (`composer=sess-1` where `composer=sess-reissued` was expected), which is the
+   * stale id this task exists to stop sending to.
+   */
+  it('moves the composer to the id a desktop restart gives the paused session, leaving the binding where it was', async () => {
+    jest.useFakeTimers();
+    seedLiveSession();
+    await renderSessionScreen();
+    await fireEvent.press(screen.getByTestId('stub-mode-chat'));
+    await act(() => {
+      endBoundSession({ resumable: true });
+    });
+    expect(footerLabel()).toBe(LIVE_ON_SESS_1);
+    openSessionScreenMock.mockClear();
+
+    await act(() => {
+      seedBoard({ sessionId: null, resumable: true, paused: true, pausedSessionId: 'sess-reissued' });
+    });
+
+    expect(footerLabel()).toBe('mode=chat session=sess-1 composer=sess-reissued suspended=false switcherOnly=false');
+    expect(chatPaneLabel()).toBe(`session=sess-1 empty=${PAUSED_LINE}`);
+    expect(openSessionScreenMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The Resume's label on a screen opened fresh: the launch face owns the
+   * footer, down to the switcher, and the line goes with the composer, since
+   * nothing can be held for an agent already being started by this path. The
+   * bound case is the labelled test below.
+   */
+  it('takes the composer and its line away once a fresh-opened task\'s resume is labelled', async () => {
+    seedBoard({ sessionId: null, resumable: true, paused: true, pausedSessionId: 'held-1' });
+    await renderSessionScreen();
+    await fireEvent.press(screen.getByTestId('stub-mode-chat'));
+    expect(footerLabel()).toBe('mode=chat session=none composer=held-1 suspended=false switcherOnly=false');
+
+    await act(() => {
+      seedBoard({ sessionId: null, resumable: true, paused: true, pausedSessionId: 'held-1', spawnProgress: 'Resuming session...' });
+    });
+
+    expect(footerLabel()).toBe('mode=chat session=none composer=none suspended=false switcherOnly=true');
+    expect(chatPaneLabel()).toBe('session=none empty=default');
+  });
+
+  /**
+   * The launch face's OTHER source. The test above labels the ROW, which
+   * `pausedComposerSessionId` already refuses (`hasSpawnLabel`), so the screen's
+   * own `!launchFace` gate never decides it. Here the row carries no label at
+   * all: the face comes from a labelled respawn in the activity store, which
+   * `cardSessionDisplay` turns into `preparing` by itself. On a screen opened
+   * fresh `displaySessionId` is null, so that respawn is the launch respawn and
+   * `!launchFace` is the only thing standing between the row's `held-1` and the
+   * composer.
+   *
+   * Mutation seen failing: dropping `&& !launchFace` from `heldSessionId` in
+   * SessionScreen (`mode === 'chat' ? ...`): the footer read `composer=held-1`
+   * with `switcherOnly=false` where the launch face's switcher alone was
+   * expected.
+   */
+  it('takes the composer and its line away when a labelled respawn, not the row, is the launch face', async () => {
+    seedBoard({ sessionId: null, resumable: true, paused: true, pausedSessionId: 'held-1' });
+    await renderSessionScreen();
+    await fireEvent.press(screen.getByTestId('stub-mode-chat'));
+    // The control: the same screen holds a composer until the respawn lands, so
+    // the assertions below cannot pass by never having had one.
+    expect(footerLabel()).toBe('mode=chat session=none composer=held-1 suspended=false switcherOnly=false');
+    expect(chatPaneLabel()).toBe(`session=none empty=${PAUSED_LINE}`);
+
+    await act(() => {
+      useActivityStore.setState({
+        respawnByTaskId: {
+          'task-1': { label: 'Resuming session...', reportedAt: Date.now(), endedSessionId: 'held-1' },
+        },
+      });
+    });
+
+    expect(footerLabel()).toBe('mode=chat session=none composer=none suspended=false switcherOnly=true');
+    expect(chatPaneLabel()).toBe('session=none empty=default');
+  });
+
+  /**
+   * A Stop is an end the desktop offers no Resume for, so it holds no message,
+   * and its row names no session (To Do is the same). Today's footer: inert in
+   * the quiet window, the switcher alone past it.
    */
   it('keeps the inert, then switcher-only, footer for an end that is not a resumable pause', async () => {
     jest.useFakeTimers();
@@ -946,6 +1127,25 @@ describe('SessionScreen Chat composer on a paused task', () => {
 
     await passQuietDeadline();
     expect(footerLabel()).toBe(SWITCHER_ONLY_ON_SESS_1);
+  });
+
+  /**
+   * A paused task sitting in Done: its row reads paused and names its session,
+   * since the desktop derives one from the other whatever the column, but the
+   * desktop refuses a hold there and offers no Resume. So naming a session is
+   * not enough: `resumable` is what decides.
+   *
+   * Mutation seen failing: dropping the `resumable !== true` check in
+   * pausedComposerSessionId: the composer went live on it (`composer=held-1`
+   * where `composer=none` was expected), and a send would read as a refusal.
+   */
+  it('offers no composer on a paused row the desktop offers no Resume for, though it names the session', async () => {
+    seedBoard({ sessionId: null, resumable: false, paused: true, pausedSessionId: 'held-1' });
+    await renderSessionScreen();
+    await fireEvent.press(screen.getByTestId('stub-mode-chat'));
+
+    expect(footerLabel()).toBe('mode=chat session=none composer=none suspended=false switcherOnly=false');
+    expect(chatPaneLabel()).toBe('session=none empty=default');
   });
 
   /**
@@ -968,7 +1168,7 @@ describe('SessionScreen Chat composer on a paused task', () => {
     expect(footerLabel()).toBe(LIVE_ON_SESS_1);
 
     await act(() => {
-      seedBoard({ sessionId: null, resumable: true, paused: true, spawnProgress: 'Resuming session...' });
+      seedBoard({ sessionId: null, resumable: true, paused: true, pausedSessionId: 'sess-1', spawnProgress: 'Resuming session...' });
     });
     expect(footerLabel()).toBe(INERT_ON_SESS_1);
 

@@ -1110,23 +1110,31 @@ while the label shows, only fails a label that clears onto neither a bind nor a 
 left a Resume column). The terminal lens shows the
 failure line in its Resume panel and the other two lenses in the footer, above the switcher, both
 in the muted caption the desktop uses for that line. There is no toast: the desktop also raises
-one, and the phone deliberately does not. A screen with no session keeps that switcher (the footer is the switcher alone), so a paused task
-opened on a remembered Chat lens, which has no session to read and says so, can still reach its
-Resume panel and its diff.
+one, and the phone deliberately does not. A screen with no session keeps that switcher (the footer
+is the switcher alone unless the desktop names a paused session to hold for, below), so a paused
+task opened on a remembered Chat lens, which has no session to read and says so, can still reach
+its Resume panel and its diff.
 
-**Chat on a paused task** (protocol 0.26.0). A `send-user-message` to a task's session with no
-running agent (paused, queued or exited) is HELD by the desktop for the task's next agent and
-answered `delivered: true`; nothing on the phone shows the hold. A queued session and an
-idle-timeout suspend keep the row's `session_id`, so their composer already sends. A desktop pause
-clears it, but the paused session stays in the desktop's registry for the rest of that desktop
-run, so a screen that was bound when its task paused keeps its Chat composer live on that session
-(`pausedComposerSessionId` in `sessionResolution.ts`, while the row reads `resumable` with no spawn
-label) instead of going inert and then switcher-only with the quiet window. Terminal and Changes
-are unchanged. That id feeds the composer only, never the screen's binding, the stream or the
-resume watch. A screen opened fresh on an already-paused task holds no id, so its footer stays the
-switcher alone until the board row names the paused session, a desktop protocol addition; and
-after a desktop restart the paused session is re-registered under a new id, so a send to the
-remembered one is refused and reads "Session ended", as any refused send does. While the task reads as preparing and no quiet window
+**Chat on a paused task** (protocol 0.26.0, named by 0.27.0). A `send-user-message` to a task's
+session with no running agent (paused, queued or exited) is HELD by the desktop for the task's next
+agent and answered `delivered: true`. That is all the sender sees until that agent starts: the
+message then lands as its opening turn in the transcript, and several held messages land as one
+numbered turn. A queued session keeps the row's `session_id`, so its composer already sends. A desktop pause clears
+it (the idle timeout included, which pauses the way the Pause button does), and the row names the
+paused session in `paused_session_id` instead. That is the desktop registry's id, which a desktop
+restart replaces; the new id reaches the phone as a board event, so the next snapshot carries it.
+While the row reads `resumable` with no spawn label, the Chat composer stays live on that id
+(`pausedComposerSessionId` in `sessionResolution.ts`), on a screen opened fresh as well as one bound
+when the task paused, instead of going inert and then switcher-only with the quiet window. With no
+session on screen to read, Chat's empty state says "Paused. Messages wait for the next agent." in
+place of "No active session for this task", which would contradict the composer under it. Terminal
+and Changes are unchanged. `SessionInputBar` takes the id as `composerSessionId`, apart from its
+`sessionId`, and it feeds the composer only, never the screen's binding, the stream or the resume
+watch. The row is the only source, and a session the screen remembers is deliberately not a
+fallback, because the phone ships ahead of the desktop: v0.51.0 (protocol 0.25.0) sends no id and
+refuses the send, so its null leaves the footer as it was in app v1.3.0. A send that lands between a
+desktop restart and the next snapshot names the replaced id and reads "Session ended", as any
+refused send does, and the next one holds. While the task reads as preparing and no quiet window
 covers the pane, the session screen draws the same `SessionSwapVeil` in its waiting face (the
 desktop's launch overlay, the screen's "launch face", with no deadline and the footer down to the
 switcher): on a screen that never bound a session (opened from a sessionless Paused card, or onto a
