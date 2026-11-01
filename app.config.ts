@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
   owner: 'kangentic',
-  version: '1.3.0',
+  version: '1.4.0',
   orientation: 'portrait',
   scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
@@ -238,7 +238,22 @@ const config: ExpoConfig = {
     // an 80-column grid against the desktop's 210x48 park. No native
     // dependency moved since 1.2.1 (only the protocol pin), but there is no
     // OTA path, so it is a new build.
-    buildNumber: '21',
+    //
+    // 22 is the v1.4.0 release cut 2026-11-01, for an App Store submission. 21
+    // is spent, tagged ios-b21, and 1.3.0 is live. The iOS-only items are in
+    // the push path: the Notification Service Extension takes the wait kind
+    // titles ("Agent has a question", "Agent needs your approval") and a Notify
+    // me push's own Title and Body (protocol 0.26.0), both unproven on
+    // hardware, and foregroundPresentation shows a Notify me push while the app
+    // is open. The rest is cross-platform: the speech bubble, crested shield
+    // and envelope on the board card, the Agents feed and the session header,
+    // and chat on a paused task, held by the desktop for the next agent and
+    // named by the board row's paused_session_id (0.27.0). Desktop v0.51.0
+    // speaks 0.25.0, so the shield, the new titles, Notify me and paused chat
+    // wait for the next desktop. No native dependency moved since 1.3.0 (only
+    // the protocol and branding pins), but there is no OTA path, so it is a new
+    // build.
+    buildNumber: '22',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
@@ -491,13 +506,18 @@ const config: ExpoConfig = {
     // Android-only; it is the cross-platform list on ios.buildNumber's 21
     // above.
     //
+    // 20 is the v1.4.0 release cut 2026-11-01, going to the PRODUCTION track as
+    // a full release. 19 is spent, tagged android-vc19. Nothing in it is
+    // Android-only; it is the cross-platform list on ios.buildNumber's 22
+    // above.
+    //
     // Keep this list current on the way OUT of a release, not the way in. The
     // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
     // into 2026-07-28 and cost a failed release run, because build 3 had in
     // fact already been uploaded. scripts/checkPlayVersionCode.mjs catches a
     // duplicate, but only in the submit job, which is after the ~25 minute
     // build AND after the approval gate.
-    versionCode: 19,
+    versionCode: 20,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
