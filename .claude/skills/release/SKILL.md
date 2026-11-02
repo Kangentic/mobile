@@ -39,7 +39,9 @@ but `/release` never does it.
 release's GitHub environment gates to be approved by you (Step 5). Otherwise ask once, now, with
 `AskUserQuestion`: "May I approve the store gates for this release?" with three answers:
 **Approve all gates** / **Uploads only, I'll approve App Review** / **I'll approve them myself**.
-The answer covers **this invocation only** and never carries over to a later `/release`.
+The answer covers **this invocation only** and never carries over to a later `/release`. When the
+release changes `store/screenshots/ios/`, say in the question that stage 2 waits for the user's
+upload whichever answer they pick (Step 5 has the reason).
 
 Then check the resolved release against the table below and **stop with an explanation if it is
 blocked.**
@@ -365,6 +367,11 @@ group cancels an in-progress run, so a second dispatch cancels the one parked at
 submitted by hand with Add for Review.
 - **"Approve all gates":** approve stage 2 once stage 1 is green and its report shows nothing
   missing. If something is missing, stop and tell the user instead; stage 2 would refuse anyway.
+  **A release that changed `store/screenshots/ios/` also waits for the user's word that the new
+  frames are uploaded.** Stage 1 cannot tell: a version created through the API inherits the
+  previous version's screenshots, so the report counts 7 present while the listing still shows the
+  old frames, and they lock once the version reads `WAITING_FOR_REVIEW` (found on v1.4.0,
+  2026-11-01). Ask with `AskUserQuestion`, naming the folder and the 6.9-inch slot.
 - **"Uploads only":** approve `google-play` and the first `app-store-connect` gate, then tell the
   user that `Submit (App Review)` is theirs.
 
