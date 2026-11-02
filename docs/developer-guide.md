@@ -1433,6 +1433,11 @@ App Review Information (1.2.0 arrived with 7 screenshots, contact details and no
 carries the App Review Information over itself when a version lacks it (2026-10-18), as a safety
 net, so a release cannot stop at stage 2 for a human to retype it.
 
+**That inheritance means stage 1's screenshot count cannot see a stale listing.** It reports 7
+present whether they are this release's frames or the last one's, and they lock once the version
+reads `WAITING_FOR_REVIEW`. So a release that changed `store/screenshots/ios/` holds stage 2 until
+the user confirms the upload, whichever gate answer they gave (`/release`, Step 5).
+
 While the run waits at the second gate, `gh run view --log` refuses to print anything. Read the
 finished `Submit (TestFlight)` job's log, stage 1's report included, with
 `gh api repos/Kangentic/mobile/actions/jobs/<job id>/logs`.
