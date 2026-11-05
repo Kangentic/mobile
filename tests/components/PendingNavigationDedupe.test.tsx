@@ -15,10 +15,10 @@
  * expo-router's `stackRouterOverride` on top) with the payload shape
  * `getNavigateAction` builds for `/task/[taskId]` (name, params, singular).
  *
- * Why the reducer and not `renderRouter`: expo-router's testing library never
- * reports its navigation container ready under this repo's jest setup (even a
- * bare `<Stack />` throws "Attempted to navigate before mounting the Root
- * Layout"), so a rendered test could not reach the reducer at all.
+ * Why the reducer and not `renderRouter`: on SDK 57 expo-router's testing library
+ * never reported its navigation container ready under this repo's jest setup, so
+ * a rendered test could not reach the reducer at all, and the reducer is still
+ * the narrowest place to pin this.
  *
  * The PUSH cases are the control: they document the duplicate this change
  * removes, and they fail loudly if expo-router ever starts de-duplicating PUSH

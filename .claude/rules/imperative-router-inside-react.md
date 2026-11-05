@@ -10,30 +10,40 @@ paths:
 
 # Rule: only code inside the mounted navigator calls the imperative router
 
-`router.push` and `router.navigate` do not navigate. They append to
-expo-router's `routingQueue` and return (`expo-router/build/global-state/router.js`). The queue is
-drained inside a React effect in `NavigationContainerInner`
-(`expo-router/build/imperative-api.js`), where `getNavigateAction` calls `store.assertIsReady()`
-and throws *"Attempted to navigate before mounting the Root Layout component"* whenever no
-navigator child has mounted yet. `isReady()` is literally `listeners.focus[0] != null`, i.e. "a
-navigator has mounted and run its effect", not "the container exists".
+Everything in this section was read from expo-router 58's source, under `expo-router/build/`. The
+cold-start window has not been reproduced on 58, and no JS tier can reproduce it (see Enforcement).
 
-On a native cold start that window is real and routinely hit: `ExpoRoot` wraps its content in a
-`SafeAreaProvider` with no `initialMetrics`, and that provider renders **null children until the
-OS reports insets**, while the navigation container above it has already attached its ref. So a
-navigation enqueued before the first insets arrive is drained against a container that is mounted
-but not ready. The drain effect sits above every route error boundary, so the throw reaches the
-global handler and aborts the process. That was the iOS TestFlight cold-start crash on 0.6.3
-build 13 (a notification tap, 452 ms into the process). **A `try/catch` at the call site cannot
-help**, because the call itself never throws: the throw happens later, on a different stack. Two
-separate call sites shipped exactly that catch, each with a comment claiming it handled the very
-case it could not.
+The exported `router` does nothing useful until the navigation container commits. Its methods start
+as `unboundRouter`, and each one **throws synchronously**: *"The imperative router is unavailable
+before the first render has finished."* (`global-state/router.js`).
+`ImperativeRoutingQueueBridge`, rendered by `BaseNavigationContainer`, binds the real methods in a
+LAYOUT effect and puts `unboundRouter` back in its cleanup (`global-state/routingQueueContext.js`).
 
-The platforms differ only in how the same defect surfaces. `getInitialURLWithTimeout` is
-synchronous on iOS and a Promise on Android, so iOS mounts the container (ref set, not ready) and
-**throws**, while Android early-returns its `fallback` (ref null) and **silently drops the
-navigation**. An Android result therefore proves nothing about iOS here, and "it works on Android"
-is not evidence.
+Once bound, `router.push` and `router.navigate` still do not navigate. They add to a queue held in
+React state by `RoutingQueueProvider` and return. `RoutingQueueDrainer`, rendered after the
+container's children, processes it in a passive effect on a later commit. A throw while dispatching
+is caught there and becomes a `console.warn`, so that navigation is **silently lost in a release
+build**, and an error in the reducer surfaces during the next render, on a different stack from the
+call.
+
+A native cold start leaves the platforms in different states, and both are real.
+`getInitialURLWithTimeout` is synchronous on iOS and a Promise on Android, and
+`InitialStateNavigationContainer` suspends on that Promise. So on **Android** the container has not
+mounted, the router is unbound, and a call from outside React **throws at the call site**. On
+**iOS** the container mounts at once, so the same call enqueues, but `ExpoRoot`'s `SafeAreaProvider`
+sits inside the container with no `initialMetrics` and renders **null children until the OS reports
+insets**, so no navigator or route has mounted while the intent drains. An Android result therefore
+proves nothing about iOS here, and "it works on Android" is not evidence.
+
+**Why the rule exists.** Through SDK 57 the queue drained in a `NavigationContainerInner` effect that
+called `store.assertIsReady()` and threw *"Attempted to navigate before mounting the Root Layout
+component"*, above every route error boundary, so the throw reached the global handler and aborted
+the process. That was the iOS TestFlight cold-start crash on 0.6.3 build 13 (a notification tap,
+452 ms into the process). Two call sites shipped a `try/catch` that could not catch it, because the
+call itself never threw. SDK 58 removed that throw, and with it `isReady` (now `() => true`), which
+MOVED the failure rather than ending it: a stray call now fails at the call site on Android and can
+vanish into a `console.warn` on iOS, and neither is a tap that reaches its screen. A `try/catch` at
+the call site still does not make the navigation happen, so it is still the wrong fix.
 
 ## The rule
 
@@ -45,17 +55,15 @@ is not evidence.
   `PendingNavigationRunner`, rendered in `app/_layout.tsx` as a sibling of the root `Stack`
   immediately after it, performs it from inside React.
 - **Keep the runner a descendant of the navigation container, rendered after the navigator.** Its
-  correctness comes from tree position, and from two facts: expo-router's drain effect lives
-  further up the tree, so it runs after the navigator's own effect in the same commit; and passive
-  effects flush child-first and in sibling order, so a sibling placed after `<Stack>` runs once
-  the navigator has registered its focus listener. Moving the runner above the navigator
-  reintroduces the crash. It is NOT a child of `<Stack>` and must not become one - `<Stack>`
-  children are route declarations.
-- **Do not add a `navigationRef.isReady()` guard to the runner.** It reads `false` there and
-  always will: react-navigation registers the focus listener `isReady()` tests in a PASSIVE effect
-  (`useFocusedListenersChildrenAdapter`) on the root navigator, an ANCESTOR of the root layout, and
-  passive effects run child-first. A blocking guard would defer with no retry signal and drop the
-  navigation. This looks like an obvious safety check and is a bug.
+  correctness comes from tree position: the bridge binds the router in a layout effect, every
+  layout effect in a commit runs before any passive effect, and a descendant of the container
+  cannot commit before the container does. So the runner's passive effect never sees the unbound
+  router, on either platform. Moving the runner above the container reintroduces the throw. It is
+  NOT a child of `<Stack>` and must not become one - `<Stack>` children are route declarations.
+- **Do not add a `navigationRef.isReady()` guard to the runner.** It is inert: since SDK 58
+  `isReady` is `() => true` (`BaseNavigationContainer.js`), so it would guard nothing while reading
+  like a safety check. (On SDK 57 it was worse, reading `false` at the runner and dropping the
+  navigation.)
 - **Consume the slot inside the effect that performs the navigation**, so a remount cannot perform
   it twice. The extra render with a null value is intended. **Perform the value the consume
   RETURNS, never the value closed over by the render**: a newer intent published between that
@@ -83,10 +91,10 @@ is not evidence.
   so a broken glob cannot pass vacuously.
 - **Test (live now):** `tests/components/PendingNavigationRunner.test.tsx` pins that one publish
   performs exactly once, survives a remount, and works both when published before mount
-  (cold start) and while already mounted (warm). Note the crash itself is NOT reproducible at any
-  JS tier: expo-router supplies `INITIAL_METRICS` when `NODE_ENV === 'test'`, so the
-  SafeAreaProvider gate that opens the window does not exist under jest. The tests pin the
-  invariant, not the crash.
+  (cold start) and while already mounted (warm). Note the cold-start window is NOT reproducible at
+  any JS tier: expo-router supplies `INITIAL_METRICS` when `NODE_ENV === 'test'`, so the
+  SafeAreaProvider gate that opens it does not exist under jest. The tests pin the invariant, not
+  the failure.
 - **Review (live now):** the `expo-rn-reviewer` agent carries this rule as checklist item 10, so
   a call site the lint glob and the scan both miss is still caught at `/code-review` time. That
   backstop matters because a path-scoped rule loads when a matching file is READ, not when a new
