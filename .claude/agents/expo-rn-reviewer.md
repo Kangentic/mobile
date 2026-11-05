@@ -92,9 +92,10 @@ check its README or changelog for New Architecture / Expo SDK compatibility stat
     expo-notifications callback, a lifecycle manager, a store subscription - including via
     `require('expo-router')` or `await import('expo-router')`, which the ESLint ban cannot see.
     The fix is to publish to `src/navigation/pendingNavigation.ts`, never a try/catch at the call
-    site: `router.push` only enqueues, so it never throws where it is called. Also flag a
-    `navigationRef.isReady()` guard added to `PendingNavigationRunner` (it reads false there and
-    drops the navigation) and any move of that component above or inside the root `Stack`.
+    site: a catch stops the throw but the navigation still does not happen. Also flag a
+    `navigationRef.isReady()` guard added to `PendingNavigationRunner` (`isReady` is `() => true`
+    since SDK 58, so it guards nothing) and any move of that component above or inside the root
+    `Stack`.
 
 11. **Handled failures report through the door.** Against `crash-reporting-scope.md`: a new
     `catch` in a screen or component that shows the user a failure (an inline error note, an
