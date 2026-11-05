@@ -27,6 +27,7 @@ import {
   nseBuildSettings,
   nseBundleIdentifier,
   readAppDeploymentTarget,
+  requireAppDeploymentTarget,
   type XcodeProjectLike,
 } from '../../plugins/withIosNotificationServiceExtension';
 
@@ -259,11 +260,30 @@ describe('readAppDeploymentTarget', () => {
     expect(readAppDeploymentTarget(recording.project, APP_TARGET_NAME)).toBe('16.4');
   });
 
-  it('returns null when the app target carries none, so the caller can fall back', () => {
+  it('returns null when the app target carries none, so the caller can refuse', () => {
     const recording = createRecordingProject();
     delete recording.configurations['APP-DEBUG'].buildSettings?.IPHONEOS_DEPLOYMENT_TARGET;
     delete recording.configurations['APP-RELEASE'].buildSettings?.IPHONEOS_DEPLOYMENT_TARGET;
     expect(readAppDeploymentTarget(recording.project, APP_TARGET_NAME)).toBeNull();
+  });
+});
+
+describe('requireAppDeploymentTarget', () => {
+  it('hands back the version the app target carries', () => {
+    const recording = createRecordingProject();
+    expect(requireAppDeploymentTarget(recording.project, APP_TARGET_NAME)).toBe('16.4');
+  });
+
+  /**
+   * The extension has to mirror the app, so with nothing to mirror prebuild stops.
+   * A hardcoded fallback here read 15.1 long after the template moved to 16.4, and
+   * nothing in CI reads the extension's target, so it would never have been seen.
+   */
+  it('refuses rather than guessing a version when the app target carries none', () => {
+    const recording = createRecordingProject();
+    delete recording.configurations['APP-DEBUG'].buildSettings?.IPHONEOS_DEPLOYMENT_TARGET;
+    delete recording.configurations['APP-RELEASE'].buildSettings?.IPHONEOS_DEPLOYMENT_TARGET;
+    expect(() => requireAppDeploymentTarget(recording.project, APP_TARGET_NAME)).toThrow(/IPHONEOS_DEPLOYMENT_TARGET/);
   });
 });
 

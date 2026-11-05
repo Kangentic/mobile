@@ -22,8 +22,9 @@ import {
 
 /**
  * Mirrors the shape of the Podfile expo prebuild generates for this app
- * (captured from build-ios.yml run 31909442213): a two-space-indented
- * post_install block whose first statement is react_native_post_install.
+ * (captured from build-ios.yml run 31909442213, refreshed against the SDK 58
+ * template): a two-space-indented post_install block whose first statement is
+ * react_native_post_install.
  */
 const GENERATED_PODFILE = `require 'json'
 podfile_properties = JSON.parse(File.read(File.join(__dir__, 'Podfile.properties.json'))) rescue {}
@@ -36,6 +37,7 @@ target 'Kangentic' do
       installer,
       config[:reactNativePath],
       :mac_catalyst_enabled => false,
+      :ccache_enabled => ccache_enabled?(podfile_properties),
     )
   end
 end
