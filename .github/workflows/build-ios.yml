@@ -95,7 +95,7 @@ env:
   # gets attributed to iOS when the variable that actually differed was the tool.
   # tests/unit/ciSafeMaestroFlows.test.ts asserts the two workflows agree, so
   # bumping means editing both plus .claude/rules/e2e-maestro-runs.md together.
-  MAESTRO_VERSION: '2.7.0'
+  MAESTRO_VERSION: '2.12.1'
   MAESTRO_CLI_NO_ANALYTICS: '1'
 
 jobs:
@@ -674,7 +674,7 @@ jobs:
 
       - name: Upload the Maestro iOS output
         if: ${{ inputs.screenshots == 'true' && !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ios-screenshot-maestro-${{ github.sha }}
           path: ${{ runner.temp }}/maestro-ios
@@ -693,7 +693,7 @@ jobs:
       # on its first assertion it answers "did the app even render?" outright.
       - name: Upload the Metro log
         if: ${{ inputs.screenshots == 'true' && !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ios-screenshot-metro-log-${{ github.sha }}
           path: |
@@ -704,7 +704,7 @@ jobs:
 
       - name: Upload the App Store screenshots
         if: ${{ inputs.screenshots == 'true' && !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ios-store-screenshots-${{ github.sha }}
           path: ${{ runner.temp }}/ios-screenshots
@@ -1266,16 +1266,19 @@ jobs:
       - name: Generate the native iOS project
         run: npx expo prebuild --platform ios --no-install
 
-      # Keyed on the Podfile.lock that prebuild just generated, so the cache is
-      # only reused when the resolved pod set is byte-identical. pod install on
-      # an Expo project is minutes of downloads.
+      # Keyed on package-lock.json, because the pod set follows the native
+      # dependencies and that file exists at this step. It used to hash
+      # ios/Podfile.lock, which only `pod install` below writes, so hashFiles
+      # returned nothing, the key was the literal `macOS-pods-`, and one frozen
+      # tree restored on every build. pod install on an Expo project is minutes
+      # of downloads, and it still reconciles whatever a restore-key brings back.
       - name: Cache CocoaPods
         uses: actions/cache@v6
         with:
           path: |
             ios/Pods
             ~/Library/Caches/CocoaPods
-          key: ${{ runner.os }}-pods-${{ hashFiles('ios/Podfile.lock') }}
+          key: ${{ runner.os }}-pods-${{ hashFiles('package-lock.json') }}
           restore-keys: ${{ runner.os }}-pods-
 
       - name: Install pods
