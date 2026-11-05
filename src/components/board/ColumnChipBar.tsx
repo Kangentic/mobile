@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { ScrollView, StyleSheet } from 'react-native';
+import { ScrollView, StyleSheet, type ScrollViewInstance } from 'react-native';
 import type { BoardColumnWire } from '@kangentic/protocol';
 import { useTheme } from '@/components';
 import { ColumnChip } from './ColumnChip';
@@ -22,7 +22,7 @@ export interface ColumnChipBarProps {
  */
 export function ColumnChipBar({ columns, taskCounts, activeIndex, onSelect }: ColumnChipBarProps): React.JSX.Element {
   const theme = useTheme();
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   const chipOffsetsRef = useRef<Map<number, number>>(new Map());
 
   useEffect(() => {

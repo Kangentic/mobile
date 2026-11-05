@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, TextInput, type TextInputProps } from 'react-native';
+import { StyleSheet, TextInput, type TextInputInstance, type TextInputProps } from 'react-native';
 import { useTheme } from './theme/ThemeProvider';
 
 export interface TextFieldProps extends TextInputProps {
@@ -14,7 +14,7 @@ export interface TextFieldProps extends TextInputProps {
  * composers can manage focus imperatively. The iOS keyboard defaults to the
  * dark appearance to match the dark-only theme (callers can still override).
  */
-export const TextField = React.forwardRef<TextInput, TextFieldProps>(function TextField(
+export const TextField = React.forwardRef<TextInputInstance, TextFieldProps>(function TextField(
   { testID, mono = false, multiline = false, keyboardAppearance = 'dark', style, ...rest },
   ref,
 ): React.JSX.Element {

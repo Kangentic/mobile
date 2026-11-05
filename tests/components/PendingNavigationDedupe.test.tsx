@@ -25,15 +25,19 @@
  * too (at which point the comment in PendingNavigationRunner is stale).
  */
 import { StackRouter } from 'expo-router/build/layouts/StackClient';
+import { createInitialState } from 'expo-router/build/react-navigation/core/createInitialState';
+import { ROOT_CHAIN } from 'expo-router/build/react-navigation/routers/stateKeys';
+import { isActionHandled } from 'expo-router/build/react-navigation/routers/utils';
 
 const HOME_ROUTE = '(tabs)';
 const TASK_ROUTE = 'task/[taskId]/index';
 
 const routerConfiguration = {
   routeNames: [HOME_ROUTE, TASK_ROUTE],
-  routeParamList: {},
   routeGetIdList: {},
 };
+
+type StackRouterState = Parameters<ReturnType<typeof StackRouter>['getStateForAction']>[0];
 
 type TaskAction = {
   type: 'PUSH' | 'NAVIGATE';
@@ -60,17 +64,21 @@ interface StackState {
 
 /**
  * Applies each action in order, starting from the stack's initial (Home) state,
- * and returns the state after EVERY action. One router run, so route keys (random
+ * and returns the state after EVERY action. One router run, so route keys (minted
  * per new route) can be compared between steps.
+ *
+ * Since SDK 58 a router no longer builds its own initial state: the container
+ * seeds every navigator globally, so this seeds through that same function
+ * rather than a hand-written state that could drift from what the app starts on.
  */
 function applyActionsStepwise(actions: TaskAction[]): StackState[] {
   const router = StackRouter({});
-  let state = router.getInitialState(routerConfiguration);
+  let state = createInitialState<StackRouterState>({ routeNames: routerConfiguration.routeNames, parentChain: ROOT_CHAIN });
   const states: StackState[] = [];
   for (const action of actions) {
-    const next = router.getStateForAction(state, action, routerConfiguration);
-    if (next === null) throw new Error(`the stack router refused ${action.type}`);
-    state = next as typeof state;
+    const result = router.getStateForAction(state, action, routerConfiguration);
+    if (!isActionHandled(result)) throw new Error(`the stack router refused ${action.type}`);
+    state = result.state;
     states.push(state as unknown as StackState);
   }
   return states;
@@ -99,7 +107,7 @@ describe('opening a task screen that is already on top', () => {
 
   /**
    * The same KEY is what keeps React from unmounting and remounting the screen.
-   * Keys are random per new route, so this compares within one router run.
+   * Keys are minted per new route, so this compares within one router run.
    */
   it('NAVIGATE keeps the existing route key, so the screen does not remount', () => {
     const [opened, reopened] = applyActionsStepwise([

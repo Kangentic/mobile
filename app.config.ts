@@ -674,7 +674,7 @@ const config: ExpoConfig = {
           // Without these, a minified Java/Kotlin stack frame carries a line
           // number that resolves to NOTHING. R8 renumbers lines, and for a
           // class kept wholesale by a library's consumer rules (for example
-          // expo-task-manager's `-keep class expo.modules.taskManager.** {*;}`)
+          // expo-task-manager's `-keep class expo.modules.taskmanager.** {*;}`)
           // it records NO line mapping for that class at all - so the uploaded
           // mapping.txt cannot translate the frame either.
           //
