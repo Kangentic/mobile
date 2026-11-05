@@ -193,9 +193,10 @@ src/
                   #   publishes a pending navigation and never navigates itself
   navigation/      # The pending-navigation slot + PendingNavigationRunner: the only code that
                   #   performs a navigation published from outside React. Exists because
-                  #   expo-router's imperative router enqueues rather than navigates, and the
-                  #   queue drains in an effect that throws fatally when no navigator has
-                  #   mounted (the iOS 0.6.3 build 13 cold-start crash)
+                  #   expo-router's imperative router throws until the navigation container
+                  #   commits and only enqueues after that, so a call from outside React
+                  #   fails or is lost (fatal through SDK 57: the iOS 0.6.3 build 13
+                  #   cold-start crash)
   state/           # Zustand stores (activity/board/transcript/diff/channel/settings/readingView/
                   #   resume/commandTerminal/workflow) + the non-Zustand terminalFeed PTY ring
                   #   buffers
@@ -1324,27 +1325,25 @@ that names a task; it used to force Chat. A cold-launch tap can mount the screen
 hydrated that choice, so the screen adopts it when hydration lands unless the user has already
 switched lens. The
 desktop-revocation reset in `connectionManager.ts` publishes a `reset-to-root` intent through the
-same slot, for the same reason. That split is not stylistic. `router.push` does not navigate; it
-appends to expo-router's routing queue,
-which is drained by a React effect in `NavigationContainerInner` that calls
-`store.assertIsReady()` and throws *'Attempted to navigate before mounting the Root Layout
-component'* when no navigator child has mounted yet. On a native cold start that window is real:
-expo-router wraps its content in a `SafeAreaProvider` with no `initialMetrics`, and that provider
-renders null children until the OS reports insets, while the navigation container above it has
-already attached its ref. The drain effect sits above every route error boundary - including the
-`AppErrorBoundaryScreen` added alongside this fix, which sits lower in the tree - so the throw
-reaches the global handler and aborts the process anyway: the iOS TestFlight cold-start crash on
-0.6.3 build 13. A `try/catch` around `push` cannot help, because `push` itself never throws.
+same slot, for the same reason. That split is not stylistic. Since SDK 58 the imperative `router`
+throws *'The imperative router is unavailable before the first render has finished'* until the
+navigation container commits, and after that `router.push` still does not navigate: it adds to a
+queue in React state, and a failure draining that queue is caught and becomes a `console.warn`.
 
-The platforms differed only in how the same defect surfaced: `getInitialURLWithTimeout` is
-synchronous on iOS and a Promise on Android, so iOS mounted the container (ref set, not ready)
-and threw, while Android early-returned its fallback (ref null) and **silently dropped the tap**
-instead. Both are fixed by consuming from inside the tree. There is deliberately no
-`navigationRef.isReady()` guard in the consumer: react-navigation registers the focus listener
-that `isReady()` tests in a *passive* effect on an ancestor of the root layout, so it still reads
-false at the consumer's own effect: a blocking guard there would defer with no retry signal and
-drop the tap. Correctness comes from tree position, since the drain runs after the navigator's
-effect in the same commit.
+On a native cold start the platforms land on different sides of that. `getInitialURLWithTimeout`
+is synchronous on iOS and a Promise on Android, so the Android container suspends and a call from
+outside React throws at the call site, while on iOS the call enqueues before the `SafeAreaProvider`
+inside the container has rendered anything, because it waits for the OS to report insets. Through
+SDK 57 that iOS case threw from the drain effect, above every route error boundary, including the
+`AppErrorBoundaryScreen` added alongside this fix, and aborted the process: the iOS TestFlight
+cold-start crash on 0.6.3 build 13. A `try/catch` around `push` does not help, because stopping a
+throw does not perform the navigation.
+
+Both platforms are fixed by consuming from inside the tree. There is deliberately no
+`navigationRef.isReady()` guard in the consumer: since SDK 58 `isReady` is `() => true`, so it
+would guard nothing. Correctness comes from tree position: the container binds the router in a
+layout effect, every layout effect in a commit runs before any passive effect, and the consumer is
+a descendant of the container, so its passive effect never sees the unbound router.
 
 **Android has a third delivery path, and it was missing until 2026-10-03.** notifee's press
 listeners (`onForegroundEvent`, `onBackgroundEvent`) fire only when the process is already alive,

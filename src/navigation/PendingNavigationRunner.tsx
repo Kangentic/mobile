@@ -14,20 +14,17 @@ import {
  * may call the router directly.
  *
  * WHY THERE IS NO `navigationRef.isReady()` GUARD HERE. It would look like the
- * obvious safety check and it would break this: react-navigation registers the
- * focus listener that `isReady()` tests inside a PASSIVE effect
- * (useFocusedListenersChildrenAdapter), on the root navigator, which is an
- * ANCESTOR of the root layout. Passive effects run child-first, so at this
- * component's effect `isReady()` is still false on the very commit the
- * navigator mounts - a blocking guard here would defer with no retry signal and
- * silently drop the navigation.
+ * obvious safety check and guard nothing: since SDK 58 `isReady` is `() => true`
+ * (BaseNavigationContainer.js).
  *
- * Calling the router here is nonetheless correct: expo-router's drain effect
- * lives further up the tree than this component, so it runs AFTER the
- * navigator's own effect in the same commit and re-checks readiness itself.
- * Correctness comes from tree position, not from a runtime predicate - which is
- * why this must stay a descendant of the navigation container, rendered after
- * the navigator itself.
+ * Calling the router here is correct because of where this sits. The router
+ * throws until the navigation container binds it, which ImperativeRoutingQueueBridge
+ * does in a LAYOUT effect. Every layout effect in a commit runs before any passive
+ * effect, and a descendant of the container cannot commit before the container
+ * does, so this component's effect never sees the unbound router. Correctness
+ * comes from tree position, not from a runtime predicate - which is why this must
+ * stay a descendant of the navigation container, rendered after the navigator
+ * itself.
  */
 
 /**
@@ -41,8 +38,8 @@ function getServerPendingNavigation(): null {
 
 function performPendingNavigation(navigation: PendingNavigation): void {
   if (navigation.kind === 'reset-to-root') {
-    // dismissAll enqueues a POP_TO_TOP, which the drain dispatches without the
-    // readiness assertion; navigate is the call that would have thrown.
+    // Two intents, drained together and in this order: pop to the root, then
+    // navigate to it.
     if (router.canDismiss()) router.dismissAll();
     router.navigate('/');
     return;
@@ -69,12 +66,13 @@ function performPendingNavigation(navigation: PendingNavigation): void {
     });
     return;
   }
-  // NAVIGATE, not push. In expo-router 57 a PUSH with no getId always appends a
-  // route, so a tap for the task already on top stacked a second session screen
-  // on the same session. NAVIGATE to the same [taskId] on top replaces that
-  // route's params and keeps its key, so nothing remounts; a different taskId
-  // still appends (build/layouts/StackClient.js, the PUSH/NAVIGATE branch of the
-  // stack router override). Not dismissTo: it pops to the newest route of that
+  // NAVIGATE, not push. A PUSH with no getId always appends a route, so a tap for
+  // the task already on top stacked a second session screen on the same session.
+  // NAVIGATE to the same [taskId] on top replaces that route's params and keeps
+  // its key, so nothing remounts; a different taskId still appends
+  // (build/layouts/stack-router.js, the PUSH/NAVIGATE branch of the stack router
+  // override, pinned by tests/components/PendingNavigationDedupe.test.tsx). Not
+  // dismissTo: it pops to the newest route of that
   // NAME, which can be another task's screen, and replaces Home when none
   // matches.
   //

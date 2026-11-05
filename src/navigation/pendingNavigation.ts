@@ -4,30 +4,26 @@
  *
  * WHY THIS EXISTS. expo-router's imperative `router` singleton is unsafe to
  * call from module scope, a bundle-entry handler, or any other non-React
- * caller. `router.push`/`navigate` do not navigate: they append to
- * expo-router's routingQueue and return. The queue is drained inside a React
- * effect in NavigationContainerInner, which calls `store.assertIsReady()` and
- * THROWS 'Attempted to navigate before mounting the Root Layout component'
- * when no navigator child has mounted yet.
+ * caller. Until the navigation container commits, every method THROWS 'The
+ * imperative router is unavailable before the first render has finished'. Once
+ * bound, `router.push`/`navigate` still do not navigate: they add to a queue in
+ * React state, and a failure draining it is caught and becomes a console.warn,
+ * so that navigation is silently lost.
  *
- * On a native cold start that window is real: expo-router wraps its content in
- * a SafeAreaProvider with no `initialMetrics`, and that provider renders null
- * children until the OS reports insets, while the navigation container above it
- * has already attached its ref. The drain effect sits above every route error
- * boundary, so the throw reaches the global handler and aborts the process.
- * That was the iOS TestFlight cold-start crash on 0.6.3 build 13, reached by a
+ * On a native cold start that window is real, and the platforms land on
+ * different sides of it: `getInitialURLWithTimeout` is synchronous on iOS and a
+ * Promise on Android, so on Android the container suspends and the call throws,
+ * and on iOS it enqueues while the SafeAreaProvider inside the container still
+ * renders nothing, waiting for the OS to report insets. Through SDK 57 the iOS
+ * side threw from the drain effect, above every route error boundary, and aborted
+ * the process: the iOS TestFlight cold-start crash on 0.6.3 build 13, reached by a
  * notification tap.
  *
- * A try/catch at the call site cannot help, because the call itself never
- * throws - the throw happens later, on a different stack. The only fix is to
- * not call the router until a navigator exists, which is what publishing here
- * and consuming in `PendingNavigationRunner` achieves.
- *
- * The platforms differed only in how the same defect surfaced:
- * `getInitialURLWithTimeout` is synchronous on iOS and a Promise on Android, so
- * iOS mounted the container (ref set, not ready) and threw, while Android
- * early-returned its fallback (ref null) and silently DROPPED the navigation.
- * Publishing here fixes both.
+ * A try/catch at the call site does not help: it stops a throw, but the navigation
+ * still does not happen. The only fix is to not call the router until a navigator
+ * exists, which is what publishing here and consuming in
+ * `PendingNavigationRunner` achieves. Publishing here fixes both platforms. See
+ * .claude/rules/imperative-router-inside-react.md.
  *
  * One slot, not a list: every intent here is "where the app should be now", so
  * a newer one supersedes an older one rather than replaying behind it.

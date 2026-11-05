@@ -217,12 +217,13 @@ export function registerNotificationTapHandlers(): void {
   //
   // `getLastNotificationResponseAsync` is DEPRECATED as of expo-notifications
   // 57.0.15 in favour of a synchronous `getLastNotificationResponse()`. Kept
-  // deliberately: the async form's rejection path is already handled and
-  // covered by a test, and switching to the sync form buys nothing today. The
+  // deliberately, and re-checked at SDK 58, where 58.1.8 still exports it: the
+  // async form's rejection path is already handled and covered by a test, and
+  // switching to the sync form buys nothing. Move when an SDK removes it. The
   // package also added `clearLastNotificationResponse()`, which looks like a
   // replacement for the identifier latch above and is not - the latch also
   // guards the warm listener's own duplicate deliveries, which clearing the
-  // cached response does not address. Revisit both at the next SDK bump.
+  // cached response does not address.
   Notifications.addNotificationResponseReceivedListener((response) => {
     void routeFromPushResponse(response);
   });

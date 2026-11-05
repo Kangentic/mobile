@@ -187,9 +187,8 @@ async function handleDesktopRevocation(controller: ChannelController): Promise<v
     // Published rather than navigated. This used to call
     // `router.navigate('/')` here behind a try/catch whose comment read
     // "navigator not mounted (a background revoke)" - the one case it could
-    // not actually handle. `navigate` only enqueues; the throw happens later
-    // inside expo-router's drain effect, on a different stack, above every
-    // error boundary. See src/navigation/pendingNavigation.ts.
+    // not actually handle, since a catch stops a throw but never performs the
+    // navigation. See src/navigation/pendingNavigation.ts.
     const { publishPendingNavigation } = await import('@/navigation/pendingNavigation');
     publishPendingNavigation({ kind: 'reset-to-root' });
   } finally {
