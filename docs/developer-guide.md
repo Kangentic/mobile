@@ -4370,6 +4370,14 @@ against 253-255 MB). The two readings of each arm agree and the arms do not over
 result on this rig. **Why is not known**: nothing here isolates it, so no cause is claimed, and an
 emulator number says nothing about a phone's absolute memory.
 
+**Visual comparison (measured).** The store capture flow on both SDKs on the iOS simulator, extended
+on throwaway refs to end on Settings and Devices, with a pixel diff per frame. SDK 58's transparent
+header default did not reach this app: nothing changes in the native header on Settings, Devices or
+the file diff, because `headerStyle.backgroundColor` is set stack-wide. Settings is identical on
+Android. Text rows sit fractionally taller on iOS under React Native 0.88, which accumulates to about
+3 points by mid-screen and needs an overlay to see. The one change a person would notice is the
+approval shield, which `@kangentic/branding` 2.13 redraws as quartered.
+
 ## Credential inventory
 
 Every credential this project uses, where it lives, and what happens if it is lost. No values here,
