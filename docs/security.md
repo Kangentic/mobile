@@ -264,9 +264,10 @@ per-device key expiry, so a lost phone is not trusted forever even if revocation
 - **No attestation requirement.** Play Integrity and App Attest would break sideloaded and
   F-Droid-style builds of an open-source app, and buy little against this threat model, so this
   app does not require them.
-- **Device-bound, not backup-portable.** The identity key (`src/pairing/deviceIdentity.ts`),
-  the pinned trust anchor (`src/pairing/trustAnchor.ts` - the desktop's static key, the relay
-  address under `trust.relayAddress`, and the paired-at timestamp), and the push secrets
+- **Device-bound, not backup-portable.** The identity key under `device.identity.sk`
+  (`src/pairing/deviceIdentity.ts`), the pinned trust anchor (`src/pairing/trustAnchor.ts` - the
+  desktop's static key under `trust.desktopStaticPublicKey`, the relay address under
+  `trust.relayAddress`, and the paired-at timestamp under `trust.pairedAt`), and the push secrets
   (`src/notifications/pushKeys.ts` and `src/notifications/sharedKeychain.ts` - the 32-byte
   push-decrypt key under `push.decrypt.key`, the last-registered Expo push token, itself a
   per-device bearer secret, under `push.expoToken.lastRegistered`, and `push.identity.pk`, a copy
@@ -279,6 +280,12 @@ per-device key expiry, so a lost phone is not trusted forever even if revocation
   exception to the sentence above: they pass no options at all, so they take
   expo-secure-store's default `WHEN_UNLOCKED` and ARE backup-portable. That is deliberate -
   they hold no secret - but it means "device-bound" describes the keys, not the whole store.
+
+- **An unpair attempts every delete.** Since expo-secure-store 58 an iOS delete rejects on any
+  Keychain status other than success or not-found, so a run of sequential deletes could stop at
+  the first failure and leave the rest of the keys behind. `clearPushRegistration` and
+  `TrustAnchorStore.clear` run every delete through `attemptAll` (`src/lib/attemptAll.ts`), which
+  finishes them all and rethrows the first error afterwards.
 
 - **Two accessibility classes, and the difference is deliberate.** The identity key, the trust
   anchor and the last-registered Expo push token use
