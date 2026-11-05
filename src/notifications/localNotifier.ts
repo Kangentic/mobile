@@ -1,4 +1,4 @@
-import { AppState, type AppStateStatus, type NativeEventSubscription } from 'react-native';
+import { AppState, type NativeEventSubscription } from 'react-native';
 import notifee from '@notifee/react-native';
 import type { PushCategory, PushSessionKind } from '@kangentic/protocol';
 import { useActivityStore, type SessionActivityEntry } from '@/state/activityStore';
@@ -145,7 +145,7 @@ function categoriesForTransition(entry: SessionActivityEntry, previousEntry: Ses
  */
 export function startLocalNotifier(): () => void {
   const lastFiredAtByKey = new Map<string, number>();
-  let appStateStatus: AppStateStatus = AppState.currentState;
+  let appStateStatus: typeof AppState.currentState = AppState.currentState;
   const appStateSubscription: NativeEventSubscription = AppState.addEventListener('change', (status) => {
     appStateStatus = status;
   });

@@ -117,8 +117,8 @@ patches/                      # patch-package patches, applied by the `postinsta
                               #   .github/actions/setup-node-deps/action.yml now hashes
                               #   `patches/**` too, so a patch change misses the cache on its own
                               #   and no lockfile bump is needed. Keep those two in step.
-                              #   expo-task-manager+57.0.22.patch guards a null HeadlessAppLoader
-                              #   at TaskService.executeTask:426, the one call site of three in
+                              #   expo-task-manager+58.0.13.patch guards a null HeadlessAppLoader
+                              #   at TaskService.executeTask:427, the one call site of three in
                               #   that file that did not. It returns null silently when the
                               #   WeakReference<Context> is empty, which is the normal state of a
                               #   headless FCM broadcast process, so a push to a KILLED app threw
@@ -133,7 +133,12 @@ patches/                      # patch-package patches, applied by the `postinsta
                               #   the call site was still unguarded every time, the hunk applied
                               #   unchanged, and the file was renamed (the
                               #   regenerate path, `patch-package expo-task-manager`, cannot run
-                              #   where install scripts are blocked). Do the same on every bump:
+                              #   where install scripts are blocked). SDK 58 (58.0.13) was the one
+                              #   exception: upstream renamed the Java package to lowercase
+                              #   `expo.modules.taskmanager`, so the hunk's paths and index line
+                              #   had to be regenerated, not just the filename. Windows hides a
+                              #   case-only path difference, so only Linux `npm ci` in CI proves
+                              #   it. The call site was still unguarded. Do the same on every bump:
                               #   check the call site, re-apply, rename in the SAME commit as the
                               #   lockfile, because CI's cache key hashes patches/** and a stale
                               #   name is a mismatch warning today and a silent drop when the

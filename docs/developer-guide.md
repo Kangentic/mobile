@@ -2733,10 +2733,12 @@ Finished task` line is the genuine no-delivery case.
 `AppLoaderProvider` resolves it by name from a manifest meta-data string through `Class.forName`, so
 minification sees an unused class. `expo-task-manager` then dereferenced the resulting null at
 `TaskService.executeTask:426`, the one call site of three in that file that is unguarded. The fix is
-the `-keep` rule in `app.config.ts` plus `patches/expo-task-manager+57.0.22.patch` (57.0.17 until the
+the `-keep` rule in `app.config.ts` plus `patches/expo-task-manager+58.0.13.patch` (57.0.17 until the
 SDK drift bump of 2026-09-18, then 57.0.19 until the one of 2026-10-03, then 57.0.21 until the one
-of 2026-11-05; the call site was still unguarded at all of them and the hunk applied unchanged each
-time), and the patch is
+of 2026-11-05, then 57.0.22 until SDK 58; the call site was still unguarded at all of them. The hunk
+applied unchanged each time until 58.0.13, where upstream renamed the Java package to lowercase
+`expo.modules.taskmanager`, so the patch's paths and index line were regenerated. The call site is
+line 427 there), and the patch is
 inert without the `expo.autolinking.buildFromSource` entries in `package.json`. `tests/unit/appConfigPushDelivery.test.ts`
 pins all three, because removing any one of them breaks push with a green pipeline and no other
 signal.

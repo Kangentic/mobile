@@ -850,10 +850,10 @@ describe('BoardScreen', () => {
     );
 
     const fabButton = screen.getByTestId('board-create-task');
-    const fabDiameterPoints = StyleSheet.flatten(fabButton.props.style as StyleProp<ViewStyle>).height as number;
-    const fabBottomOffset = StyleSheet.flatten(fabButton.parent?.props.style as StyleProp<ViewStyle>).bottom as number;
+    const fabDiameterPoints = StyleSheet.flatten(fabButton.props.style as StyleProp<ViewStyle>)?.height as number;
+    const fabBottomOffset = StyleSheet.flatten(fabButton.parent?.props.style as StyleProp<ViewStyle>)?.bottom as number;
     const listPaddingBottom = StyleSheet.flatten(screen.getByTestId('board-column-lane-todo-list').props.contentContainerStyle as StyleProp<ViewStyle>)
-      .paddingBottom as number;
+      ?.paddingBottom as number;
 
     // Sanity: both reads reached real numbers, so the comparison below is not NaN-vacuous.
     expect(fabDiameterPoints).toBeGreaterThan(0);

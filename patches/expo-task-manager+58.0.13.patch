@@ -1,11 +1,11 @@
-diff --git a/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskService.java b/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskService.java
-index de829ca..b5e0bdf 100644
---- a/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskService.java
-+++ b/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskManager/TaskService.java
-@@ -423,7 +423,23 @@ public class TaskService implements SingletonModule, TaskServiceInterface {
+diff --git a/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskmanager/TaskService.java b/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskmanager/TaskService.java
+index 94e95b2..6cfb410 100644
+--- a/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskmanager/TaskService.java
++++ b/node_modules/expo-task-manager/android/src/main/java/expo/modules/taskmanager/TaskService.java
+@@ -424,7 +424,23 @@ public class TaskService implements SingletonModule, TaskServiceInterface {
      }
      mTasksAndEventsRepository.putEventForAppScopeKey(appScopeKey, body);
-
+ 
 -    getAppLoader().loadApp(mContextRef.get(),
 +    // getAppLoader() is nullable and the other two call sites in this file
 +    // (isAppLoaded / invalidateAppRecord) both guard it; this one did not.
