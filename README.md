@@ -58,7 +58,7 @@ See [docs/architecture.md](docs/architecture.md) for the full design.
 
 | Layer | Choice |
 |---|---|
-| Framework | Expo SDK 55+, React Native New Architecture, TypeScript strict |
+| Framework | Expo SDK 58, React Native 0.88 New Architecture, TypeScript strict |
 | State | Zustand |
 | Lists | FlashList |
 | Crypto | `@kangentic/protocol` (pure TypeScript on `@noble/*`), react-native-get-random-values, @bacons/text-decoder |

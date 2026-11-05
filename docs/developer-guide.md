@@ -987,14 +987,16 @@ it maps. "Measured" in the last column refers to the release-build A/B under "De
 | `react-native-pager-view` | `9.0.7` | `10.0.0` | Android fixes the Board sits on: a mostly vertical drag goes to the scrollview under the pager (#1218), `setPage` reaches pages added in the same commit (#1212), a swiped pager reports settling until it rests (#1201), pages added to an empty pager show (#1197). 10 makes `PagerView` a function component (#1213); `useRef<PagerView>` and `setPage` both still hold. If 10.0.0 misbehaves on a device, fall back to the mapping | Board swiping on device, including vertical list drags and chip-to-page sync |
 | `@sentry/react-native` | `~8.28.0` | `~8.34.0` | 8.33 writes a fatal JS error to disk on Android before the process exits, where it was being lost (#6937), and stops importing expo-router's removed `router-store` module (#6923). Privacy posture kept: three data-adding default integrations dropped, and the installed default list is pinned by `crashReporting.test.ts`. The two pushes it gained here, `uiProfilingIntegration` and `jsHangTrackingIntegration`, are opt-in and this app sets neither option. 8.30's `device.connection_effective_type` (4g, 5g) is covered by "connection type" in the privacy policy | crash-test events read back on both platforms |
 
-**Held at the mapping, deliberately:** `react-native` and `react` (the SDK's backbone; RN 0.87+ is
-the SDK 58 upgrade), `@types/react` (must match runtime React 19.2), `jest` and `@types/jest` 30
-(jest-expo 57 is built on Jest 29 internals), `typescript` 7 (typescript-eslint supports `<6.1`),
-and ESLint 10 (not Expo-mapped, but `eslint-config-expo`'s `eslint-plugin-react` calls
-`context.getFilename()`, which ESLint 10 removed).
+**Held at the mapping, deliberately:** `react` 19.3.0 (19.3.1 is out and `react-native`'s peer range
+allows it, but `expo install --check` is a required gate and expects exactly 19.3.0, so it moves when
+the SDK does), `typescript` 7 (typescript-eslint supports `<6.1`, on `latest` and on canary), and
+ESLint 10 (not Expo-mapped, but `eslint-plugin-react` 7.37.5, which `eslint-config-expo` brings, peers
+up to `^9.7` and calls `context.getFilename()`, which ESLint 10 removed). `@notifee/react-native`
+stays on 9.1.8, the final release of an archived package, which `npm outdated` cannot show: swapping
+it for a fork is a trust decision for a person.
 
 **GitHub Actions are kept off Node 20**, which GitHub is already force-running on Node 24 and will
-eventually remove. `actions/setup-java@v6`, `android-actions/setup-android@v4` and
+eventually remove. `actions/setup-java@v5` (since v6), `android-actions/setup-android@v4` and
 `gradle/actions/setup-gradle@v5` were the last three declaring `node20`. Two notes on those bumps:
 
 - **`setup-gradle` is on v5 and must not be bumped to v6 casually.** v6 extracted this action's
@@ -4248,6 +4250,57 @@ order with the host busier, read `r8` 19.5% and 28%, `deps` 34.5% and 43.5%, `ba
 17.5%. The two rounds disagree about the ordering, and each window's own range ran from about
 12% to 56%. Frame counts were flat at about 55 a second in every arm (the Thinking rows'
 spinners), so this screen still draws continuously whatever the Reanimated version.
+
+### Expo SDK 58 upgrade, 2026-11 (task #140)
+
+Task #140 took Expo SDK 58, React Native 0.88.1 and AGP 9. This records what was MEASURED. **Every
+comparison here is across two builds**, so it is a cross-build A/B by necessity: a dependency move
+cannot be toggled in one process. Both arms are x86_64 release builds with the connection trace and
+the retention probe compiled in, on the `kangentic_profile` AVD (API 36, `default` image,
+demo-paired), cold-booted, and each APK reinstalled and recompiled from its own baseline profile
+before its round. `SDK 57` is `main` with 57.0.32; `SDK 58` is the branch with the R8 fix under
+"Build System". The cold starts and idle samples alternated the two within one emulator boot.
+
+**Size (measured).**
+
+| APK (x86_64) | Size | dex | Resources | JS bundle | Native libs |
+|---|---|---|---|---|---|
+| SDK 57 | 47.70 MB | 13.01 MB | 765 files, `resources.arsc` 1.26 MB | 8.16 MB | 29.88 MB |
+| SDK 58 | 47.07 MB | 10.43 MB | 765 files, `resources.arsc` 0.98 MB | 7.64 MB | 31.08 MB |
+
+The R8 fix itself cost 70 KB of dex and 30 KB of APK. The resource file count did not change, so
+deleting the R8 plugin lost nothing: AGP 9 turns optimized resource shrinking on by default.
+
+**Cold start (measured): JS entry is sooner, and first frame has not regressed.** 24 launches per
+arm, in four rounds whose arm order alternated, each a force-stopped `am start -W -S`.
+
+| Arm | TotalTime | Process start to JS entry | App CPU at first frame |
+|---|---|---|---|
+| SDK 57 | 973 ms (IQR 907-1028) | 452 ms (427-479) | 1220 ms (1080-1405) |
+| SDK 58 | 876 ms (856-930) | 380 ms (366-408) | 1245 ms (1095-1485) |
+
+JS entry is a result: the ranges do not overlap, and SDK 58 led in all four rounds (400 vs 418, 424
+vs 487, 356 vs 469, 370 vs 432 ms). TotalTime is not: the 97 ms gap is inside the SDK 57 range and
+round one tied (917 vs 915 ms), so read it as no regression, not as an improvement.
+
+**Idle CPU on the Agents list (measured): no change.** Two 40-second windows each, 20 samples,
+frames over the same window: SDK 57 read 21 and 21.9%, SDK 58 read 22.5 and 22.75%, both at 58 frames
+a second, with per-sample ranges of 19-25% and 20-27%. A point is inside that spread.
+
+**Retention and memory at rest (measured).** This section's six open and close cycles, then a GC by
+backgrounding, trusting the second of two `dumpsys meminfo` samples. Each arm ran twice, and the
+first SDK 57 run came from an earlier boot of the same AVD.
+
+| Arm | Views before / after | WebViews before / after | Opened | Total PSS at rest | Native heap at rest |
+|---|---|---|---|---|---|
+| SDK 57 | 444 / 445, 444 / 445 | 0 / 0, 0 / 0 | 6 of 6, 6 of 6 | 167, 165 MB | 67, 68 MB |
+| SDK 58 | 445 / 446, 445 / 446 | 0 / 0, 0 / 0 | 6 of 6, 6 of 6 | 137, 136 MB | 50, 50 MB |
+
+The leak stays fixed on React Native 0.88, and `react-native-enriched-markdown` 1.1.1 needed no
+change. SDK 58 sits about 29 MB lower at rest, and the same gap holds after six opens (283-296
+against 253-255 MB). The two readings of each arm agree and the arms do not overlap, so that is a
+result on this rig. **Why is not known**: nothing here isolates it, so no cause is claimed, and an
+emulator number says nothing about a phone's absolute memory.
 
 ## Credential inventory
 
