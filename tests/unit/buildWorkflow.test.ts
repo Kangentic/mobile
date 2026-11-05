@@ -1127,20 +1127,13 @@ describe('ci.yml Native config (prebuild) R8 checks', () => {
 });
 
 /**
- * R8 OPTIMIZATION, the Play 0.8.1 advisory. Two layers, and both are pinned
- * because each is invisible when it stops working: ci.yml proves the optimize
- * preset and the optimized-resource-shrinking property reached the generated
- * project, and the release-build workflows prove optimization is actually ON
- * in what was built (a library's `-dontoptimize` would turn it off app-wide
- * whatever the preset says). The plugin's own strings are tied to the ci.yml
- * greps in androidR8Optimization.test.ts.
+ * R8 OPTIMIZATION, the Play 0.8.1 advisory. Since SDK 58 the template and AGP 9
+ * ask for it by default, so what is left to prove is that it actually happened:
+ * the release-build workflows read the configuration R8 ran with, because a
+ * library's `-dontoptimize` turns it off app-wide whatever the preset says.
+ * Pinned because the failure is invisible when these steps stop running.
  */
 describe('R8 optimization gates', () => {
-  const ciJobs = (
-    parseYaml(readFileSync(`${repositoryRoot}.github/workflows/ci.yml`, 'utf8')) as {
-      jobs: Record<string, { steps?: { name?: string; run?: string }[] }>;
-    }
-  ).jobs;
   const e2eJobs = (
     parseYaml(readFileSync(`${repositoryRoot}.github/workflows/e2e.yml`, 'utf8')) as {
       jobs: Record<string, { steps?: { name?: string; run?: string }[] }>;
@@ -1151,20 +1144,6 @@ describe('R8 optimization gates', () => {
       jobs: Record<string, { steps?: { name?: string; if?: string; run?: string }[] }>;
     }
   ).jobs;
-
-  it('confirms the optimize preset in build.gradle and the property in gradle.properties at prebuild', () => {
-    const step = ciJobs['native-config'].steps?.find(
-      (candidate) => candidate.name === 'Confirm R8 optimization is requested for release builds',
-    );
-    expect(step, 'ci.yml no longer confirms R8 optimization is requested').toBeDefined();
-    const code = withoutComments(step?.run ?? '');
-    expect(code).toContain('getDefaultProguardFile("proguard-android-optimize.txt")');
-    // The negative half: the legacy preset still present (say, appended rather
-    // than replaced) would keep -dontoptimize in the merged configuration.
-    expect(code).toContain('if grep -q \'getDefaultProguardFile("proguard-android.txt")\'');
-    expect(code).toContain('android/app/build.gradle');
-    expect(code).toContain('android/gradle.properties');
-  });
 
   it('verifies optimization is on in the e2e APK build', () => {
     const verifyStep = e2eJobs['build-apk'].steps?.find((step) => step.run?.includes('verify-r8-optimization.sh'));

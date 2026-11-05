@@ -476,9 +476,9 @@ const config: ExpoConfig = {
     // as a staged rollout. It is the first release build-android.yml submits
     // to production itself; earlier ones went to the internal track. 14 is
     // spent, tagged android-vc14. The Android-specific items are R8
-    // optimization with optimized resource shrinking
-    // (plugins/withAndroidR8Optimization.ts, the Play 0.8.1 advisory; task
-    // #102 measured the production AAB at 86.81 MB against vc14's 92.18 MB)
+    // optimization with optimized resource shrinking (the Play 0.8.1
+    // advisory; task #102 measured the production AAB at 86.81 MB against
+    // vc14's 92.18 MB)
     // and the native stop alarm on notifee's dataSync keepalive service
     // (modules/foreground-service-guard, Sentry MOBILE-3). The rest is the
     // cross-platform list on ios.buildNumber's 17 above.
@@ -580,15 +580,17 @@ const config: ExpoConfig = {
           // Notifee ships its core AAR inside the npm package; this is its
           // documented Expo integration (no hand-edited android/, per CNG).
           extraMavenRepos: ['../../node_modules/@notifee/react-native/android/libs'],
-          // R8. Without these two the SDK 57 template defaults both to false, and
-          // Play Console rates the bundle "App optimization: Low" with its
+          // R8. Without these two the template defaults both to false, and Play
+          // Console rates the bundle "App optimization: Low" with its
           // optimization, shrinking, and R8-configuration rows all empty.
           //
-          // These two minify and shrink; they do NOT optimize. The template's
-          // proguard-android.txt preset carries -dontoptimize, and no option here
-          // can undo it (ProGuard options are global, so extraProguardRules
-          // cannot switch a -dontoptimize back off). plugins/withAndroidR8Optimization.ts
-          // swaps the preset; see its header.
+          // These two minify and shrink. Optimizing comes from the SDK 58 template,
+          // which names the proguard-android-optimize.txt preset, and AGP 9, which
+          // turns optimized resource shrinking on by default. A plugin did both on
+          // SDK 57. ProGuard options are global, so one -dontoptimize in any
+          // library's consumer rules still turns it off for the whole app, and
+          // nothing here could undo that: verify-r8-optimization.sh checks what R8
+          // actually ran with on every release build.
           //
           // These are GRADLE PROPERTIES, not build.gradle edits: the template's
           // release block reads them through findProperty, so anything asserting
@@ -754,14 +756,6 @@ const config: ExpoConfig = {
     // production build, taking the concurrent CMake configure down with it.
     // See the plugin for why this is project config, not a CI env var.
     './plugins/withAndroidGradleHeap.ts',
-    // Turns R8 OPTIMIZATION on: swaps the template's proguard-android.txt preset
-    // (whose -dontoptimize disables optimization app-wide) for
-    // proguard-android-optimize.txt, and sets AGP 8.12's
-    // android.r8.optimizedResourceShrinking opt-in. The Play 0.8.1 advisory.
-    // Unconditional on purpose: e2e.yml's Maestro APK must exercise exactly what
-    // Play scans. Throws if the template names neither preset. DELETE at the
-    // Expo SDK 58 upgrade, whose template and AGP 9 do both by default.
-    './plugins/withAndroidR8Optimization.ts',
     // THE ORDER OF THESE TWO IS LOAD BEARING, AND IT IS THE REVERSE OF WHAT IT
     // READS LIKE. The extension target must EXIST before the signing plugin can
     // write a profile onto it, and mods registered against the same key run
