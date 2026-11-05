@@ -4326,8 +4326,9 @@ comparison here is across two builds**, so it is a cross-build A/B by necessity:
 cannot be toggled in one process. Both arms are x86_64 release builds with the connection trace and
 the retention probe compiled in, on the `kangentic_profile` AVD (API 36, `default` image,
 demo-paired), cold-booted, and each APK reinstalled and recompiled from its own baseline profile
-before its round. `SDK 57` is `main` with 57.0.32; `SDK 58` is the branch with the R8 fix under
-"Build System". The cold starts and idle samples alternated the two within one emulator boot.
+before its round. `SDK 57` is `114393f`, which is `main` at 57.0.32 plus this task's three
+pre-upgrade fixes and a docs commit; `SDK 58` is `7b322b4`, the branch with the R8 fix under "Build
+System". The cold starts and idle samples alternated the two within one emulator boot.
 
 **Size (measured).**
 
