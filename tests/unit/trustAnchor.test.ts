@@ -6,6 +6,7 @@
  * key and relay address would still be sitting in the Keychain.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { TrustAnchorStore } from '@/pairing/trustAnchor';
 
 const secureStoreState = vi.hoisted(() => ({
   deletedKeys: [] as string[],
@@ -19,8 +20,6 @@ vi.mock('expo-secure-store', () => ({
   }),
   WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'whenUnlockedThisDeviceOnly',
 }));
-
-import { TrustAnchorStore } from '@/pairing/trustAnchor';
 
 const ANCHOR_KEYS = ['trust.desktopStaticPublicKey', 'trust.relayAddress', 'trust.pairedAt'];
 
