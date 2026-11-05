@@ -244,9 +244,10 @@ Testing section for the three measurement commands and which question each one a
    staging directory to `%SystemDrive%\kangentic\android\<checkout-hash>\`, which takes checkout
    depth out of the equation. It used to fail here at every variant. If a build ever dies with
    `manifest 'build.ninja' still dirty after 100 tries` (which names no file) or
-   `Filename longer than 260 characters`, that plugin is not applying: check
+   `Filename longer than 260 characters` on a staging path, that plugin is not applying: check
    `npm run verify:staging` and see `docs/developer-guide.md`'s "Local Android builds work from
-   any path".
+   any path". The same error on a SOURCE path under `node_modules` means the checkout itself is too
+   deep (a root past about 100 characters), so build from a normal worktree instead.
 
    Never create a drive-root build directory to work around a path problem, and never without
    asking the user first. The plugin is the supported fix; if it is broken, fix the plugin.

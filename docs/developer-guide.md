@@ -521,7 +521,7 @@ plugins/                     # Local Expo config plugins: withAndroidPushService
                              #   permissions + FGS type), withIosManualSigning (App Store signing,
                              #   inert outside CI), withAndroidE2eGwpAsanOff (e2e APK only),
                              #   withAndroidCmakeBuildStaging (relocates CMake's .cxx staging to a
-                             #   short absolute root so Android builds from any path depth),
+                             #   short absolute root so Android builds from any task worktree),
                              #   withAndroidGradleHeap (raises the Gradle daemon heap past the
                              #   template's 2048m so R8 survives a four-ABI production build),
                              #   withIosPodsUuidCollisionGuard (guards pod install against
@@ -1790,9 +1790,18 @@ embedded manifest at all, and neither it nor `cmake.exe` declares `longPathAware
 `withAndroidCmakeBuildStaging.ts` appends a block to `android/settings.gradle` that, on Windows
 only, points every module's CMake staging directory (AGP's `.cxx`) at
 `%SystemDrive%\kangentic\android\<checkout-hash>\<module>` and passes
-`-DCMAKE_OBJECT_PATH_MAX=259`. Relocating the output removes checkout depth from the equation
-entirely, which is why it works at **any** path length rather than buying a fixed number of
-characters.
+`-DCMAKE_OBJECT_PATH_MAX=259`. Relocating the output removes checkout depth from CMake's OUTPUT
+paths, which is why the object files fit however deep the checkout is.
+
+**Corrected 2026-11-05: this used to say it works at any path length, which overstated it.** The
+plugin moves what CMake writes, not what it reads. `:app` still compiles generated sources from the
+checkout's `node_modules`, and one of those is 160 characters relative to the root. So a checkout
+whose root was 111 characters failed at `:app:buildCMakeRelWithDebInfo` with `ninja: error:
+Stat(...): Filename longer than 260 characters`, on a 271-character path, with the plugin working
+correctly. A task worktree's root is about 73 characters, which leaves room; the practical ceiling
+is a root of about 100. A SOURCE path under `node_modules` in that error means the checkout is too
+deep, so use a normal worktree. The plugin cannot fix that, and a drive-root directory is still not
+the answer.
 
 Three things about the shape of it that are easy to get wrong:
 

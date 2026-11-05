@@ -57,7 +57,7 @@ plugins/                      # Local Expo config plugins (withAndroidPushServic
                               #   withAndroidE2eGwpAsanOff: disables GWP-ASan for the e2e APK only,
                               #   inert unless EXPO_PUBLIC_KANGENTIC_E2E=1;
                               #   withAndroidCmakeBuildStaging: relocates CMake's .cxx staging to a
-                              #   short absolute root so Android builds from any path depth,
+                              #   short absolute root so Android builds from any task worktree,
                               #   Windows-gated inside the generated Gradle;
                               #   withAndroidGradleHeap: raises the Gradle daemon heap past the
                               #   template's 2048m so R8 survives a four-ABI production build;
@@ -360,7 +360,7 @@ store/whatsnew/               # Release notes (whatsnew-<locale>, 500-char cap) 
   Run it alone with `npm run check:install`.
 - `npm run clean:staging` / `verify:staging` - prune and check the relocated CMake staging root
   (`%SystemDrive%\kangentic\android`). `withAndroidCmakeBuildStaging` moves each module's `.cxx`
-  out of the checkout so a build works from any path depth, at the cost of output that survives
+  out of the checkout so a build works from any task worktree, at the cost of output that survives
   `gradlew clean` and accumulates one tree per branch. `verify:staging` is the only check that
   proves the object-path flag reached CMake rather than merely reaching `settings.gradle`.
 - `npm run lint` - `eslint . --max-warnings 0`
@@ -576,11 +576,13 @@ different content. `src/devsupport/retentionProbe.ts` puts the variants behind a
 (`EXPO_PUBLIC_KANGENTIC_RETENTION_PROBE=1`); extend it rather than editing components. Full worked
 examples in the REACT-NATIVE-5 section of [docs/developer-guide.md](docs/developer-guide.md).
 
-**Local Android builds work from any path**, including a task worktree.
+**Local Android builds work from any task worktree.**
 `plugins/withAndroidCmakeBuildStaging.ts` relocates each module's CMake staging directory to a
-short absolute root (`%SystemDrive%\kangentic\android`), which removes checkout depth from the
-equation. **Never create a drive-root build directory to work around a path problem**, and never
-create one at all without asking: if a build hits MAX_PATH, fix the plugin.
+short absolute root (`%SystemDrive%\kangentic\android`), which takes checkout depth out of CMake's
+output paths. It cannot shorten the generated sources `:app` reads from `node_modules`, so a checkout
+root past about 100 characters still fails (a 111-character one did, 2026-11-05). **Never create a
+drive-root build directory to work around a path problem**, and never create one at all without
+asking: if a build in a normal worktree hits MAX_PATH, fix the plugin.
 
 An APK is bound to the dependency tree that built it, and that has not changed: **run `npm
 install` in the worktree before building.** A worktree starts with `node_modules` as a junction to
