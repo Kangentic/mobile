@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
   owner: 'kangentic',
-  version: '1.4.0',
+  version: '1.4.1',
   orientation: 'portrait',
   scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
@@ -253,7 +253,7 @@ const config: ExpoConfig = {
     // wait for the next desktop. No native dependency moved since 1.3.0 (only
     // the protocol and branding pins), but there is no OTA path, so it is a new
     // build.
-    buildNumber: '22',
+    buildNumber: '23',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
