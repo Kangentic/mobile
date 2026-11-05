@@ -5,6 +5,7 @@ import { ReadingViewFeed } from '@/components/conversation/ReadingViewFeed';
 import { getRetentionProbeVariant } from '@/devsupport/retentionProbe';
 import { selectChatLens, useTranscriptStore } from '@/state/transcriptStore';
 import { ConversationTab } from './ConversationTab';
+import { FeedErrorBoundary } from './FeedErrorBoundary';
 
 export interface ChatPaneProps {
   taskId: string;
@@ -63,8 +64,14 @@ export function ChatPane({ taskId, sessionId, projectId, agentLabel, emptyMessag
     );
   }
   if (chatLens === 'reading-view') {
-    return <ReadingViewFeed sessionId={sessionId} agentLabel={agentLabel} />;
+    return (
+      <FeedErrorBoundary key={sessionId} boundary="reading-view-feed">
+        <ReadingViewFeed sessionId={sessionId} agentLabel={agentLabel} />
+      </FeedErrorBoundary>
+    );
   }
+  // No boundary here: ConversationTab carries its own, because CompletedTaskScreen
+  // renders it without this pane.
   return <ConversationTab key={sessionId} taskId={taskId} sessionId={sessionId} projectId={projectId} />;
 }
 

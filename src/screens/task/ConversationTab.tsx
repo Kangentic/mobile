@@ -13,6 +13,7 @@ import { AskUserQuestionCard } from '@/components/conversation/AskUserQuestionCa
 import { LiveTailCell } from '@/components/conversation/LiveTailCell';
 import { MarkdownCell } from '@/components/conversation/MarkdownCell';
 import { PermissionPromptCard } from '@/components/conversation/PermissionPromptCard';
+import { scrollFeedToEnd } from '@/components/conversation/scrollFeedToEnd';
 import { SystemDividerCell } from '@/components/conversation/SystemDividerCell';
 import { ThinkingCell } from '@/components/conversation/ThinkingCell';
 import { ToolCallCard } from '@/components/conversation/ToolCallCard';
@@ -31,6 +32,7 @@ import { useActivityStore } from '@/state/activityStore';
 import { useChannelStore } from '@/state/channelStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { createLiveTailBuffer, type LiveTailBuffer } from '@/terminal/liveTail';
+import { FeedErrorBoundary } from './FeedErrorBoundary';
 
 export interface ConversationTabProps {
   taskId: string;
@@ -57,7 +59,8 @@ const TAIL_FETCH_RETRY_DELAYS_MS = [2000, 5000, 10000];
 // every render). `startRenderingFromBottom` is deliberately omitted: on a
 // transcript shorter than the viewport it makes FlashList v2 re-anchor to the
 // bottom in a layout loop ("Maximum update depth exceeded"). We pin to the
-// bottom manually via scrollToEnd on the first content instead, and
+// bottom manually on every content-size change instead (see
+// `onContentSizeChange` and `scrollFeedToEnd`), and
 // autoscrollToBottomThreshold keeps it pinned as the turn streams.
 const MAINTAIN_VISIBLE_CONTENT_POSITION = { autoscrollToBottomThreshold: 0.2 } as const;
 
@@ -67,6 +70,24 @@ const EMPTY_ENTRIES: TranscriptEntryWire[] = [];
 const SETTLE_QUIET_MS = 120;
 /** Hard cap on that wait: a continuously streaming session never goes quiet, and must still appear. */
 const SETTLE_DEADLINE_MS = 700;
+/**
+ * How far the list renders past the viewport while it settles unseen. It lands
+ * at the bottom with every row above it unmeasured, and an unmeasured row is
+ * estimated from its type's recent average, so a short note above a long report
+ * reads as a thousand points tall. Scrolling up into one collapses it in place,
+ * and the rows below slide up: the feed snaps back toward the bottom against the
+ * drag. Measuring this band first, where nobody can see it, keeps the first
+ * drags honest. Read from FlashList's source, twice this is what is rendered
+ * above the bottom, about the two windows its own `scrollToEnd` used to measure
+ * on its way down.
+ */
+const SETTLING_DRAW_DISTANCE = 1000;
+/**
+ * FlashList's native default (web's is 500), restated because it has to be
+ * passed: it reads this prop as `drawDistance ?? current`, so going back to
+ * undefined would never reset it.
+ */
+const RESTING_DRAW_DISTANCE = 250;
 
 /** The conversation-terminal surface: the flattened transcript cell feed for the task's session. */
 export function ConversationTab({ sessionId, emptyMessage = 'No active session for this task' }: ConversationTabProps): React.JSX.Element {
@@ -79,7 +100,13 @@ export function ConversationTab({ sessionId, emptyMessage = 'No active session f
       </Stack>
     );
   }
-  return <ConversationFeed sessionId={sessionId} />;
+  // Keyed because CompletedTaskScreen renders this tab with no key of its own:
+  // one session's failure is no verdict on the next.
+  return (
+    <FeedErrorBoundary key={sessionId} boundary="conversation-feed">
+      <ConversationFeed sessionId={sessionId} />
+    </FeedErrorBoundary>
+  );
 }
 
 function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Element {
@@ -316,13 +343,23 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
    * heights get measured), so anchoring once at the first change anchors to a
    * list that is a fraction of its final height. Re-anchoring on every change
    * until the user drags is what actually keeps the newest message on screen,
-   * and it hands control over the instant they scroll.
+   * and it hands control over the instant they scroll. Native on purpose: see
+   * `scrollFeedToEnd`.
    */
   const onContentSizeChange = useCallback(() => {
     if (userTookOverScrollRef.current || cells.length === 0) return;
-    listRef.current?.scrollToEnd({ animated: false });
+    scrollFeedToEnd(listRef.current);
     scheduleReveal();
   }, [cells.length, scheduleReveal]);
+
+  // Hands the feed back to the anchor. The native scroll aims at the content
+  // height as estimated, so it can land short of an unmeasured bottom, and only
+  // the anchor corrects that as the size settles. The next drag takes it back.
+  // ReadingViewFeed's button does the same: keep the two in step.
+  const jumpToLatest = useCallback(() => {
+    userTookOverScrollRef.current = false;
+    scrollFeedToEnd(listRef.current);
+  }, []);
 
   return (
     <View style={styles.flex}>
@@ -341,6 +378,7 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
         onScrollBeginDrag={onScrollBeginDrag}
         scrollEventThrottle={64}
         onContentSizeChange={onContentSizeChange}
+        drawDistance={revealed ? RESTING_DRAW_DISTANCE : SETTLING_DRAW_DISTANCE}
         maintainVisibleContentPosition={MAINTAIN_VISIBLE_CONTENT_POSITION}
         // The composer sits on this same screen, so the keyboard is routinely
         // up while a prompt card is on screen. The default ("never") spends
@@ -354,7 +392,7 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
         <Pressable
           accessibilityRole="button"
           testID="jump-to-latest"
-          onPress={() => listRef.current?.scrollToEnd({ animated: true })}
+          onPress={jumpToLatest}
           style={[
             styles.jumpToLatest,
             {

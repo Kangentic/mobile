@@ -4,20 +4,44 @@
  * in the streaming path - the identity of the list's `data`.
  */
 import React from 'react';
-import { act, render } from '@testing-library/react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { ThemeProvider } from '@/components';
 import { ReadingViewFeed } from '@/components/conversation/ReadingViewFeed';
 import { useReadingViewStore } from '@/state/readingViewStore';
 
 const capturedData: unknown[] = [];
+const mockCapturedProps: {
+  current: { onContentSizeChange?: () => void; onScroll?: (event: object) => void; onScrollBeginDrag?: () => void };
+} = {
+  current: {},
+};
+const mockFlashListScrollToEnd = jest.fn();
+const mockNativeScrollToEnd = jest.fn();
 
-jest.mock('@shopify/flash-list', () => ({
-  __esModule: true,
-  FlashList: (props: { data: unknown }) => {
-    capturedData.push(props.data);
-    return null;
-  },
-}));
+jest.mock('@shopify/flash-list', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
+  const ReactModule = require('react');
+  return {
+    __esModule: true,
+    FlashList: ReactModule.forwardRef(function MockFlashList(
+      props: {
+        data: unknown;
+        onContentSizeChange?: () => void;
+        onScroll?: (event: object) => void;
+        onScrollBeginDrag?: () => void;
+      },
+      forwardedRef: unknown,
+    ) {
+      capturedData.push(props.data);
+      mockCapturedProps.current = props;
+      ReactModule.useImperativeHandle(forwardedRef, () => ({
+        scrollToEnd: mockFlashListScrollToEnd,
+        getNativeScrollRef: () => ({ scrollToEnd: mockNativeScrollToEnd }),
+      }));
+      return null;
+    }),
+  };
+});
 
 async function renderFeed(): Promise<{ rerender: () => Promise<void> }> {
   const view = await render(
@@ -34,6 +58,94 @@ async function renderFeed(): Promise<{ rerender: () => Promise<void> }> {
       ),
   };
 }
+
+/**
+ * FlashList's own scrollToEnd is the walk behind Sentry MOBILE-F; the transcript
+ * feed's half of this is tests/components/ConversationTab.anchorLoop.test.tsx.
+ *
+ * Mutation that reddens these: make `scrollFeedToEnd` call `list?.scrollToEnd`.
+ */
+describe('ReadingViewFeed scrolling to the newest line', () => {
+  beforeEach(async () => {
+    useReadingViewStore.getState().reset();
+    mockFlashListScrollToEnd.mockClear();
+    mockNativeScrollToEnd.mockClear();
+    await act(() => {
+      useReadingViewStore.getState().applyCleanLines('sess-1', ['npm run lint', 'All checks passed'], false);
+    });
+    await renderFeed();
+  });
+
+  it('anchors through the native scroll, not through the list', async () => {
+    await act(() => {
+      mockCapturedProps.current.onContentSizeChange?.();
+    });
+
+    expect(mockNativeScrollToEnd).toHaveBeenCalledWith({ animated: false });
+    expect(mockFlashListScrollToEnd).not.toHaveBeenCalled();
+  });
+
+  it('jumps through the native scroll and hands the feed back to the anchor', async () => {
+    await act(() => {
+      mockCapturedProps.current.onScroll?.({
+        nativeEvent: {
+          contentOffset: { x: 0, y: 0 },
+          contentSize: { width: 400, height: 30000 },
+          layoutMeasurement: { width: 400, height: 800 },
+        },
+      });
+    });
+
+    await fireEvent.press(screen.getByTestId('reading-view-jump-to-latest'));
+
+    expect(mockNativeScrollToEnd).toHaveBeenCalledWith({ animated: false });
+    expect(mockFlashListScrollToEnd).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A drag takes the feed off the anchor; Jump to latest hands it back, until the
+   * next drag.
+   *
+   * Mutation that reddens this: delete `userTookOverScrollRef.current = false;`
+   * from `jumpToLatest` in ReadingViewFeed.tsx.
+   */
+  it('hands the feed back to the anchor after Jump to latest, until the next drag', async () => {
+    await act(() => {
+      mockCapturedProps.current.onScroll?.({
+        nativeEvent: {
+          contentOffset: { x: 0, y: 0 },
+          contentSize: { width: 400, height: 30000 },
+          layoutMeasurement: { width: 400, height: 800 },
+        },
+      });
+    });
+    expect(screen.getByTestId('reading-view-jump-to-latest')).toBeTruthy();
+
+    await act(() => {
+      mockCapturedProps.current.onScrollBeginDrag?.();
+    });
+    await act(() => {
+      mockCapturedProps.current.onContentSizeChange?.();
+    });
+    expect(mockNativeScrollToEnd).not.toHaveBeenCalled();
+
+    await fireEvent.press(screen.getByTestId('reading-view-jump-to-latest'));
+    mockNativeScrollToEnd.mockClear();
+    await act(() => {
+      mockCapturedProps.current.onContentSizeChange?.();
+    });
+    expect(mockNativeScrollToEnd).toHaveBeenCalledWith({ animated: false });
+
+    mockNativeScrollToEnd.mockClear();
+    await act(() => {
+      mockCapturedProps.current.onScrollBeginDrag?.();
+    });
+    await act(() => {
+      mockCapturedProps.current.onContentSizeChange?.();
+    });
+    expect(mockNativeScrollToEnd).not.toHaveBeenCalled();
+  });
+});
 
 describe('ReadingViewFeed list data identity', () => {
   beforeEach(() => {

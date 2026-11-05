@@ -161,7 +161,7 @@ targets/nse/                  # iOS Notification Service Extension source (Swift
 src/
   screens/        # TriageHome (+ home/ needs-you cards, feed sections and the section filter's
                   #   header button and empty state), Board, task/ (SessionScreen, mode toggle,
-                  #   input bar, ChatPane, ChangesTab, ResumePanel), CompletedTask, the form-sheet
+                  #   input bar, ChatPane, FeedErrorBoundary, ChangesTab, ResumePanel), CompletedTask, the form-sheet
                   #   screens (CreateTask/EditTask/MoveTask/TaskActions/ProjectPicker/SectionFilter,
                   #   and the Command Terminal pair CommandTerminals/CommandTerminalActions, and the
                   #   Workflows sheet), FileDiff, Pairing (Scan/Confirm), Settings, Devices,
@@ -248,7 +248,8 @@ src/
   voice/          # Dictation hook over the OS speech engines (expo-speech-recognition)
   observability/  # Sentry crash reporting - the only module allowed to import the SDK, plus the
                   #   pure event/breadcrumb scrubber (see crash-reporting-scope.md). Two capture
-                  #   calls live behind it: reportCaughtError (the root error boundary) and
+                  #   calls live behind it: reportCaughtError (the error boundaries: the root
+                  #   one and the chat feeds' FeedErrorBoundary; names are a closed union) and
                   #   reportHandledError (the handled-error door for caught failures, which
                   #   never forwards message text; sites are a closed union). Also
                   #   memoryPressure: the OS memory-warning subscriber, which records the one

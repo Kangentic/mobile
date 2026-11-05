@@ -5,6 +5,27 @@ import { ChatPane } from '@/screens/task/ChatPane';
 import { useReadingViewStore } from '@/state/readingViewStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 
+const mockReportCaughtError = jest.fn();
+jest.mock('@/observability/crashReporting', () => ({
+  ...jest.requireActual('@/observability/crashReporting'),
+  reportCaughtError: (error: Error, boundary: string) => mockReportCaughtError(error, boundary),
+}));
+
+/** When set, the reading view throws. It has the same list shape as the transcript feed. */
+const mockReadingViewFailure: { error: Error | null } = { error: null };
+jest.mock('@/components/conversation/ReadingViewFeed', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
+  const ReactModule = require('react');
+  const ActualReadingViewFeedModule = jest.requireActual('@/components/conversation/ReadingViewFeed');
+  return {
+    ...ActualReadingViewFeedModule,
+    ReadingViewFeed: (props: object) => {
+      if (mockReadingViewFailure.error !== null) throw mockReadingViewFailure.error;
+      return ReactModule.createElement(ActualReadingViewFeedModule.ReadingViewFeed, props);
+    },
+  };
+});
+
 jest.mock('@/connection/actions', () => ({
   sendUserMessage: jest.fn().mockResolvedValue(undefined),
   answerPermissionPrompt: jest.fn().mockResolvedValue(undefined),
@@ -57,12 +78,19 @@ function seedTranscript(sessionId: string, totalEntries: number): void {
   });
 }
 
-async function renderPane(sessionId: string | null, emptyMessage?: string): Promise<void> {
-  await render(
+function paneElement(sessionId: string | null, emptyMessage?: string): React.ReactElement {
+  return (
     <ThemeProvider>
       <ChatPane taskId="task-1" sessionId={sessionId} projectId="project-1" agentLabel="codex" emptyMessage={emptyMessage} />
-    </ThemeProvider>,
+    </ThemeProvider>
   );
+}
+
+async function renderPane(sessionId: string | null, emptyMessage?: string) {
+  const view = await render(paneElement(sessionId, emptyMessage));
+  return {
+    rerenderPane: (nextSessionId: string | null) => view.rerender(paneElement(nextSessionId, emptyMessage)),
+  };
 }
 
 describe('ChatPane lens selection', () => {
@@ -160,5 +188,68 @@ describe('ChatPane lens selection', () => {
     await renderPane('sess-1', 'Paused. Messages wait for the next agent.');
     expect(screen.queryByText('Paused. Messages wait for the next agent.')).toBeNull();
     expect(screen.getByText('Structured entry')).toBeTruthy();
+  });
+
+  /**
+   * The reading view re-anchors the way the transcript feed does, so it can
+   * fail the way the transcript feed did (Sentry MOBILE-F).
+   *
+   * Mutation that reddens this: render ReadingViewFeed without its boundary.
+   */
+  it('keeps a reading view crash inside the pane and reports it under its own name', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const readingViewError = new Error('Maximum update depth exceeded.');
+    mockReadingViewFailure.error = readingViewError;
+    mockReportCaughtError.mockClear();
+    seedTranscript('sess-1', 0);
+    try {
+      await renderPane('sess-1');
+
+      expect(screen.getByTestId('feed-error')).toBeTruthy();
+      expect(mockReportCaughtError).toHaveBeenCalledTimes(1);
+      expect(mockReportCaughtError).toHaveBeenCalledWith(readingViewError, 'reading-view-feed');
+    } finally {
+      mockReadingViewFailure.error = null;
+      consoleError.mockRestore();
+    }
+  });
+
+  /**
+   * A failed boundary stays failed until it remounts, so another session must
+   * not inherit the first one's failure.
+   *
+   * Mutation that reddens this: remove `key={sessionId}` from the reading
+   * view's FeedErrorBoundary in ChatPane.tsx.
+   */
+  it('gives another session a fresh reading view after one crashed', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockReadingViewFailure.error = new Error('Maximum update depth exceeded.');
+    // Both sessions have a landed, empty window, so both pick the reading view.
+    const emptyWindow = {
+      hasWindow: true,
+      entries: [],
+      startIndex: 0,
+      totalEntries: 0,
+      revision: 1,
+      tailRevision: 1,
+      needsTailFetch: false,
+    };
+    useTranscriptStore.setState({
+      bySessionId: { 'sess-1': emptyWindow, 'sess-2': emptyWindow },
+      retainedSessionIds: ['sess-1', 'sess-2'],
+    });
+    try {
+      const { rerenderPane } = await renderPane('sess-1');
+      expect(screen.getByTestId('feed-error')).toBeTruthy();
+
+      mockReadingViewFailure.error = null;
+      await rerenderPane('sess-2');
+
+      expect(screen.queryByTestId('feed-error')).toBeNull();
+      expect(screen.getByTestId('reading-view-caption')).toBeTruthy();
+    } finally {
+      mockReadingViewFailure.error = null;
+      consoleError.mockRestore();
+    }
   });
 });

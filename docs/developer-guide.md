@@ -3350,6 +3350,74 @@ GWP-ASan was active on an AOSP `userdebug` x86_64 emulator. Whether the same def
 DSN is live in production builds this exact signature would arrive in Sentry as a native crash, so
 a real rate there is what would justify widening the opt-out. Do not widen it pre-emptively.
 
+### MOBILE-F: the update limit from FlashList's `scrollToEnd`
+
+`Maximum update depth exceeded` from FlashList's layout effect, under `ConversationFeed`, on one
+install at 1.3.0. It came from the feed's re-anchor, not from a cell.
+
+**The mechanism (read from source, then reproduced).** FlashList's `scrollToEnd` runs
+`scrollToIndex` when the last row is not rendered. Each step is a `setState` queued from inside
+the list's layout effect, so a walk is one chain of nested updates. A step restarts from step 0
+when the target moved, and nothing caps the restarts. On a transcript opened straight at the
+bottom almost every row is unmeasured, and each row is estimated from the last five measured rows
+of its type, so one measurement can move the target by thousands of points. Every restart passes
+through the commit that resets FlashList's 40-render guard, so only React's limit of 50 ends it.
+
+**So a row that never settles cannot do this alone.** After 40 renders the guard commits, and the
+chain stops unless something re-enters the list from the layout phase. A pending scroll step is
+the only thing that does. No cell kind is implicated: the shape that matters is a long terse tail
+under an average set by tall rows.
+
+**Measured:**
+
+- Jest, the real FlashList and feed with scripted heights: of 2,400 random transcripts, two runs
+  threw and nine in ten stayed under 20 renders. Hill-climbing the one that threw gave
+  `tests/components/ConversationTab.anchorLoop.test.tsx`, which throws at 15 of 16 window heights.
+  It needs tall rows of about 1,700 points or more, and stops throwing by 1,190, so this is a rare
+  tail. The throw site alternates in bands of window height between `commitLayout` and
+  `setRenderId`, the line Sentry reported, because the chain alternates between the two.
+- Release build, emulator at the crash device's 1080x2340 and 420 dpi, long synthetic transcripts
+  in a temporary mock: the walk restarted 5 to 9 times against 0 on the native path, about 37
+  nested updates at most. **It never threw on a device.** The reproduction is Jest's; the device
+  confirmed the mechanism only.
+- A clean release build of the final code on the stock demo sessions: a transcript that fits the
+  viewport holds still, a streaming turn drags to its first message, and Jump to latest lands on
+  the live tail. `ReadingViewFeed` opened and rendered on the same build through a Command
+  Terminal's Chat lens, but its content stayed shorter than the viewport, so its anchor and Jump to
+  latest are covered by Jest only.
+
+Not implicated, and not ruled out in isolation: the 2.625 density. Inferred, not measured: which
+of first paint and the first size change arrives first is a race on a device, and the long chain
+needs first paint first, or a window landing under a feed that has already painted.
+
+**The fix is `scrollFeedToEnd`, the native scroll, and it has two traps that only a device showed.**
+All tests passed with both of these broken:
+
+- The walk had a useful side effect: it measured about two windows above the bottom. Without it the
+  first drag runs into rows estimated far too tall, each collapses as it arrives, and the feed
+  snaps toward the bottom. One release run read 1,957 points from the bottom, then 36. So the list
+  renders a wider band while it settles unseen (`SETTLING_DRAW_DISTANCE`), then drops back. A same
+  process A/B over three drags, n=1 each: no collapses and 1,815 points from the bottom with the
+  band, three collapses and 631 without. Both arms revealed on the quiet timer rather than the
+  700 ms deadline, at +393 ms and +304 ms; one run each cannot read that gap.
+  FlashList reads the prop as `drawDistance ?? current`, so the resting value has to be explicit.
+- An animated native scroll to the end left the feed blank for good, with Jump to latest still
+  showing. The list never heard where it stopped; a dropped last event under
+  `scrollEventThrottle` is inferred from that symptom. Never animate it.
+
+**Known limit, kept on purpose.** The band is only measured before the first reveal. A window that
+lands later re-anchors at the resting distance, so the first drag there can still snap. That covers
+a reconnect and, read from source and not observed, a first open of a completed task, whose feed
+mounts before its window lands. Re-arming the band when a window lands would close that, and was
+left out: read from source, a data change is the one other way back into the list past the
+40-render guard
+(`applyOffsetCorrection`'s `hasDataChanged` branch), so it would run the widest walk at the only
+moment that walk can be extended. A cosmetic snap is the better cost. That combination was never
+stress-tested, so measure it before reconsidering.
+
+`FeedErrorBoundary` is the separate containment: a feed that throws for any reason now costs that
+pane, not the app.
+
 ## The REACT-NATIVE-5 OOM: a leaked session screen, not a background leak
 
 REACT-NATIVE-5 was an `OutOfMemoryError` against the **Java** heap's stock 256MB growth limit
