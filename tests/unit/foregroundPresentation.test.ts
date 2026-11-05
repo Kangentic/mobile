@@ -4,7 +4,7 @@
  * user asked for and the desktop sends to a connected phone on purpose. Every
  * failure keeps it hidden; nothing here ever presents a placeholder over the app.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as Notifications from 'expo-notifications';
 
 const platformMock = vi.hoisted(() => ({ OS: 'ios' as string }));
@@ -33,10 +33,43 @@ function decrypted(authored: boolean): { authored: boolean } {
   return { authored };
 }
 
+/** expo-notifications presents everything once a handler passes this (SingleNotificationHandlerTask.swift). */
+const NATIVE_HANDLER_TIMEOUT_MS = 3000;
+
 describe('foregroundBehaviorFor', () => {
   beforeEach(() => {
     vi.resetModules();
     decryptPushBlobMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('answers hidden before the native timeout when the decrypt never finishes', async () => {
+    // From expo-notifications 58, a handler that misses the native deadline gets
+    // the alert presented for it, so silence here would show the push.
+    const { foregroundBehaviorFor } = await loadModule();
+    vi.useFakeTimers();
+    decryptPushBlobMock.mockReturnValue(new Promise(() => {}));
+
+    let behavior: Notifications.NotificationBehavior | undefined;
+    void foregroundBehaviorFor(incoming({ blob: 'sealed-blob' })).then((answer) => {
+      behavior = answer;
+    });
+    await vi.advanceTimersByTimeAsync(NATIVE_HANDLER_TIMEOUT_MS - 1);
+
+    expect(behavior).toEqual({ shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false, shouldSetBadge: false });
+  });
+
+  it('leaves no deadline timer behind once the decrypt has answered', async () => {
+    const { foregroundBehaviorFor } = await loadModule();
+    vi.useFakeTimers();
+    decryptPushBlobMock.mockResolvedValue(decrypted(true));
+
+    await foregroundBehaviorFor(incoming({ blob: 'sealed-blob' }));
+
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('shows a Notify me push as a banner while the app is open', async () => {
