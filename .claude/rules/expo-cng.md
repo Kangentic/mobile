@@ -35,7 +35,7 @@ unreproducible for any other contributor or CI machine.
   again without it.
 - **Install Expo-ecosystem dependencies with `npx expo install <pkg>`** (or the Expo MCP's
   `add_library`), never a raw `npm install <pkg>`. `expo install` resolves the version compatible
-  with the pinned SDK (the `expo` entry in `package.json`, currently the 57 line); a raw
+  with the pinned SDK (the `expo` entry in `package.json`, currently the 58 line); a raw
   `npm install` takes latest and silently
   drifts against it. Non-Expo packages may use `npm install` normally.
 - After any dependency change, run `npx expo install --check` to confirm nothing drifted.

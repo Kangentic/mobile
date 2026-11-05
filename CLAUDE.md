@@ -4,7 +4,7 @@ Mobile companion app that remote-controls agent sessions running in the desktop 
 
 ## Tech Stack
 
-- **Framework:** Expo SDK 55+, React Native New Architecture, TypeScript strict mode
+- **Framework:** Expo SDK 58, React Native 0.88 New Architecture, TypeScript strict mode
 - **State:** Zustand
 - **Lists:** FlashList (transcript feed, board, chat-style streaming)
 - **Crypto:** `@kangentic/protocol` (pure TypeScript on `@noble/curves`/`@noble/hashes`/`@noble/ciphers` -

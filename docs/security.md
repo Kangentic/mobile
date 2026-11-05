@@ -409,7 +409,11 @@ decrypting and opens that project's Board. A wait's kind and a Notify me row's o
 is open, the app's foreground handler (`src/notifications/foregroundPresentation.ts`) decrypts the
 blob in memory, exactly as a tap does, only to learn whether it is one; it writes nothing back and
 logs nothing, and on Android the `authored` flag lives in the alert's on-device notifee `data`
-beside the ids already there. The extension logs nothing, on any path. Every failure - a missing key, a Keychain read
+beside the ids already there. On iOS, expo-notifications 58 presents a push itself if that handler
+has not answered within a fixed 3 seconds, so the decrypt races a 2-second deadline and answers
+hidden when it loses. The known limit: a JS thread stalled past 3 seconds cannot answer at all, and
+the push then shows as the extension already delivered it, which is what the lock screen would
+have shown. The extension logs nothing, on any path. Every failure - a missing key, a Keychain read
 that returns nothing because the device is locked or the entitlement is absent, a decrypt
 failure, an unknown category, or simply running out of execution time - delivers the placeholder
 exactly as it arrived.

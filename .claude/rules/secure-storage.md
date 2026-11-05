@@ -42,6 +42,11 @@ both platforms; losing that key to a stolen or backed-up device is a full compro
   what keeps a restored backup from reconstituting a working paired client. Any change here
   changes what an attacker with a locked device can reach, so it also updates
   `docs/security.md`'s Key storage section.
+- **A delete can throw, so a wipe attempts every delete.** expo-secure-store 58 made an iOS delete
+  reject on any Keychain status other than success or not-found, where 57 ignored them all. A run of
+  sequential awaits stops at the first failure and leaves the rest of the keys behind, so an unpair
+  goes through `attemptAll` (`src/lib/attemptAll.ts`), which runs every step and rethrows the first
+  error afterwards. `clearPushRegistration` and `TrustAnchorStore.clear` both do.
 - Document, rather than work around, the iOS Secure Enclave's P-256-only limitation: our X25519
   identity keys are Keychain-protected, not enclave-resident.
 

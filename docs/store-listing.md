@@ -126,8 +126,12 @@ Do not attempt an app-level workaround**; there is no app-level call to remove.
 still RN's `WindowUtil.kt` (`enableEdgeToEdge`) and `StatusBarModule.kt`
 (`getTypedExportedConstants`), plus Material **1.13.0**'s `BottomSheetDialog` (-> `bottomsheet.a`)
 and `EdgeToEdgeUtils` (-> `internal.c`), both confirmed in the vc14 mapping and both still pulled in
-by `react-native-screens` and `expo-router`. App code still calls none of these APIs. Re-check at
-the SDK 58 upgrade.
+by `react-native-screens` and `expo-router`. App code still calls none of these APIs.
+
+**Re-read 2026-11-05 at the SDK 58 upgrade (task #140, React Native 0.88.1), from source and not from
+a Play scan.** `StatusBarModule.kt` no longer touches these APIs, so that site should clear. RN's
+`WindowUtil.kt` still does, and Material is still 1.13.0, so the advisory should stay, smaller, on
+the next release's scan. Still no app-level call to remove. Re-check at the next SDK.
 
 ### "Remove resizability and orientation restrictions ... large screen devices" - deliberate, permanent
 
