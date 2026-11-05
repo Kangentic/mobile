@@ -7,6 +7,8 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { generateX25519KeyPair, PROTOCOL_VERSION, randomBytes, type PairingQrPayload, type Transport } from '@kangentic/protocol';
+import { beginPairing, confirmActivePairing, resetActivePairing } from '@/pairing/activePairing';
+import { usePairingStore } from '@/state/pairingStore';
 
 const secureStoreState = vi.hoisted(() => ({ deletesFail: false, deletedKeys: [] as string[] }));
 
@@ -42,9 +44,6 @@ vi.mock('@/pairing/pairingMachine', () => ({
     }
   },
 }));
-
-import { beginPairing, confirmActivePairing, resetActivePairing } from '@/pairing/activePairing';
-import { usePairingStore } from '@/state/pairingStore';
 
 function buildPayload(): PairingQrPayload {
   return {
