@@ -952,25 +952,22 @@ SILENCES that gate for it (`.claude/rules/expo-cng.md`), so each entry is a deli
 and is recorded here with its reason. **`tests/unit/expoInstallExclude.test.ts` fails if an entry
 has no row below or a row has no entry**, so an exclude cannot outlive its reason unnoticed.
 
-Every row except gesture-handler was added in task #102 (2026-10-06) to take a performance or
-memory fix that SDK 57's mapping trails. **All of them come out at the Expo SDK 58 upgrade**, which
-maps current versions of each; remove the entry in the same change that vets the SDK 58 version.
-"Measured" in the last column refers to the release-build A/B under "Dependency refresh, 2026-10
-(task #102)" below; everything else is read from the release notes and source.
+SDK 58 (task #140) mapped `react-native-reanimated` 4.7.1, `react-native-webview` 14.0.1,
+`react-native-screens` ~4.30.1 and `react-native-safe-area-context` ~5.11.1, so those four holds
+came out and the versions moved with the mapping. The rows below are ahead of SDK 58's mapping on
+purpose: check each at the next SDK, and remove the entry in the same change that vets the version
+it maps. "Measured" in the last column refers to the release-build A/B under "Dependency refresh,
+2026-10 (task #102)" below; everything else is read from the release notes and source.
 
-| Package | SDK 57 maps | Held at | Why | Verified by |
+| Package | SDK 58 maps | Held at | Why | Verified by |
 |---|---|---|---|---|
-| `react-native-gesture-handler` | `~2.32.0` | `~3.3.0` | The terminal pane's pinch lifecycle sits on the 3.x line; taking the mapping would DOWNGRADE a major (held since 2026-08-04). 3.2/3.3 fix an orchestrator leak (#4402) and a crash after detector unmount (#4268). `PinchGestureHandler.kt` is byte-identical 3.1.0 to 3.3.0 | TerminalPane suites; device pinch, pan and fit |
-| `react-native-reanimated` | `4.5.1` | `4.7.1` | 4.7.1 removes the native per-frame mapper loop that cost ~0.47 CPU points per registered mapper on 4.5.1, and fixes exiting layout animations leaking their views on Android (#10682) | motion suites; the in-process `extra-mappers` A/B (64 registered clean mappers: no measurable cost on 4.7.1, see "Dependency refresh"); release builds on the emulator and the Pixel |
-| `react-native-worklets` | `0.10.1` | `0.13.0` | Required by Reanimated 4.7.1 (`0.13.x`); faster startup. expo-modules-core 57's optional peer caps at `^0.10.0`; its C++ integration was read against 0.13's StableApi and compiles | a release build and cold launch |
-| `react-native-screens` | `~4.26.0` | `~4.28.0` | #4413 use-after-free of the removal listener | navigation on device |
-| `react-native-safe-area-context` | `~5.7.0` | `~5.10.1` | #735 skips Fabric state updates while detached | navigation on device |
-| `react-native-svg` | `15.15.4` | `15.15.5` | patch release, taken with the set | icons render |
-| `@shopify/flash-list` | `2.0.2` | `2.3.3` | #2138 scroll position on prepend (`maintainVisibleContentPosition` feeds), #2095 no jitter; 2.3.2 disables `removeClippedSubviews` to stop an Android crash | feeds on device; retention |
-| `react-native-webview` | `13.16.1` | `14.0.1` | the `latest` tag; only breaking change is Android API 24, already met. 14 broke its own default props typing, worked around with `WebView<object>` in `TerminalPane.tsx` | the Terminal lens paints |
-| `react-native-get-random-values` | `~1.11.0` | `~2.0.0` | one shared `SecureRandom` instead of one per call; module lookup now fails closed (`getEnforcing`). The CSPRNG under `@noble/*` | pairing and reconnect on device; `crypto-pairing-auditor` |
-| `react-native-pager-view` | `8.0.2` | `9.0.6` | Android moved to a Compose pager (#1092) with the manager API kept; post-release fixes through 9.0.6 (#1103 blank page after navigation, safe-area and keyboard shrink). `@expo/ui` already ships Compose | Board swiping on device |
-| `@sentry/react-native` | `~7.11.0` | `~8.29.0` | 8.24 Android fragment leak fix, cheaper frame collection. Privacy posture kept: three new data-adding default integrations dropped, and the installed default list is pinned by `crashReporting.test.ts` | crash-test events read back on both platforms |
+| `react-native-gesture-handler` | `~3.3.0` | `~3.3.0` | The terminal pane's pinch lifecycle sits on the 3.x line; taking the mapping would DOWNGRADE a major (held since 2026-08-04). 3.2/3.3 fix an orchestrator leak (#4402) and a crash after detector unmount (#4268). `PinchGestureHandler.kt` is byte-identical 3.1.0 to 3.3.0 | TerminalPane suites; device pinch, pan and fit |
+| `react-native-worklets` | `0.13.0` | `0.13.0` | Required by Reanimated 4.7.1 (`0.13.x`); faster startup. expo-modules-core 57's optional peer caps at `^0.10.0`; its C++ integration was read against 0.13's StableApi and compiles | a release build and cold launch |
+| `react-native-svg` | `15.16.0` | `15.15.5` | patch release, taken with the set | icons render |
+| `@shopify/flash-list` | `2.3.2` | `2.3.3` | #2138 scroll position on prepend (`maintainVisibleContentPosition` feeds), #2095 no jitter; 2.3.2 disables `removeClippedSubviews` to stop an Android crash | feeds on device; retention |
+| `react-native-get-random-values` | not mapped | `~2.0.0` | one shared `SecureRandom` instead of one per call; module lookup now fails closed (`getEnforcing`). The CSPRNG under `@noble/*` | pairing and reconnect on device; `crypto-pairing-auditor` |
+| `react-native-pager-view` | `9.0.7` | `9.0.6` | Android moved to a Compose pager (#1092) with the manager API kept; post-release fixes through 9.0.6 (#1103 blank page after navigation, safe-area and keyboard shrink). `@expo/ui` already ships Compose | Board swiping on device |
+| `@sentry/react-native` | `~8.28.0` | `~8.29.0` | 8.24 Android fragment leak fix, cheaper frame collection. Privacy posture kept: three new data-adding default integrations dropped, and the installed default list is pinned by `crashReporting.test.ts` | crash-test events read back on both platforms |
 
 **Held at the mapping, deliberately:** `react-native` and `react` (the SDK's backbone; RN 0.87+ is
 the SDK 58 upgrade), `@types/react` (must match runtime React 19.2), `jest` and `@types/jest` 30
