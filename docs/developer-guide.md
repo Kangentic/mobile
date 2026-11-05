@@ -961,7 +961,7 @@ it maps. "Measured" in the last column refers to the release-build A/B under "De
 
 | Package | SDK 58 maps | Held at | Why | Verified by |
 |---|---|---|---|---|
-| `react-native-gesture-handler` | `~3.3.0` | `~3.3.0` | The terminal pane's pinch lifecycle sits on the 3.x line; taking the mapping would DOWNGRADE a major (held since 2026-08-04). 3.2/3.3 fix an orchestrator leak (#4402) and a crash after detector unmount (#4268). `PinchGestureHandler.kt` is byte-identical 3.1.0 to 3.3.0 | TerminalPane suites; device pinch, pan and fit |
+| `react-native-gesture-handler` | `~3.3.0` | `~3.5.0` | Android fixes on the paths the terminal pinch and list presses use: 3.4 cancels gestures on a native `ACTION_CANCEL` (#4589), fixes an NPE when a cancel finishes a handler mid-transition (#4584), and stops the tap that halts a fling from also firing a press (#4548); 3.5 cancels native touches before terminal event cleanup (#4637). If 3.5.0 misbehaves on a device, fall back to the mapping | TerminalPane suites; device pinch, pan and fit |
 | `react-native-worklets` | `0.13.0` | `0.13.0` | Required by Reanimated 4.7.1 (`0.13.x`); faster startup. expo-modules-core 57's optional peer caps at `^0.10.0`; its C++ integration was read against 0.13's StableApi and compiles | a release build and cold launch |
 | `react-native-svg` | `15.16.0` | `15.15.5` | patch release, taken with the set | icons render |
 | `@shopify/flash-list` | `2.3.2` | `2.3.3` | #2138 scroll position on prepend (`maintainVisibleContentPosition` feeds), #2095 no jitter; 2.3.2 disables `removeClippedSubviews` to stop an Android crash | feeds on device; retention |
