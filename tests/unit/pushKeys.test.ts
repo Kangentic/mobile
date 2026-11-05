@@ -35,8 +35,11 @@ const secureStoreState = vi.hoisted(() => {
    * once-queue, so an unconsumed stub leaks into a later test and swallows its
    * write. That is not hypothetical - it happened here, and it surfaced only
    * because the migration was mutated to check these tests really fail.
+   *
+   * `failingDeleteLocations` holds to the same reasoning. From expo-secure-store
+   * 58 an iOS delete REJECTS on any Keychain failure, where 57 ignored them all.
    */
-  return { storedValues, locationOf, swallowWrites: false };
+  return { storedValues, locationOf, swallowWrites: false, failingDeleteLocations: new Set<string>() };
 });
 
 vi.mock('expo-secure-store', () => ({
@@ -49,7 +52,9 @@ vi.mock('expo-secure-store', () => ({
     secureStoreState.storedValues.set(secureStoreState.locationOf(key, options), value);
   }),
   deleteItemAsync: vi.fn(async (key: string, options?: MockSecureStoreOptions) => {
-    secureStoreState.storedValues.delete(secureStoreState.locationOf(key, options));
+    const location = secureStoreState.locationOf(key, options);
+    if (secureStoreState.failingDeleteLocations.has(location)) throw new Error(`Keychain delete failed for ${key}`);
+    secureStoreState.storedValues.delete(location);
   }),
   WHEN_UNLOCKED_THIS_DEVICE_ONLY: 'whenUnlockedThisDeviceOnly',
   AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY: 'afterFirstUnlockThisDeviceOnly',
@@ -331,10 +336,12 @@ describe('pushKeys - shared Keychain migration for the iOS NSE', () => {
     vi.clearAllMocks();
     secureStoreState.storedValues.clear();
     secureStoreState.swallowWrites = false;
+    secureStoreState.failingDeleteLocations.clear();
     delete process.env.EXPO_PUBLIC_KANGENTIC_IOS_KEYCHAIN_GROUP;
   });
 
   afterEach(() => {
+    secureStoreState.failingDeleteLocations.clear();
     delete process.env.EXPO_PUBLIC_KANGENTIC_IOS_KEYCHAIN_GROUP;
   });
 
@@ -570,6 +577,80 @@ describe('pushKeys - shared Keychain migration for the iOS NSE', () => {
     expect(sharedValue('push.decrypt.key')).toBeUndefined();
     expect(legacyValue('push.decrypt.key')).toBeUndefined();
     expect(sharedValue('push.identity.pk')).toBeUndefined();
+  });
+
+  it('a failed delete does not stop clearPushRegistration from running the others', async () => {
+    // The callers swallow this rejection as best-effort, so a sequence that
+    // stopped at the first throw would leave a working key behind an unpair and
+    // nothing would say so. The token runs last, so it proves the whole list ran.
+    const strandedKeyHex = 'e'.repeat(64);
+    configureSharedKeychain();
+    const pushKeys = await loadPushKeys();
+    await pushKeys.getOrCreatePushKey();
+    await pushKeys.persistNsePushIdentityPublicKey(new Uint8Array(32).fill(7));
+    await pushKeys.setLastRegisteredExpoToken('ExponentPushToken[device]');
+    secureStoreState.storedValues.set(secureStoreState.locationOf('push.decrypt.key'), strandedKeyHex);
+    secureStoreState.failingDeleteLocations.add(
+      secureStoreState.locationOf('push.decrypt.key', { keychainService: SHARED_SERVICE, accessGroup: SHARED_ACCESS_GROUP }),
+    );
+
+    await expect(pushKeys.clearPushRegistration()).rejects.toThrow('Keychain delete failed for push.decrypt.key');
+
+    expect(legacyValue('push.decrypt.key')).toBeUndefined();
+    expect(sharedValue('push.identity.pk')).toBeUndefined();
+    expect(legacyValue('push.expoToken.lastRegistered')).toBeUndefined();
+  });
+
+  it('still returns the migrated key when deleting the legacy copy fails', async () => {
+    // The key is safely in its new home by then, so a tidy-up failure must not
+    // turn into a failed read: that would be a placeholder on every push.
+    const existingKeyHex = 'b'.repeat(64);
+    secureStoreState.storedValues.set(secureStoreState.locationOf('push.decrypt.key'), existingKeyHex);
+    secureStoreState.failingDeleteLocations.add(secureStoreState.locationOf('push.decrypt.key'));
+    configureSharedKeychain();
+
+    const pushKeys = await loadPushKeys();
+    const pushKey = await pushKeys.getPushKeyIfExists();
+
+    expect(bytesToHex(pushKey as Uint8Array)).toBe(existingKeyHex);
+    expect(sharedValue('push.decrypt.key')).toBe(existingKeyHex);
+  });
+
+  it('degrades to null when undoing a stale migration write fails', async () => {
+    // The same race as the case above, with the undo itself failing. The caller
+    // must degrade to the placeholder rather than see a rejected read.
+    const legacyKeyHex = 'a1'.repeat(32);
+    secureStoreState.storedValues.set(secureStoreState.locationOf('push.decrypt.key'), legacyKeyHex);
+    configureSharedKeychain();
+
+    const pushKeys = await loadPushKeys();
+    const SecureStore = await import('expo-secure-store');
+
+    let releaseWrite: () => void = () => {};
+    let writeStarted: () => void = () => {};
+    const writeStartedPromise = new Promise<void>((resolve) => {
+      writeStarted = resolve;
+    });
+    vi.mocked(SecureStore.setItemAsync).mockImplementationOnce(
+      (key: string, value: string, options?: MockSecureStoreOptions) =>
+        new Promise<void>((resolve) => {
+          writeStarted();
+          releaseWrite = () => {
+            secureStoreState.storedValues.set(secureStoreState.locationOf(key, options), value);
+            resolve();
+          };
+        }),
+    );
+
+    const inFlightRead = pushKeys.getPushKeyIfExists();
+    await writeStartedPromise;
+    await pushKeys.clearPushRegistration();
+    secureStoreState.failingDeleteLocations.add(
+      secureStoreState.locationOf('push.decrypt.key', { keychainService: SHARED_SERVICE, accessGroup: SHARED_ACCESS_GROUP }),
+    );
+    releaseWrite();
+
+    expect(await inFlightRead).toBeNull();
   });
 });
 
