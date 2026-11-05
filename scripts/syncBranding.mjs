@@ -122,10 +122,10 @@ const BRANDMARK_SOURCES = [
 /**
  * The activity marks this app renders, and only those.
  *
- * The package ships eleven. An agent session wears the working ring or one of
+ * The package ships twelve. An agent session wears the working ring or one of
  * its three waits (2.12.0): the envelope for a finished turn, the speech
  * bubble (`agent-question`) for a question or a wait of unknown kind, and the
- * crested shield (`agent-approval`) for a tool or plan to approve. The shield's
+ * quartered shield (`agent-approval`) for a tool or plan to approve. The shield's
  * ink is 18 x 20, a unit taller than the 18 slot at the peak and the point, a
  * recorded overshoot upstream; it draws on the same grid at the same size as
  * its siblings, never scaled down to fit. The Command Terminal surfaces (task
@@ -140,6 +140,9 @@ const BRANDMARK_SOURCES = [
  *   both states and no blink is generated or implemented.
  * - `control-pause-*`: the phone's Pause is a sheet row, not the desktop's
  *   ring control.
+ * - `agent-stopped` (2.13.0): the board has stopped and wants a person. Drawing
+ *   it needs a reason to pair it with, so it is a feature, not a sync, and until
+ *   it is adopted `agent-idle` covers that state, as upstream's README says.
  *
  * Same reason BRANDMARK_SOURCES omits brandmark-filled.svg: geometry nothing
  * draws stays out of the bundle. Adding a mark here is all it takes when a

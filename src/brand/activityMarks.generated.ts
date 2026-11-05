@@ -119,6 +119,7 @@ export const activityMarks: Record<ActivityMarkName, ActivityMark> = {
   'agent-approval': {
     shapes: [
       { kind: 'path', d: 'M3 6 A1 1 0 0 1 4 5 A12.1667 12.1667 0 0 0 12 2 A12.1667 12.1667 0 0 0 20 5 A1 1 0 0 1 21 6 V11 A11.2222 11.2222 0 0 1 12 22 A11.2222 11.2222 0 0 1 3 11 Z' },
+      { kind: 'path', d: 'M11 2.7846 V11 M9.4 3.736 V11 M7.8 4.3914 V11 M6.2 4.7994 V11 M4.6 4.9852 V11 M3 11 H11 M13 13 V21.7497 M14.6 13 V21.1333 M16.2 13 V20.2029 M17.8 13 V18.8474 M19.4 13 V16.775 M13 13 H20.8203' },
     ],
     restRendering: 'static',
     minPx: 12,
