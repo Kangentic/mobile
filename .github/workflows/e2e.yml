@@ -75,8 +75,8 @@ env:
   # The installer reads this from the environment and resolves
   # `releases/download/cli-$MAESTRO_VERSION/maestro.zip`, so the value is a bare
   # version and the `cli-` prefix is the installer's. Verified against the real
-  # tag before pinning, because `maestro --version` prints `2.7.0` while the tag
-  # is `cli-2.7.0`, and a pin that 404s would have converted this fix into the
+  # tag before pinning, because `maestro --version` prints `2.12.1` while the tag
+  # is `cli-2.12.1`, and a pin that 404s would have converted this fix into the
   # outage it exists to prevent.
   #
   # Declared once at WORKFLOW level rather than twice at step level: both the
@@ -88,7 +88,7 @@ env:
   #
   # Bump deliberately: read Maestro's release notes, run both suites, then move
   # this line and the rule's in the same commit.
-  MAESTRO_VERSION: '2.7.0'
+  MAESTRO_VERSION: '2.12.1'
   # No telemetry from CI. Maestro phones home on every invocation unless this is
   # set, which is 13 calls per paired run, and the runner has nothing to say that
   # this project wants said on its behalf. It also silences the notice that the
@@ -245,7 +245,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-node-deps
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
@@ -496,7 +496,7 @@ jobs:
 
       # Maestro is a JVM tool. The runner image happens to ship a JDK, but
       # pinning it means an image change cannot silently break this job.
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
@@ -698,7 +698,7 @@ jobs:
 
       # Maestro is a JVM tool. The runner image happens to ship a JDK, but
       # pinning it means an image change cannot silently break this job.
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'

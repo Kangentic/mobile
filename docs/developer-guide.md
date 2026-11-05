@@ -923,7 +923,7 @@ purpose.
 
 - **The Maestro CLI is pinned.** `curl -Ls https://get.maestro.mobile.dev` installs
   `releases/latest` unless `MAESTRO_VERSION` is set, so every run used to install whatever shipped
-  that morning - currently 2.7.0. It is now a workflow-level `env:` in `e2e.yml`, read by both
+  that morning - currently 2.12.1. It is now a workflow-level `env:` in `e2e.yml`, read by both
   emulator jobs, and repeated in `build-ios.yml`, which runs the same `.maestro/smoke.yaml` on a
   macOS runner. In `e2e.yml` only, a `Report the Maestro version` step **asserts** the installed
   version equals the pin rather than printing it for a human who is not reading. `build-ios.yml`
@@ -975,7 +975,7 @@ and ESLint 10 (not Expo-mapped, but `eslint-config-expo`'s `eslint-plugin-react`
 `context.getFilename()`, which ESLint 10 removed).
 
 **GitHub Actions are kept off Node 20**, which GitHub is already force-running on Node 24 and will
-eventually remove. `actions/setup-java@v5`, `android-actions/setup-android@v4` and
+eventually remove. `actions/setup-java@v6`, `android-actions/setup-android@v4` and
 `gradle/actions/setup-gradle@v5` were the last three declaring `node20`. Two notes on those bumps:
 
 - **`setup-gradle` is on v5 and must not be bumped to v6 casually.** v6 extracted this action's
