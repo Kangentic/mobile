@@ -199,7 +199,7 @@ describe('TaskHeader status glyph', () => {
   /**
    * The header draws a running session's wait the way the desktop's task view
    * does (protocol 0.26.0): the bubble for a question or a wait of no kind, the
-   * crested shield for an approval, and the envelope once the turn is done.
+   * quartered shield for an approval, and the envelope once the turn is done.
    * The session is `running`, so the icon draws at all (a queued or paused one
    * draws none), and the board row names no session so nothing but the activity
    * entry speaks.

@@ -99,7 +99,7 @@ const MARK_NAMES = Object.keys(activityMarks) as ActivityMarkName[];
 const KNOWN_REST_RENDERINGS = new Set(['static', 'keep-dash', 'drop-dash']);
 
 /**
- * The eight marks the app draws, and no others. The package ships eleven; the
+ * The eight marks the app draws, and no others. The package ships twelve; the
  * rest are left out on purpose, each for a reason that is a design decision and
  * not an oversight (scripts/syncBranding.mjs, ACTIVITY_MARKS):
  *
@@ -108,6 +108,8 @@ const KNOWN_REST_RENDERINGS = new Set(['static', 'keep-dash', 'drop-dash']);
  *   animation that never stops (motion-conventions.md).
  * - `control-pause-*` is not drawn: the phone's Pause is a sheet row, not the
  *   desktop's ring control.
+ * - `agent-stopped` is not adopted yet, and until it is `agent-idle` covers its
+ *   state, as the package's README says.
  */
 const EXPECTED_MARK_NAMES = [
   'agent-approval',
@@ -198,7 +200,7 @@ describe('activityMarks', () => {
     // Non-vacuity guard: every cross-check below compares against this object,
     // and all of them would pass trivially against an empty or wrong-shaped one.
     expect(manifest.grid.pathLength).toBe(100);
-    expect(Object.keys(manifest.marks).length).toBe(11);
+    expect(Object.keys(manifest.marks).length).toBe(12);
   });
 
   it('generates exactly the eight marks the app draws, and deliberately not terminal-working or the pause controls', () => {
@@ -559,11 +561,20 @@ function endpointExtents(pathData: string): { minX: number; maxX: number; minY: 
 describe('the wait marks (agent-question, agent-approval)', () => {
   const waitMarkNames = ['agent-question', 'agent-approval'] as const;
 
-  /** One stroked path each, verbatim: the bubble and the crested shield. */
-  it.each(waitMarkNames)('%s is the upstream outline: one stroked path, verbatim', (markName) => {
+  /**
+   * Stroked paths, verbatim: one for the bubble, two for the quartered shield.
+   * The shield's second path is its two solid quarters, drawn as 2-unit strokes
+   * set 1.6 apart so they overlap. No path carries its own stroke attributes, so
+   * the renderer's single stroke width is the one upstream drew them with.
+   */
+  it.each([
+    ['agent-question', 1],
+    ['agent-approval', 2],
+  ] as const)('%s is the upstream drawing: %i stroked path(s), verbatim', (markName, pathCount) => {
     const upstream = upstreamElements(markName);
-    expect(upstream.map((element) => element.tagName)).toEqual(['path']);
-    expect(activityMarks[markName].shapes).toEqual([{ kind: 'path', d: upstream[0].attributes.d }]);
+    expect(upstream.map((element) => element.tagName)).toEqual(Array(pathCount).fill('path'));
+    for (const element of upstream) expect(Object.keys(element.attributes)).toEqual(['d']);
+    expect(activityMarks[markName].shapes).toEqual(upstream.map((element) => ({ kind: 'path', d: element.attributes.d })));
   });
 
   it.each(waitMarkNames)('%s is static, in the attention tone, at the indicator floor', (markName) => {
@@ -577,10 +588,10 @@ describe('the wait marks (agent-question, agent-approval)', () => {
     expect(mark.minPx).toBe(manifest.floors.indicator);
   });
 
-  /** The one path a wait mark is drawn with. */
+  /** A wait mark's outline, which is always its first path. */
   function waitMarkPath(markName: (typeof waitMarkNames)[number]): string {
     const [shape] = activityMarks[markName].shapes;
-    if (shape?.kind !== 'path') throw new Error(`${markName} is not drawn as a single path`);
+    if (shape?.kind !== 'path') throw new Error(`${markName} does not start with its outline path`);
     return shape.d;
   }
 

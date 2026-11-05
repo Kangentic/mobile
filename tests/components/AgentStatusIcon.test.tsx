@@ -1,7 +1,7 @@
 /**
  * AgentStatusIcon draws @kangentic/branding's activity marks: a green ring that
  * spins while the agent thinks, and in amber the bubble for a question, the
- * crested shield for an approval and the envelope for a finished turn.
+ * quartered shield for an approval and the envelope for a finished turn.
  *
  * Every expected value is read from the generated mark data rather than typed as
  * a literal. That is deliberate and it is the point of the module: the geometry,
@@ -111,21 +111,22 @@ if (idleFlap === undefined || idleFlap.kind !== 'path') {
   throw new Error('agent-idle must ship a flap path; @kangentic/branding changed its activity marks');
 }
 
-// The two waits on the user (protocol 0.26.0) are each ONE path - the bubble and
-// the crested shield - where the envelope is a rect plus a flap, so "which mark
-// drew" reads straight off the path data.
-function soleMarkPath(mark: ActivityMark, markName: string): string {
-  const [shape] = mark.shapes;
-  if (mark.shapes.length !== 1 || shape === undefined || shape.kind !== 'path') {
-    throw new Error(`${markName} must ship exactly one path; @kangentic/branding changed its activity marks`);
+// The two waits on the user (protocol 0.26.0) are drawn in paths alone - one for
+// the bubble, two for the quartered shield (its outline, then the two solid
+// quarters) - where the envelope is a rect plus a flap, so "which mark drew" reads
+// straight off the path data.
+function markPaths(mark: ActivityMark, markName: string): string[] {
+  const paths = mark.shapes.flatMap((shape) => (shape.kind === 'path' ? [shape.d] : []));
+  if (paths.length === 0 || paths.length !== mark.shapes.length) {
+    throw new Error(`${markName} must ship paths and nothing else; @kangentic/branding changed its activity marks`);
   }
-  return shape.d;
+  return paths;
 }
-const questionPath = soleMarkPath(activityMarks['agent-question'], 'agent-question');
-const approvalPath = soleMarkPath(activityMarks['agent-approval'], 'agent-approval');
-const waitMarkCases: readonly { kind: 'question' | 'approval'; markName: 'agent-question' | 'agent-approval'; expectedPath: string }[] = [
-  { kind: 'question', markName: 'agent-question', expectedPath: questionPath },
-  { kind: 'approval', markName: 'agent-approval', expectedPath: approvalPath },
+const questionPaths = markPaths(activityMarks['agent-question'], 'agent-question');
+const approvalPaths = markPaths(activityMarks['agent-approval'], 'agent-approval');
+const waitMarkCases: readonly { kind: 'question' | 'approval'; markName: 'agent-question' | 'agent-approval'; expectedPaths: readonly string[] }[] = [
+  { kind: 'question', markName: 'agent-question', expectedPaths: questionPaths },
+  { kind: 'approval', markName: 'agent-approval', expectedPaths: approvalPaths },
 ];
 
 function renderIcon(props: React.ComponentProps<typeof AgentStatusIcon>): ReturnType<typeof render> {
@@ -335,7 +336,7 @@ describe('the idle envelope', () => {
 });
 
 /**
- * The bubble (a question) and the crested shield (an approval) are the two
+ * The bubble (a question) and the quartered shield (an approval) are the two
  * waits on the user. They are told apart from each other and from the envelope
  * by SHAPE alone: all three share the needs-you tone and the grid, so a kind
  * that drew the wrong mark would still be the right amber at the right size.
@@ -344,15 +345,15 @@ describe('the idle envelope', () => {
 describe('the wait marks (question and approval)', () => {
   it('keeps the two paths distinct from each other and from the envelope flap', () => {
     // Without this, two kinds mapped to one mark could satisfy every case below.
-    expect(questionPath).not.toBe(approvalPath);
-    expect(questionPath).not.toBe(idleFlap.d);
-    expect(approvalPath).not.toBe(idleFlap.d);
+    expect(questionPaths).not.toEqual(approvalPaths);
+    expect(questionPaths).not.toContain(idleFlap.d);
+    expect(approvalPaths).not.toContain(idleFlap.d);
   });
 
-  it.each(waitMarkCases)('draws the $kind kind as its own single path, not the envelope', async ({ kind, expectedPath }) => {
+  it.each(waitMarkCases)('draws every path of the $kind kind and not the envelope', async ({ kind, expectedPaths }) => {
     await renderIcon({ kind });
 
-    expect(screen.getByTestId('svg-path').props.d).toBe(expectedPath);
+    expect(screen.getAllByTestId('svg-path').map((path) => path.props.d)).toEqual(expectedPaths);
     // The envelope is a rect plus a flap, and the working ring a circle: neither may ride along.
     expect(screen.queryByTestId('svg-rect')).toBeNull();
     expect(screen.queryByTestId('svg-circle')).toBeNull();
