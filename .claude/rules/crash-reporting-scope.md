@@ -28,8 +28,9 @@ scrubber is therefore a second line of defence, never the control itself.
   Everywhere else, crash reporting is automatic through the global handler. This exists so that
   no other module can re-enable a default the init deliberately turned off, or capture an event
   that bypasses the configured scrubber. Behind the door there are exactly two capture calls:
-  `reportCaughtError` (the root error boundary; the message is kept, because a render throw's
-  message is app-authored and is what makes the event diagnosable) and `reportHandledError` (the
+  `reportCaughtError` (the error boundaries, the root one and the chat feeds' `FeedErrorBoundary`,
+  whose names are the closed `CaughtErrorBoundary` union; the message is kept, because a render
+  throw's message is app-authored and is what makes the event diagnosable) and `reportHandledError` (the
   handled-error door, next bullet but one; the message is never sent). Nothing else calls
   `captureException`.
 - **`src/pairing/**`, `src/channel/**`, `src/demo/**`, `src/devsupport/**`,

@@ -4,8 +4,10 @@ import { Button, Screen, Stack, Text, ThemeProvider } from '@/components';
 import { reportCaughtError } from '@/observability/crashReporting';
 
 /**
- * The app's only error boundary, exported as `ErrorBoundary` from
- * `app/_layout.tsx` so expo-router wraps the whole route tree in it.
+ * The app's root error boundary, exported as `ErrorBoundary` from
+ * `app/_layout.tsx` so expo-router wraps the whole route tree in it. A throw
+ * here costs the user the whole app, so a surface that can fail on its own and
+ * leave the screen usable gets a boundary of its own: see `FeedErrorBoundary`.
  *
  * Before this, an uncaught render or effect throw anywhere in a screen took the
  * process down: nothing in the repo implemented `componentDidCatch` or

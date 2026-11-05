@@ -534,9 +534,9 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
   each attaches data and none has an option of its own: `ExpoConstants` (a per-launch session id
   and project metadata on every event), `TurboModuleContext` and `ExpoUpdatesListener`. A unit
   test pins the installed SDK's whole default-integration list, so a default a future upgrade adds
-  fails CI until it has been reviewed. The one deliberate exception is a render throw caught by the
-  app's root error boundary, which keeps its message: that text is written by this app, not by
-  a peer or a user, and it is what makes the crash diagnosable.
+  fails CI until it has been reviewed. The one deliberate exception is a render throw caught by an
+  error boundary (the root one or a chat feed's), which keeps its message: that text is written by
+  this app, not by a peer or a user, and it is what makes the crash diagnosable.
   The one thing the app deliberately ADDS is a single diagnostic breadcrumb, recorded when the OS
   reports memory pressure: category `app.memory`, carrying a count of warnings seen this launch
   and nothing else - no byte figure, no free text, no session content. It exists because the OS
@@ -626,9 +626,10 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
 - **Why we accept it:** the alternative is shipping blind. The app has no logger and no other
   diagnostics, so before this a production crash was simply invisible. Store dashboards (Play
   Console, App Store Connect) report crash counts but no JavaScript frames, which for a React
-  Native app is most of the story. The app does now have one error boundary
+  Native app is most of the story. The app does now have error boundaries
   (`src/screens/AppErrorBoundaryScreen.tsx`, wired as the root `ErrorBoundary` in
-  `app/_layout.tsx`), and that makes reporting MORE load-bearing rather than less: React hands a
+  `app/_layout.tsx`, and `src/screens/task/FeedErrorBoundary.tsx` around each chat feed), and that
+  makes reporting MORE load-bearing rather than less: React hands a
   caught error to the boundary instead of to `ErrorUtils`, so the global handler never sees it.
   `reportCaughtError` in `src/observability/crashReporting.ts` is the capture path that stops a
   boundary trading a visible crash for an invisible one. `reportHandledError`, beside it, is the

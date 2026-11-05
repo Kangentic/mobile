@@ -1,7 +1,9 @@
 import React from 'react';
+import { View } from 'react-native';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import type { TranscriptEntryWire } from '@kangentic/protocol';
 import { ThemeProvider } from '@/components';
+import { AppErrorBoundaryScreen } from '@/screens/AppErrorBoundaryScreen';
 import { ConversationTab } from '@/screens/task/ConversationTab';
 import { useActivityStore } from '@/state/activityStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
@@ -39,11 +41,25 @@ jest.mock('expo-speech-recognition', () => ({
   useSpeechRecognitionEvent: jest.fn(),
 }));
 
-const mockFlashListScrollToEnd = jest.fn();
+// AppErrorBoundaryScreen renders a Screen, which reads the safe area.
+jest.mock('react-native-safe-area-context', () =>
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
+  require('react-native-safe-area-context/jest/mock').default,
+);
+
+const mockReportCaughtError = jest.fn();
+jest.mock('@/observability/crashReporting', () => ({
+  ...jest.requireActual('@/observability/crashReporting'),
+  reportCaughtError: (error: Error, boundary: string) => mockReportCaughtError(error, boundary),
+}));
+
+const mockNativeScrollToEnd = jest.fn();
+/** When set, the list throws from a layout effect: MOBILE-F's real phase. */
+const mockFlashListFailure: { error: Error | null } = { error: null };
 // Wraps the REAL FlashList (every other test in this file keeps exercising
-// its actual virtualization and layout behavior) and only intercepts
-// scrollToEnd on the ref, so the re-anchor test below can assert on it
-// without reaching into native scroll-command dispatch.
+// its actual virtualization and layout behavior) and only hands back a native
+// scroll ref with a spy on it, so the re-anchor test below can assert on the
+// scroll without reaching into native scroll-command dispatch.
 jest.mock('@shopify/flash-list', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy require, evaluated inside the mock factory
   const ReactModule = require('react');
@@ -51,16 +67,15 @@ jest.mock('@shopify/flash-list', () => {
   const RealFlashList = ActualFlashListModule.FlashList;
   const SpyingFlashList = ReactModule.forwardRef(function SpyingFlashList(
     props: object,
-    forwardedRef: React.Ref<{ scrollToEnd: (params?: { animated?: boolean }) => void }>,
+    forwardedRef: React.Ref<{ getNativeScrollRef: () => { scrollToEnd: (params?: { animated?: boolean }) => void } }>,
   ) {
-    const innerRef = ReactModule.useRef(null);
+    ReactModule.useLayoutEffect(() => {
+      if (mockFlashListFailure.error !== null) throw mockFlashListFailure.error;
+    });
     ReactModule.useImperativeHandle(forwardedRef, () => ({
-      scrollToEnd: (params?: { animated?: boolean }) => {
-        mockFlashListScrollToEnd(params);
-        innerRef.current?.scrollToEnd(params);
-      },
+      getNativeScrollRef: () => ({ scrollToEnd: mockNativeScrollToEnd }),
     }));
-    return ReactModule.createElement(RealFlashList, { ...props, ref: innerRef });
+    return ReactModule.createElement(RealFlashList, props);
   });
   return { ...ActualFlashListModule, FlashList: SpyingFlashList };
 });
@@ -131,7 +146,7 @@ describe('ConversationTab', () => {
   beforeEach(() => {
     seedStores();
     jest.mocked(loadOlderTranscript).mockClear();
-    mockFlashListScrollToEnd.mockClear();
+    mockNativeScrollToEnd.mockClear();
   });
 
   async function scrollTo(offsetFromTop: number): Promise<void> {
@@ -287,18 +302,131 @@ describe('ConversationTab', () => {
     const list = screen.getByTestId('conversation-list');
 
     await fireEvent(list, 'contentSizeChange', 400, 2000);
-    const callsAfterFirstGrowth = mockFlashListScrollToEnd.mock.calls.length;
+    const callsAfterFirstGrowth = mockNativeScrollToEnd.mock.calls.length;
     expect(callsAfterFirstGrowth).toBeGreaterThan(0);
 
     // A second, later growth must re-anchor too, not be a no-op because the
     // list already anchored once.
     await fireEvent(list, 'contentSizeChange', 400, 2400);
-    expect(mockFlashListScrollToEnd.mock.calls.length).toBeGreaterThan(callsAfterFirstGrowth);
+    expect(mockNativeScrollToEnd.mock.calls.length).toBeGreaterThan(callsAfterFirstGrowth);
 
-    const callsBeforeDrag = mockFlashListScrollToEnd.mock.calls.length;
+    const callsBeforeDrag = mockNativeScrollToEnd.mock.calls.length;
     await fireEvent(list, 'scrollBeginDrag');
     await fireEvent(list, 'contentSizeChange', 400, 2800);
-    expect(mockFlashListScrollToEnd.mock.calls.length).toBe(callsBeforeDrag);
+    expect(mockNativeScrollToEnd.mock.calls.length).toBe(callsBeforeDrag);
+  });
+});
+
+/**
+ * Stands in for expo-router's `<Try catch={ErrorBoundary}>`, which is what
+ * app/_layout.tsx's `ErrorBoundary` export installs around the whole route
+ * tree. Without a boundary of its own, a feed throw lands here.
+ */
+class RootBoundaryStandIn extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
+  override state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error): { error: Error } {
+    return { error };
+  }
+
+  override render(): React.ReactNode {
+    if (this.state.error !== null) {
+      return <AppErrorBoundaryScreen error={this.state.error} retry={async () => undefined} />;
+    }
+    return this.props.children;
+  }
+}
+
+/**
+ * Sentry MOBILE-F: a list loop in the feed threw from FlashList's layout effect
+ * and reached the root boundary, so one feed replaced the whole app. The screen
+ * around the feed has to survive it, and the crash has to stay reported, because
+ * a caught error never reaches the global handler.
+ *
+ * Mutation that reddens these: render ConversationFeed without its boundary. The
+ * root screen comes up in its place.
+ */
+describe('ConversationTab - feed error boundary', () => {
+  const loopError = new Error('Maximum update depth exceeded.');
+  let consoleError: jest.SpyInstance;
+
+  beforeEach(() => {
+    seedStores();
+    mockReportCaughtError.mockClear();
+    // React logs every caught error; expected here, and noise in the run.
+    consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    mockFlashListFailure.error = loopError;
+  });
+
+  afterEach(() => {
+    mockFlashListFailure.error = null;
+    consoleError.mockRestore();
+  });
+
+  function tree(sessionId: string): React.JSX.Element {
+    return (
+      <ThemeProvider>
+        <RootBoundaryStandIn>
+          <View testID="session-screen-sibling" />
+          <ConversationTab taskId="task-1" sessionId={sessionId} projectId="project-1" />
+        </RootBoundaryStandIn>
+      </ThemeProvider>
+    );
+  }
+
+  it('keeps a feed crash inside the pane, so the screen around it survives', async () => {
+    await render(tree('sess-1'));
+
+    expect(screen.queryByTestId('app-error-boundary')).toBeNull();
+    expect(screen.getByTestId('feed-error')).toBeTruthy();
+    expect(screen.getByText('Chat failed to load')).toBeTruthy();
+    expect(screen.getByTestId('session-screen-sibling')).toBeTruthy();
+  });
+
+  it('reports the crash under its own boundary name, not the root one', async () => {
+    await render(tree('sess-1'));
+
+    expect(mockReportCaughtError).toHaveBeenCalledTimes(1);
+    expect(mockReportCaughtError).toHaveBeenCalledWith(loopError, 'conversation-feed');
+  });
+
+  it('remounts the feed on Try again', async () => {
+    await render(tree('sess-1'));
+
+    mockFlashListFailure.error = null;
+    await fireEvent.press(screen.getByTestId('feed-error-retry'));
+
+    expect(screen.queryByTestId('feed-error')).toBeNull();
+    expect(screen.getByTestId('conversation-list')).toBeTruthy();
+  });
+
+  /** The two MOBILE-F events 5 s apart fit Try again throwing straight back. */
+  it('stays on the fallback, and reports again, when Try again throws again', async () => {
+    await render(tree('sess-1'));
+
+    await fireEvent.press(screen.getByTestId('feed-error-retry'));
+
+    expect(screen.getByTestId('feed-error')).toBeTruthy();
+    expect(screen.queryByTestId('app-error-boundary')).toBeNull();
+    expect(mockReportCaughtError).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * CompletedTaskScreen renders ConversationTab with no `key`, so the session
+   * can change under a live boundary. One session's failure is no verdict on
+   * the next.
+   *
+   * Mutation that reddens this: drop the boundary's `key`.
+   */
+  it('gives another session a fresh start', async () => {
+    const view = await render(tree('sess-1'));
+    expect(screen.getByTestId('feed-error')).toBeTruthy();
+
+    mockFlashListFailure.error = null;
+    await view.rerender(tree('sess-2'));
+
+    expect(screen.queryByTestId('feed-error')).toBeNull();
+    expect(screen.getByTestId('conversation-list')).toBeTruthy();
   });
 });
 

@@ -161,6 +161,12 @@ export function crashNatively(): void {
 }
 
 /**
+ * Which boundary caught a throw. A closed union, as `HandledErrorSite` is, so
+ * the `errorBoundary` tag is a compile-time literal.
+ */
+export type CaughtErrorBoundary = 'root-layout' | 'conversation-feed' | 'reading-view-feed';
+
+/**
  * Reports an error that a React error boundary CAUGHT.
  *
  * This exists because a boundary changes what gets reported, not just what
@@ -175,7 +181,7 @@ export function crashNatively(): void {
  * other JS-captured event, so the privacy controls in
  * `.claude/rules/crash-reporting-scope.md` apply unchanged.
  */
-export function reportCaughtError(error: Error, boundary: string): void {
+export function reportCaughtError(error: Error, boundary: CaughtErrorBoundary): void {
   if (!initialized) return;
   Sentry.captureException(error, { tags: { errorBoundary: boundary } });
 }
