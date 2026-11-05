@@ -26,7 +26,7 @@ export type AgentStatusKind = 'working' | 'question' | 'approval' | 'idle-unread
 /**
  * The kind a running agent session wears, as the desktop's `agentActivityMark`
  * picks its mark: the working ring while it thinks; while it waits on the user,
- * the bubble for a question or a wait of unknown kind and the crested shield for
+ * the bubble for a question or a wait of unknown kind and the quartered shield for
  * an approval (src/lib/agentWait.ts); otherwise the envelope of a finished
  * turn. Every surface that draws an agent's own status asks this one function,
  * so the board card, the Agents feed and the session header cannot draw the
@@ -144,7 +144,7 @@ function MarchingMark({
  * Desktop-parity session status, drawn from @kangentic/branding's activity
  * marks: a green ring that SPINS while the agent thinks, and in amber, the
  * user's move, one of three static marks saying why: the speech bubble for a
- * question (or a wait whose kind the agent does not report), the crested
+ * question (or a wait whose kind the agent does not report), the quartered
  * shield for a tool or plan to approve, and the envelope for a finished turn.
  * The shape alone tells them apart; all three share the needs-you tone, the
  * grid and the size (the shield's ink is a unit taller than its siblings on

@@ -697,7 +697,7 @@ describe('BoardScreen', () => {
   /**
    * A running session that needs the user wears the mark that says why
    * (protocol 0.26.0, as the desktop card does): the bubble for a question or
-   * a wait of no reported kind, the crested shield for an approval, and the
+   * a wait of no reported kind, the quartered shield for an approval, and the
    * envelope once the turn is done. All three are the same amber at the same
    * size, so the SHAPE is the assertion: the path data under the status icon
    * (react-native-svg is unmocked here and its path host carries `d`). The
