@@ -5,6 +5,7 @@ import { bytesToHex, hexToBytes, randomBytes, X25519_KEY_LENGTH } from '@kangent
 // them. nseProbeVectors.ts is kept free of notifee and SecureStore precisely so
 // it can be imported from a module the plain-Node decrypt tests load.
 import { nseProbeEnabled } from '@/devsupport/nseProbeVectors';
+import { attemptAll } from '@/lib/attemptAll';
 import {
   LEGACY_PUSH_STORAGE_OPTIONS,
   PUSH_IDENTITY_PUBLIC_KEY_STORAGE_KEY,
@@ -170,18 +171,32 @@ async function readStoredPushKeyHex(): Promise<string | null> {
   if (generationAtReadStart !== pushKeyGeneration) {
     const strayKeyHex = await SecureStore.getItemAsync(PUSH_DECRYPT_KEY_STORAGE_KEY, storageOptions);
     if (strayKeyHex === legacyKeyHex) {
-      await SecureStore.deleteItemAsync(PUSH_DECRYPT_KEY_STORAGE_KEY, storageOptions);
+      await deleteDuringMigration(storageOptions);
     }
     return null;
   }
 
   const readBackKeyHex = await SecureStore.getItemAsync(PUSH_DECRYPT_KEY_STORAGE_KEY, storageOptions);
   if (readBackKeyHex === legacyKeyHex) {
-    await SecureStore.deleteItemAsync(PUSH_DECRYPT_KEY_STORAGE_KEY, LEGACY_PUSH_STORAGE_OPTIONS);
+    await deleteDuringMigration(LEGACY_PUSH_STORAGE_OPTIONS);
   }
   // Returned either way: the key is valid and usable even if the tidy-up did
-  // not land, and the next call simply retries the migration.
+  // not land. A copy left behind is removed at the next unpair, which clears
+  // the pre-NSE location too.
   return legacyKeyHex;
+}
+
+/**
+ * A delete the migration can live without, so a failure must not fail the read
+ * around it: that read is the decrypt path, and a rejection there costs a push
+ * its content. Silent like the rest of this path (e2e-notification-privacy.md).
+ */
+async function deleteDuringMigration(options: SecureStore.SecureStoreOptions): Promise<void> {
+  try {
+    await SecureStore.deleteItemAsync(PUSH_DECRYPT_KEY_STORAGE_KEY, options);
+  } catch {
+    // Nothing to do: see above.
+  }
 }
 
 /**
@@ -307,19 +322,22 @@ export async function setLastRegisteredExpoToken(expoPushToken: string): Promise
  * unpairing and can send notifications this phone will happily decrypt
  * and display. Clears both secure-store entries and the in-memory cache
  * so a subsequent re-pair on this process generates a fresh key rather
- * than reusing the wiped one.
+ * than reusing the wiped one. Rejects if a delete failed, but only after trying
+ * them all, since every caller treats the wipe as best-effort.
  */
 export async function clearPushRegistration(): Promise<void> {
   pushKeyGeneration += 1;
   cachedPushKey = null;
   cachedNsePushIdentityPublicKey = null;
-  await SecureStore.deleteItemAsync(PUSH_DECRYPT_KEY_STORAGE_KEY, sharedPushStorageOptions());
-  // Also the pre-NSE location: a migration that never ran, or was interrupted
-  // between its write and its delete, would otherwise leave a readable key
-  // behind after an unpair. Harmless when there is nothing there.
-  await SecureStore.deleteItemAsync(PUSH_DECRYPT_KEY_STORAGE_KEY, LEGACY_PUSH_STORAGE_OPTIONS);
-  await SecureStore.deleteItemAsync(PUSH_IDENTITY_PUBLIC_KEY_STORAGE_KEY, sharedPushStorageOptions());
-  await SecureStore.deleteItemAsync(LAST_REGISTERED_EXPO_TOKEN_STORAGE_KEY);
+  await attemptAll([
+    () => SecureStore.deleteItemAsync(PUSH_DECRYPT_KEY_STORAGE_KEY, sharedPushStorageOptions()),
+    // Also the pre-NSE location: a migration that never ran, or was interrupted
+    // between its write and its delete, would otherwise leave a readable key
+    // behind after an unpair. Harmless when there is nothing there.
+    () => SecureStore.deleteItemAsync(PUSH_DECRYPT_KEY_STORAGE_KEY, LEGACY_PUSH_STORAGE_OPTIONS),
+    () => SecureStore.deleteItemAsync(PUSH_IDENTITY_PUBLIC_KEY_STORAGE_KEY, sharedPushStorageOptions()),
+    () => SecureStore.deleteItemAsync(LAST_REGISTERED_EXPO_TOKEN_STORAGE_KEY),
+  ]);
 }
 
 async function loadOrGeneratePushKey(): Promise<Uint8Array> {

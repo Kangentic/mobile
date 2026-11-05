@@ -1,5 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import { bytesToHex, hexToBytes } from '@kangentic/protocol';
+import { attemptAll } from '@/lib/attemptAll';
 
 const DESKTOP_STATIC_PUBLIC_KEY_STORAGE_KEY = 'trust.desktopStaticPublicKey';
 const PAIRED_AT_STORAGE_KEY = 'trust.pairedAt';
@@ -55,9 +56,12 @@ export class TrustAnchorStore {
     return { desktopStaticPublicKey: hexToBytes(desktopStaticPublicKeyHex), relayAddress, pairedAt };
   }
 
+  /** Rejects if a delete failed, but only after trying all three. */
   async clear(): Promise<void> {
-    await SecureStore.deleteItemAsync(DESKTOP_STATIC_PUBLIC_KEY_STORAGE_KEY);
-    await SecureStore.deleteItemAsync(RELAY_ADDRESS_STORAGE_KEY);
-    await SecureStore.deleteItemAsync(PAIRED_AT_STORAGE_KEY);
+    await attemptAll([
+      () => SecureStore.deleteItemAsync(DESKTOP_STATIC_PUBLIC_KEY_STORAGE_KEY),
+      () => SecureStore.deleteItemAsync(RELAY_ADDRESS_STORAGE_KEY),
+      () => SecureStore.deleteItemAsync(PAIRED_AT_STORAGE_KEY),
+    ]);
   }
 }
