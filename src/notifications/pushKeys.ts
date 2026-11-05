@@ -190,6 +190,10 @@ async function readStoredPushKeyHex(): Promise<string | null> {
  * A delete the migration can live without, so a failure must not fail the read
  * around it: that read is the decrypt path, and a rejection there costs a push
  * its content. Silent like the rest of this path (e2e-notification-privacy.md).
+ *
+ * One residual, accepted for the reason the stale-write comment above gives: if
+ * undoing a stale write fails and the phone re-pairs before the next unpair, the
+ * new pairing reuses that key. It takes a race and a Keychain failure together.
  */
 async function deleteDuringMigration(options: SecureStore.SecureStoreOptions): Promise<void> {
   try {

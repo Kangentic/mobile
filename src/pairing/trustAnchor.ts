@@ -56,7 +56,11 @@ export class TrustAnchorStore {
     return { desktopStaticPublicKey: hexToBytes(desktopStaticPublicKeyHex), relayAddress, pairedAt };
   }
 
-  /** Rejects if a delete failed, but only after trying all three. */
+  /**
+   * Rejects if a delete failed, but only after trying all three. A partial clear
+   * reads as unpaired (see load), and what it leaves behind is not secret: the
+   * next pairing overwrites it.
+   */
   async clear(): Promise<void> {
     await attemptAll([
       () => SecureStore.deleteItemAsync(DESKTOP_STATIC_PUBLIC_KEY_STORAGE_KEY),

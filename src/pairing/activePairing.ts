@@ -73,8 +73,13 @@ export async function confirmActivePairing(): Promise<void> {
     machine.confirm();
   } catch (error) {
     // Raced to a terminal state between the guard and confirm; roll the
-    // anchor back so it never outlives a failed ceremony.
-    await trustAnchorStore.clear();
+    // anchor back so it never outlives a failed ceremony. A rollback that fails
+    // too stays silent: the caller needs to hear why the ceremony ended.
+    try {
+      await trustAnchorStore.clear();
+    } catch {
+      // Nothing to add: see above.
+    }
     throw error;
   }
 }
