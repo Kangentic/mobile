@@ -1,5 +1,5 @@
 import React from 'react';
-import { NativeTabs } from 'expo-router/unstable-native-tabs';
+import { NativeTabs } from 'expo-router/native-tabs';
 import { useTheme } from '@/components';
 
 /**

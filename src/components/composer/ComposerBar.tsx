@@ -1,5 +1,5 @@
 import React, { useCallback, useRef, useState } from 'react';
-import { StyleSheet, View, type TextInput } from 'react-native';
+import { StyleSheet, View, type TextInputInstance } from 'react-native';
 import { UNKNOWN_SESSION_ERROR_CODE } from '@kangentic/protocol';
 import { CapabilityError } from '@/channel';
 import { IconButton, Row, Text, TextField, useTheme } from '@/components';
@@ -43,7 +43,7 @@ export function ComposerBar({ sessionId }: ComposerBarProps): React.JSX.Element 
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [note, setNote] = useState<ComposerNote | null>(null);
-  const inputRef = useRef<TextInput>(null);
+  const inputRef = useRef<TextInputInstance>(null);
   // Mirror of `text` for callbacks that must read the latest value without re-binding.
   const textRef = useRef('');
   // What was in the input when dictation began; partials append after this.
