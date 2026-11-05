@@ -160,6 +160,20 @@ export function readAppDeploymentTarget(project: XcodeProjectLike, appTargetName
 }
 
 /**
+ * The version the extension has to mirror: one below the app's fails to link,
+ * and one above silently raises the app's minimum iOS. Refuses rather than
+ * guessing, because a hardcoded fallback only goes stale (it read 15.1 long after
+ * the template moved to 16.4) and nothing in CI reads the extension's target.
+ */
+export function requireAppDeploymentTarget(project: XcodeProjectLike, appTargetName: string): string {
+  const deploymentTarget = readAppDeploymentTarget(project, appTargetName);
+  if (deploymentTarget === null) {
+    throw new Error(`withIosNotificationServiceExtension found no IPHONEOS_DEPLOYMENT_TARGET on ${appTargetName} to mirror.`);
+  }
+  return deploymentTarget;
+}
+
+/**
  * Creates the extension target and writes its build settings. Returns false
  * when the target already exists, which makes a repeat prebuild a no-op rather
  * than adding a second target.
@@ -276,9 +290,7 @@ const withNseTarget: ConfigPlugin = (config) =>
         bundleIdentifier: nseBundleIdentifier(bundleIdentifier),
         marketingVersion: xcodeConfig.version ?? '1.0.0',
         currentProjectVersion: xcodeConfig.ios?.buildNumber ?? '1',
-        // Mirrors the app rather than pinning: a version below the app's fails
-        // to link, and one above silently raises the app's minimum iOS.
-        deploymentTarget: readAppDeploymentTarget(project, appTargetName) ?? '15.1',
+        deploymentTarget: requireAppDeploymentTarget(project, appTargetName),
       }),
     });
 
