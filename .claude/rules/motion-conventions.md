@@ -87,7 +87,7 @@ Tab switches never slide: peers are not a hierarchy.
 - Never read or write a shared value during render. It fires mid-reconciliation, and a re-render
   you did not cause replays the write. Touch shared values only in worklets, handlers and effects.
 - Prefer `.get()` and `.set()` over direct `.value` access. On Reanimated 4 (this project pins
-  4.7.1, held past the SDK 57 mapping via `expo.install.exclude`) they are the documented
+  4.7.1, the version SDK 58 maps) they are the documented
   compiler-safe form; direct `.value` is the shape the React
   Compiler cannot see through. The two places that predated this (`PressScale.tsx` and the Agents
   feed's section pulse, now `src/screens/home/SectionLandingPulse.tsx`) have both been converted.
