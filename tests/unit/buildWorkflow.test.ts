@@ -1074,6 +1074,13 @@ describe('ci.yml Native config (prebuild) R8 checks', () => {
     expect(step?.run).not.toContain('build.gradle');
   });
 
+  it('confirms strict keep rules are off, because AGP 9 crashes the release build at launch without it', () => {
+    const step = readCiJobs()['native-config'].steps?.find(
+      (candidate) => candidate.name === 'Confirm R8 is enabled for release builds'
+    );
+    expect(step?.run).toContain("if ! grep -q '^android\\.r8\\.strictFullModeForKeepRules=false$' android/gradle.properties");
+  });
+
   it('confirms the Sentry Android Gradle Plugin in its enabled form, not just by name', () => {
     // The plugin always writes the `autoUploadProguardMapping` line, with
     // `false` as the value when the upload is off, so matching the bare

@@ -502,6 +502,13 @@ jobs:
               exit 1
             fi
           done
+          # AGP 9 made a bare `-keep class A` stop keeping A's default constructor,
+          # which crashes a release build at launch: Room's rule is that bare form.
+          # See plugins/withAndroidR8ImplicitConstructors.ts.
+          if ! grep -q '^android\.r8\.strictFullModeForKeepRules=false$' android/gradle.properties; then
+            echo "::error::android.r8.strictFullModeForKeepRules is not false in the generated android/gradle.properties. R8 would remove the constructor WorkManager's Room database needs, and the release build would crash at launch."
+            exit 1
+          fi
           echo "R8 minification and resource shrinking are enabled for release builds."
 
       # Whether R8 OPTIMIZES is not checked here: since SDK 58 the template and

@@ -61,6 +61,13 @@ plugins/                      # Local Expo config plugins (withAndroidPushServic
                               #   Windows-gated inside the generated Gradle;
                               #   withAndroidGradleHeap: raises the Gradle daemon heap past the
                               #   template's 2048m so R8 survives a four-ABI production build;
+                              #   withAndroidR8ImplicitConstructors: sets AGP 9's
+                              #   android.r8.strictFullModeForKeepRules back to false, so a
+                              #   bare `-keep class A` keeps A's default constructor. WITHOUT
+                              #   IT A RELEASE BUILD CRASHES AT LAUNCH, before JS and Sentry:
+                              #   Room's rule is that bare form and WorkManager creates its
+                              #   database by reflection. Every other check stays green;
+                              #   revisit only by reading a launch and mapping.txt;
                               #   withIosPodsUuidCollisionGuard: injects a collision-safe UUID
                               #   generator into the generated Podfile's post_install hook so an
                               #   SPM object cannot take the Pods root object's UUID, droppable
