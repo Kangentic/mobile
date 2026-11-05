@@ -494,6 +494,11 @@ describe('installed @sentry/react-native default integrations', () => {
     'expoRouterIntegration',
     'spotlightIntegration',
     'mobileReplayIntegration',
+    // Experimental and opt-in, so absent unless `_experiments.profilingOptions`
+    // or `enableJsHangTracking` is set, and this app sets neither. A hang event
+    // carries a JS stack; a profile carries sampled function names.
+    'uiProfilingIntegration',
+    'jsHangTrackingIntegration',
     // An object-literal marker pushed only under
     // `_experiments.enableStandaloneAppStartTracing`, which is never set.
     '{object literal}',
