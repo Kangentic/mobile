@@ -965,7 +965,6 @@ it maps. "Measured" in the last column refers to the release-build A/B under "De
 | `react-native-worklets` | `0.13.0` | `0.13.0` | Required by Reanimated 4.7.1 (`0.13.x`); faster startup. expo-modules-core 57's optional peer caps at `^0.10.0`; its C++ integration was read against 0.13's StableApi and compiles | a release build and cold launch |
 | `react-native-svg` | `15.16.0` | `15.15.5` | patch release, taken with the set | icons render |
 | `@shopify/flash-list` | `2.3.2` | `2.3.3` | #2138 scroll position on prepend (`maintainVisibleContentPosition` feeds), #2095 no jitter; 2.3.2 disables `removeClippedSubviews` to stop an Android crash | feeds on device; retention |
-| `react-native-get-random-values` | not mapped | `~2.0.0` | one shared `SecureRandom` instead of one per call; module lookup now fails closed (`getEnforcing`). The CSPRNG under `@noble/*` | pairing and reconnect on device; `crypto-pairing-auditor` |
 | `react-native-pager-view` | `9.0.7` | `9.0.6` | Android moved to a Compose pager (#1092) with the manager API kept; post-release fixes through 9.0.6 (#1103 blank page after navigation, safe-area and keyboard shrink). `@expo/ui` already ships Compose | Board swiping on device |
 | `@sentry/react-native` | `~8.28.0` | `~8.29.0` | 8.24 Android fragment leak fix, cheaper frame collection. Privacy posture kept: three new data-adding default integrations dropped, and the installed default list is pinned by `crashReporting.test.ts` | crash-test events read back on both platforms |
 
