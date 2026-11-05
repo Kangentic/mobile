@@ -231,7 +231,7 @@ jobs:
       # CI job shares that key, and this was the job that did not.
       - uses: ./.github/actions/setup-node-deps
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
