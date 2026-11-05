@@ -756,6 +756,10 @@ const config: ExpoConfig = {
     // production build, taking the concurrent CMake configure down with it.
     // See the plugin for why this is project config, not a CI env var.
     './plugins/withAndroidGradleHeap.ts',
+    // Without this a release build dies at launch on AGP 9: strict keep rules let
+    // R8 remove the constructor WorkManager's Room database is created through.
+    // Unconditional, so e2e.yml's APK exercises exactly what ships. See the plugin.
+    './plugins/withAndroidR8ImplicitConstructors.ts',
     // THE ORDER OF THESE TWO IS LOAD BEARING, AND IT IS THE REVERSE OF WHAT IT
     // READS LIKE. The extension target must EXIST before the signing plugin can
     // write a profile onto it, and mods registered against the same key run

@@ -524,6 +524,8 @@ plugins/                     # Local Expo config plugins: withAndroidPushService
                              #   short absolute root so Android builds from any task worktree),
                              #   withAndroidGradleHeap (raises the Gradle daemon heap past the
                              #   template's 2048m so R8 survives a four-ABI production build),
+                             #   withAndroidR8ImplicitConstructors (turns AGP 9's strict keep rules
+                             #   off; a release build crashes at launch without it),
                              #   withIosPodsUuidCollisionGuard (guards pod install against
                              #   CocoaPods' sequential-UUID collision corrupting Pods.xcodeproj;
                              #   droppable once fixed upstream),
@@ -743,8 +745,25 @@ See `CLAUDE.md`'s Project Structure section; the tree there and this one move to
      ran, so no R8 duration exists in the log. What it does show is R8's task line at 19:25, the
      native compiles running until 19:45, and `packageReleaseBundle` starting seconds after
      `extractReleaseNativeSymbolTables`, so in that run the native chain, not R8, gated the
-     bundle. **Delete the plugin at the Expo SDK 58 upgrade**,
-     whose template already reads the optimize preset, on AGP 9, which needs no property.
+     bundle. The plugin was deleted at the Expo SDK 58 upgrade (task #140), whose template reads
+     the optimize preset, on AGP 9, which needs no property.
+  4. **AGP 9 needs strict keep rules OFF, or a release build dies at launch.** AGP 9.0 flipped
+     `android.r8.strictFullModeForKeepRules` to true, so `-keep class A` stopped implying
+     `-keep class A { <init>(); }`. Measured on the first SDK 58 release build (task #140,
+     `kangentic_profile`): `room-runtime` 2.5.0's `-keep class * extends androidx.room.RoomDatabase`
+     left `WorkDatabase_Impl` with no constructor in `mapping.txt`, and the app died in
+     `androidx.startup.InitializationProvider` with *"Failed to create an instance of class
+     androidx.work.impl.WorkDatabase"*, before any JS and so before Sentry. **The build, CI,
+     `verify-r8-optimization.sh` and `verify:staging` were all green.** Only launching it showed
+     it, and it read as a hang, because `am start -W` waits behind the crash dialog.
+     `ArrayCreatingInputMerger`, `OverwritingInputMerger` and EventBus's `AndroidComponentsImpl`
+     had lost theirs the same way, which would have failed later and silently, on background paths.
+     So `plugins/withAndroidR8ImplicitConstructors.ts` restores the old meaning for the whole tree
+     rather than listing rules, because a list has to be complete to be safe. All four
+     constructors are back in `mapping.txt`, optimization still verifies, and it costs 30 KB (47.04
+     to 47.07 MB, x86_64). `ci.yml` checks the property reached `gradle.properties`. These libraries
+     are this old because of Notifee, so revisit it when Notifee goes, by turning it off and reading
+     a launch and `mapping.txt`.
 
   `build-android.yml` uploads `mapping.txt` as its own run artifact (`mapping-<artifact-name>`)
   alongside the APK/AAB. That is the file Play Console accepts for manual deobfuscation, and the

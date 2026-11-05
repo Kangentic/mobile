@@ -314,6 +314,13 @@ describe('app.config.ts R8 release optimization', () => {
       androidProperties.enableMinifyInReleaseBuilds === true;
     expect(shrinkImpliesMinify).toBe(true);
   });
+
+  // Dropping this entry leaves every check green until the release build crashes
+  // at launch: see plugins/withAndroidR8ImplicitConstructors.ts.
+  it('registers the plugin that keeps R8 from removing implicit constructors', () => {
+    const entryNames = (appConfig.plugins ?? []).map((plugin) => (Array.isArray(plugin) ? plugin[0] : plugin));
+    expect(entryNames).toContain('./plugins/withAndroidR8ImplicitConstructors.ts');
+  });
 });
 
 /**
