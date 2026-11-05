@@ -714,15 +714,15 @@ See `CLAUDE.md`'s Project Structure section; the tree there and this one move to
      `getDefaultProguardFile("proguard-android.txt")`, and that preset carries `-dontoptimize`.
      ProGuard options are global, so R8 shrank and obfuscated but never inlined, merged classes or
      removed dead branches, and Play flagged release 14 with "Optimization isn't enabled" and
-     "Optimized resource shrinking isn't enabled". `plugins/withAndroidR8Optimization.ts` swaps the
-     preset for `proguard-android-optimize.txt` (and throws if the template names neither, rather
-     than skipping) and sets `android.r8.optimizedResourceShrinking=true`, AGP 8.12/8.13's opt-in.
-     Unlike the two properties above, the preset IS literal text in `build.gradle`, so `ci.yml`
-     checks both files. **The prebuild check cannot see a library's consumer rules**, and any one
-     of them can switch optimization off for the whole app with its own `-dontoptimize`, so
-     `.github/scripts/verify-r8-optimization.sh` reads the merged `configuration.txt` R8 actually
-     ran with. It fails on a live `-dontoptimize` from ANY rule file and names that file. It runs
-     in `e2e.yml` and on release variants in `build-android.yml`. Measured on the production AAB
+     "Optimized resource shrinking isn't enabled". A config plugin swapped the preset for
+     `proguard-android-optimize.txt` and set AGP 8.12's `android.r8.optimizedResourceShrinking`
+     opt-in, until the SDK 58 upgrade (task #140) deleted it: that template names the optimize
+     preset and AGP 9 turns the property on by default. **Nothing at prebuild time can see a
+     library's consumer rules**, and any one of them can switch optimization off for the whole app
+     with its own `-dontoptimize`, so `.github/scripts/verify-r8-optimization.sh` reads the merged
+     `configuration.txt` R8 actually ran with. It fails on a live `-dontoptimize` from ANY rule file
+     and names that file. It runs in `e2e.yml` and on release variants in `build-android.yml`.
+     Measured on the production AAB
      (run 37517370295 against vc14's run 37180001044):
 
      | | vc14 (Play) | R8 optimized |

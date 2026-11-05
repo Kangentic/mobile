@@ -75,18 +75,17 @@ of them**: the obvious response to most is wrong, and several look like one-line
 Three rows: "Optimization isn't enabled", "Optimized resource shrinking isn't enabled", and
 "Upgrade AGP to 9.0+".
 
-- **The first two are addressed by `plugins/withAndroidR8Optimization.ts`** (task #102), and only
-  Play's scan of the next release can confirm them cleared. The SDK 57 template's release block
-  used the `proguard-android.txt` preset, which carries `-dontoptimize`, so R8 shrank and
-  obfuscated but never optimized. The plugin swaps in `proguard-android-optimize.txt` and sets
-  `android.r8.optimizedResourceShrinking=true` (AGP 8.12's opt-in). `ci.yml` checks the request
-  reached the generated project, and `verify-r8-optimization.sh` checks the merged R8
-  configuration of every real release build, because one `-dontoptimize` in any library's
-  consumer rules would turn optimization off app-wide with the preset still swapped.
-- **The AGP row stays until the Expo SDK 58 upgrade. Do not bump AGP on its own.** React Native
-  0.86.3 pins AGP 8.12.0; RN 0.87 is the first with AGP 9 support, and it needs the
-  `android.builtInKotlin=false` / `android.newDsl=false` opt-outs. SDK 58 brings AGP 9 tooling and
-  the optimize preset by default (expo/expo #50108), at which point **delete the plugin**.
+- **The first two are addressed by the SDK 58 template and AGP 9** (task #140, after a plugin did
+  it from task #102), and only Play's scan of the next release can confirm them cleared. The SDK 57
+  template's release block used the `proguard-android.txt` preset, which carries `-dontoptimize`,
+  so R8 shrank and obfuscated but never optimized. SDK 58's names `proguard-android-optimize.txt`,
+  and AGP 9 turns optimized resource shrinking on by default. `verify-r8-optimization.sh` checks
+  the merged R8 configuration of every real release build, because one `-dontoptimize` in any
+  library's consumer rules would turn optimization off app-wide whatever the preset says.
+- **The AGP row is addressed by SDK 58 too**, which builds with AGP 9.2.1, and it also clears only
+  on Play's next scan of a release. RN 0.87 was the first React Native with AGP 9 support, and it
+  needs the `android.builtInKotlin=false` / `android.newDsl=false` opt-outs, which the template
+  sets. Do not bump AGP on its own.
 
 ### "Improve your app's performance with bitmap downsampling" - upstream, no action
 
