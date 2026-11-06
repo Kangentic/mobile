@@ -1,4 +1,5 @@
 import type { FlashListRef } from '@shopify/flash-list';
+import type { ScrollViewInstance } from 'react-native';
 
 /**
  * Scrolls a chat feed to its end through the native scroll view, never through
@@ -31,5 +32,10 @@ import type { FlashListRef } from '@shopify/flash-list';
  * would explain why it did not blank (inferred).
  */
 export function scrollFeedToEnd<Item>(list: FlashListRef<Item> | null): void {
-  list?.getNativeScrollRef()?.scrollToEnd({ animated: false });
+  // flash-list 2.3.3 types the native scroll ref as the `ScrollView` component
+  // value, which React Native 0.88 split from its instance type, so the typed
+  // ref has no `scrollToEnd`. At runtime it is the instance, so narrow it to the
+  // type RN exports for one. Drop the cast when flash-list adopts the split.
+  const nativeScroll = list?.getNativeScrollRef() as unknown as ScrollViewInstance | null | undefined;
+  nativeScroll?.scrollToEnd({ animated: false });
 }
