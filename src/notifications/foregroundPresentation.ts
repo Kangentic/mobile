@@ -74,11 +74,16 @@ export async function foregroundBehaviorFor(notification: Notifications.Notifica
 let registered = false;
 
 /**
- * iOS only. Android pushes are data-only and drawn by the headless task, so a
- * handler there would govern nothing this app posts.
+ * iOS installs the handler above. Android removes the one expo-notifications 58
+ * installs on import, which asks to show everything: its pushes are data-only and
+ * the headless task draws them, but while the app is open the library would post
+ * each one as well, blank, with a sound (ExpoHandlingDelegate.handleNotification
+ * checks for empty content only in the background). Passing null rather than a
+ * handler that hides also drops the native listener, and with it the 3 second
+ * timer that presents for a stalled JS thread.
  */
 export function registerForegroundPresentation(): void {
-  if (registered || Platform.OS !== 'ios') return;
+  if (registered) return;
   registered = true;
-  Notifications.setNotificationHandler({ handleNotification: foregroundBehaviorFor });
+  Notifications.setNotificationHandler(Platform.OS === 'ios' ? { handleNotification: foregroundBehaviorFor } : null);
 }

@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # Fail unless R8 actually ran with OPTIMIZATION on for this release build.
 #
-# WHY A BUILD-OUTPUT CHECK. plugins/withAndroidR8Optimization.ts swaps the
-# template's `proguard-android.txt` preset (which carries `-dontoptimize`) for
-# `proguard-android-optimize.txt`, and ci.yml proves that swap reached the
-# generated build.gradle. That is not the same as optimization being ON:
-# ProGuard options are global, so a single `-dontoptimize` in ANY rule file -
-# a library's consumer rules included - turns optimization off for the whole
-# app. Play Console would then keep reporting "Optimization isn't enabled" on a
-# build every other check called fine.
+# WHY A BUILD-OUTPUT CHECK. Since SDK 58 the template names the
+# `proguard-android-optimize.txt` preset itself, where it used to name
+# `proguard-android.txt`, which carries `-dontoptimize`. That is not the same as
+# optimization being ON: ProGuard options are global, so a single `-dontoptimize`
+# in ANY rule file - a library's consumer rules included - turns optimization off
+# for the whole app. Play Console would then keep reporting "Optimization isn't
+# enabled" on a build every other check called fine.
 #
 # WHAT IT READS. AGP writes the merged R8 configuration to
 # android/app/build/outputs/mapping/release/configuration.txt, one section per
@@ -21,8 +20,8 @@
 #
 # THREE FAILURES, each its own message:
 #   1. the file is missing (never pass having examined nothing);
-#   2. no section comes from proguard-android-optimize.txt (the preset swap did
-#      not reach R8);
+#   2. no section comes from proguard-android-optimize.txt (the template stopped
+#      naming that preset, or it did not reach R8);
 #   3. any rule line is `-dontoptimize`, from any file. Comment lines such as
 #      `# -dontoptimize` do not count - a real build carries one of those, in a
 #      library's commented-out rules - so the match is anchored at the start of
@@ -48,7 +47,7 @@ optimize_sections="$(awk '
 ' "$configuration_path")"
 
 if [ "$optimize_sections" = "0" ]; then
-  echo "::error::R8's merged configuration has no section from proguard-android-optimize.txt, so the release block still uses the -dontoptimize preset. Check plugins/withAndroidR8Optimization.ts is registered in app.config.ts and that prebuild ran."
+  echo "::error::R8's merged configuration has no section from proguard-android-optimize.txt, so the release block is not on the optimize preset. The Expo template names it: check the release block in the generated android/app/build.gradle and that prebuild ran."
   exit 1
 fi
 

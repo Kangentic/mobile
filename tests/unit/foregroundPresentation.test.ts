@@ -3,6 +3,7 @@
  * app is open stays hidden, as it always has, EXCEPT a Notify me push, which the
  * user asked for and the desktop sends to a connected phone on purpose. Every
  * failure keeps it hidden; nothing here ever presents a placeholder over the app.
+ * Android has no handler at all, so only its receive task ever draws.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as Notifications from 'expo-notifications';
@@ -123,12 +124,19 @@ describe('registerForegroundPresentation', () => {
     expect(expoNotificationsMock.setNotificationHandler).toHaveBeenCalledWith({ handleNotification: foregroundBehaviorFor });
   });
 
-  it('installs nothing on Android, whose data-only pushes the headless task draws', async () => {
+  it('removes the default handler on Android, which would draw every foreground push a second time', async () => {
+    // expo-notifications 58 installs a show-everything handler when it is imported,
+    // and Android's foreground path has no empty-content check, so leaving it in
+    // place posts a blank notification beside the one the headless task draws
+    // (ExpoHandlingDelegate.handleNotification). Null rather than a hidden handler:
+    // it also removes the native listener that owns the 3 second timer.
     platformMock.OS = 'android';
     const { registerForegroundPresentation } = await loadModule();
 
     registerForegroundPresentation();
+    registerForegroundPresentation();
 
-    expect(expoNotificationsMock.setNotificationHandler).not.toHaveBeenCalled();
+    expect(expoNotificationsMock.setNotificationHandler).toHaveBeenCalledTimes(1);
+    expect(expoNotificationsMock.setNotificationHandler).toHaveBeenCalledWith(null);
   });
 });

@@ -72,9 +72,8 @@ function performPendingNavigation(navigation: PendingNavigation): void {
   // its key, so nothing remounts; a different taskId still appends
   // (build/layouts/stack-router.js, the PUSH/NAVIGATE branch of the stack router
   // override, pinned by tests/components/PendingNavigationDedupe.test.tsx). Not
-  // dismissTo: it pops to the newest route of that
-  // NAME, which can be another task's screen, and replaces Home when none
-  // matches.
+  // dismissTo: it pops to the newest route of that NAME, which can be another
+  // task's screen, and replaces Home when none matches.
   //
   // No `mode` param: the screen resolves the lens itself (the task's remembered
   // lens, else terminal), so a push tap lands where the user last worked.

@@ -518,8 +518,7 @@ jobs:
       # with, in e2e.yml and build-android.yml.
 
       # The CMake staging relocation, which is what lets a local Android build
-      # succeed from a Kangentic task worktree at any path depth. Checked HERE,
-      # on Linux, and that is the whole
+      # succeed from a Kangentic task worktree. Checked HERE, on Linux, and that is the whole
       # design: the Windows gate lives inside the generated Groovy rather than in
       # the config plugin, so prebuild output is identical on every platform and
       # this runner can prove the block landed. Had the plugin gated on

@@ -973,10 +973,12 @@ has no row below or a row has no entry**, so an exclude cannot outlive its reaso
 
 SDK 58 (task #140) mapped `react-native-reanimated` 4.7.1, `react-native-webview` 14.0.1,
 `react-native-screens` ~4.30.1 and `react-native-safe-area-context` ~5.11.1, so those four holds
-came out and the versions moved with the mapping. The rows below are ahead of SDK 58's mapping on
-purpose: check each at the next SDK, and remove the entry in the same change that vets the version
-it maps. "Measured" in the last column refers to the release-build A/B under "Dependency refresh,
-2026-10 (task #102)" below; everything else is read from the release notes and source.
+came out and the versions moved with the mapping. `react-native-get-random-values`, now `~2.1.0`,
+came out too: SDK 58 does not map it at all, so its entry silenced nothing. The rows below are
+ahead of SDK 58's mapping on purpose: check each at the next SDK, and remove the entry in the same
+change that vets the version it maps. "Measured" in the last column refers to the release-build
+A/B under "Dependency refresh, 2026-10 (task #102)" below; everything else is read from the release
+notes and source.
 
 | Package | SDK 58 maps | Held at | Why | Verified by |
 |---|---|---|---|---|
@@ -2458,9 +2460,10 @@ manual procedure below is the fallback for when you need a bundle without a runn
   install it. A CI-built bundle has no such limitation, which is the supported path for any track
   beyond internal.
 
-  Checkout path no longer matters (see "Local Android builds work from any path"). Passing
-  passwords inline leaks them to shell history; prefer a user-level `gradle.properties` outside
-  the repo, or `ORG_GRADLE_PROJECT_*` environment variables, for anything beyond a one-off build.
+  A task worktree builds this too, up to the checkout root length in "Local Android builds work
+  from any path". Passing passwords inline leaks them to shell history; prefer a user-level
+  `gradle.properties` outside the repo, or `ORG_GRADLE_PROJECT_*` environment variables, for
+  anything beyond a one-off build.
 - **Submitting.** The normal path is the `build-android.yml` workflow's `submit_track` input,
   which uploads through the Play Developer API and holds behind the `google-play` environment's
   approval gate. For a manual submit from a dev box, `eas.json`'s `submit.production.android` sets
@@ -4386,7 +4389,11 @@ so until then they are unproven on SDK 58. Everything above is emulator, simulat
   prove it), a cold-start tap routed exactly once, a Notify me banner showing while other pushes
   stay hidden, and `kangentic-pair://demo` on a cold start after an unpair.
 - Android: a push to a killed app, which is the only runtime test of the regenerated task-manager
-  patch and of the R8 fix on the background path. Read `adb logcat -d -b crash` afterwards.
+  patch and of the R8 fix on the background path. Read `adb logcat -d -b crash` afterwards. Also a
+  push while the app is open, which must draw exactly one notification: left alone, the default
+  handler expo-notifications 58 installs posts a blank one beside it. That was read from the
+  library's source and never reproduced, and the `setNotificationHandler(null)` that stops it is
+  pinned by a unit test only.
 - Both: terminal pinch, and dictation. Board swipes on iOS. `pager-view` 10 and `gesture-handler` 3.5
   were days old when taken, so a problem in either means falling back to the mapped version.
 

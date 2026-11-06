@@ -19,6 +19,9 @@ import { useTheme } from '@/components';
  * icons (board columns, task cards, prompt cards) stay lucide precisely
  * BECAUSE they must match the desktop - see .claude/rules/ui-conventions.md.
  *
+ * `expo-symbols` is a dependency for this file even though nothing imports it: an
+ * `md` icon throws at render on Android without it (expo-router's optional peer).
+ *
  * THE BOARD TAB IS THE ONE EXCEPTION, and it is not an oversight.
  *
  * SF Symbols has no kanban glyph. The catalogue was searched for `kanban`,

@@ -420,8 +420,11 @@ beside the ids already there. On iOS, expo-notifications 58 presents a push itse
 has not answered within a fixed 3 seconds, so the decrypt races a 2-second deadline and answers
 hidden when it loses. The known limit: a JS thread stalled past 3 seconds cannot answer at all, and
 the push then shows as the extension already delivered it, which is what the lock screen would
-have shown. The extension logs nothing, on any path. Every failure - a missing key, a Keychain read
-that returns nothing because the device is locked or the entitlement is absent, a decrypt
+have shown. Android has no such limit because it has no such handler: the app removes the one
+expo-notifications 58 installs, which would otherwise post a blank notification for every push
+that arrives while the app is open. The extension logs nothing, on any path. Every failure - a
+missing key, a Keychain read that returns nothing because the device is locked or the entitlement
+is absent, a decrypt
 failure, an unknown category, or simply running out of execution time - delivers the placeholder
 exactly as it arrived.
 

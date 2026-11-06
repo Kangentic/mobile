@@ -688,7 +688,11 @@ shows the switch and flips it. Editing a column's automations stays on the deskt
    registration's `platform`: Android gets a data-only message, because expo-notifications
    presents any push carrying a title or body itself, natively, ON TOP of the decrypted one the
    background task posts - which showed every Android alert twice. Omitting both suppresses the
-   native render while the task still runs. **iOS keeps them, and that is now load bearing rather
+   native render while the task still runs. That is only half of it since expo-notifications 58:
+   the handler it installs on import asks to show everything, and the empty-content check sits on
+   its background path alone, so with the app open it would post a blank notification for every
+   push. `foregroundPresentation.ts` removes that handler on Android
+   (`setNotificationHandler(null)`). **iOS keeps them, and that is now load bearing rather
    than a fallback:** APNs invokes a service extension only for a push carrying
    `mutable-content: 1` AND an alert, so making iOS data-only to match Android would silently
    stop the extension running and leave iOS permanently on the placeholder.
