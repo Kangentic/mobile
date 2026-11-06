@@ -1,6 +1,6 @@
 /**
  * The CMake staging relocation, which is what lets a local Android build
- * succeed from a Kangentic task worktree at any path depth.
+ * succeed from a Kangentic task worktree.
  *
  * WHY THESE ASSERTIONS AND NOT A `.cxx/**` SCAN. The task this came from asked
  * for a test that every `metadata_generation_command.txt` carries the flag.

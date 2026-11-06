@@ -5,7 +5,7 @@
  * `plugins/withAndroidCmakeBuildStaging.ts` moves every module's `.cxx`
  * directory out of the checkout and onto a short absolute root, keyed by a hash
  * of the checkout path so parallel Kangentic worktrees never collide. That is
- * what lets a build succeed from any path depth, and it has one cost worth
+ * what lets a build succeed from a task worktree, and it has one cost worth
  * owning: the output now escapes both `gradlew clean` and the project
  * directory, and Kangentic mints a new hash per branch, so without a prune the
  * root grows one large tree per branch forever.

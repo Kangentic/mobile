@@ -232,7 +232,9 @@ src/
                   #   header strip, the find_task fallback reader, and the Summary list's rows
   notifications/  # Push key + registration, E2E envelope decrypt, notifee channels, background task,
                   #   local notifier, foreground service, foregroundPresentation (iOS: a Notify me
-                  #   push, protocol 0.26.0, shows while the app is open; nothing else does),
+                  #   push, protocol 0.26.0, shows while the app is open; nothing else does.
+                  #   Android: removes expo-notifications' default handler, which would post a
+                  #   blank notification beside every push the app receives while open),
                   #   sharedKeychain (permission, registration,
                   #   tap routing, Settings status and RICH display are all cross-platform; iOS
                   #   decrypts in the targets/nse/ extension, Android in the Notifee handler),

@@ -747,7 +747,7 @@ const config: ExpoConfig = {
     // Always writes its block into android/settings.gradle; the block itself
     // no-ops on anything but Windows. Relocates each module's CMake staging
     // directory to a short absolute root so a local Android build works from
-    // any checkout depth. Gating in Groovy rather than here keeps prebuild output
+    // a task worktree. Gating in Groovy rather than here keeps prebuild output
     // identical on every platform, so ci.yml can verify the block landed. See
     // the plugin for both MAX_PATH mechanisms.
     './plugins/withAndroidCmakeBuildStaging.ts',

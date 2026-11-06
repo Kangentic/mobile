@@ -85,7 +85,8 @@ export function initializeNotifications(): void {
   // that could do it later.
   registerBackgroundPushTask();
   // iOS: a Notify me push shows while the app is open; every other push stays
-  // hidden there, as before (foregroundPresentation.ts).
+  // hidden there, as before. Android: removes the library's default handler, so
+  // the receive task stays the only thing that draws (foregroundPresentation.ts).
   registerForegroundPresentation();
   if (Platform.OS !== 'android') return;
   registerForegroundServiceRunner();

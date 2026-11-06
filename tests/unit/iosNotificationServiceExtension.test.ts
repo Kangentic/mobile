@@ -18,9 +18,10 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { ExportedConfig } from '@expo/config-plugins';
 import { describe, expect, it } from 'vitest';
 
-import {
+import withIosNotificationServiceExtension, {
   NSE_TARGET_NAME,
   addNotificationServiceExtensionTarget,
   appKeychainAccessGroups,
@@ -284,6 +285,52 @@ describe('requireAppDeploymentTarget', () => {
     delete recording.configurations['APP-DEBUG'].buildSettings?.IPHONEOS_DEPLOYMENT_TARGET;
     delete recording.configurations['APP-RELEASE'].buildSettings?.IPHONEOS_DEPLOYMENT_TARGET;
     expect(() => requireAppDeploymentTarget(recording.project, APP_TARGET_NAME)).toThrow(/IPHONEOS_DEPLOYMENT_TARGET/);
+  });
+});
+
+/**
+ * Runs the plugin's real xcodeproj mod against a recording project. The pure
+ * helpers above are tested alone, so nothing else proves the mod actually routes
+ * the extension's deployment target through requireAppDeploymentTarget.
+ */
+async function runXcodeProjectMod(recording: RecordingProject): Promise<void> {
+  const configured = withIosNotificationServiceExtension({
+    name: 'Kangentic',
+    slug: 'kangentic',
+    version: '0.6.0',
+    ios: { bundleIdentifier: APP_BUNDLE_IDENTIFIER, buildNumber: '10' },
+  });
+  const xcodeProjectMod = (configured as ExportedConfig).mods?.ios?.xcodeproj;
+  if (typeof xcodeProjectMod !== 'function') throw new Error('plugin did not register an xcodeproj mod');
+  await xcodeProjectMod({
+    ...configured,
+    modResults: recording.project,
+    modRequest: {
+      projectRoot: join(__dirname, '..', '..'),
+      platformProjectRoot: 'unused',
+      modName: 'xcodeproj',
+      platform: 'ios',
+      introspect: false,
+      projectName: APP_TARGET_NAME,
+    },
+  } as never);
+}
+
+describe('withIosNotificationServiceExtension xcodeproj mod', () => {
+  it('gives the extension target the app target\'s own deployment target', async () => {
+    const recording = createRecordingProject();
+    await runXcodeProjectMod(recording);
+    for (const key of ['NSE-DEBUG', 'NSE-RELEASE']) {
+      expect(recording.configurations[key].buildSettings?.IPHONEOS_DEPLOYMENT_TARGET).toBe('"16.4"');
+    }
+  });
+
+  it('throws, and adds no target, when the app target carries no deployment target', async () => {
+    const recording = createRecordingProject();
+    delete recording.configurations['APP-DEBUG'].buildSettings?.IPHONEOS_DEPLOYMENT_TARGET;
+    delete recording.configurations['APP-RELEASE'].buildSettings?.IPHONEOS_DEPLOYMENT_TARGET;
+    await expect(runXcodeProjectMod(recording)).rejects.toThrow(/IPHONEOS_DEPLOYMENT_TARGET/);
+    expect(recording.targets).toEqual([]);
   });
 });
 
