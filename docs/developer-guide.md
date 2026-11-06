@@ -4377,7 +4377,18 @@ header default did not reach this app: nothing changes in the native header on S
 the file diff, because `headerStyle.backgroundColor` is set stack-wide. Settings is identical on
 Android. Text rows sit fractionally taller on iOS under React Native 0.88, which accumulates to about
 3 points by mid-screen and needs an overlay to see. The one change a person would notice is the
-approval shield, which `@kangentic/branding` 2.13 redraws as quartered.
+approval shield, which `@kangentic/branding` 2.13 redraws as quartered. The maintainer approved it.
+
+**Not proven on hardware before merge.** The maintainer chose to check these live after the release,
+so until then they are unproven on SDK 58. Everything above is emulator, simulator or CI.
+
+- iOS: the Notification Service Extension decrypting a push to a killed app (a simulator cannot
+  prove it), a cold-start tap routed exactly once, a Notify me banner showing while other pushes
+  stay hidden, and `kangentic-pair://demo` on a cold start after an unpair.
+- Android: a push to a killed app, which is the only runtime test of the regenerated task-manager
+  patch and of the R8 fix on the background path. Read `adb logcat -d -b crash` afterwards.
+- Both: terminal pinch, and dictation. Board swipes on iOS. `pager-view` 10 and `gesture-handler` 3.5
+  were days old when taken, so a problem in either means falling back to the mapped version.
 
 ## Credential inventory
 
