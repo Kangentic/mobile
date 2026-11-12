@@ -1234,12 +1234,15 @@ nothing (the desktop's opens the column manager or Settings). A swap's quiet vei
 a queued successor never paints.
 
 A task's **artifacts** (protocol 0.28.0's `BoardTaskWire.artifacts`, the links the desktop chips
-show) appear where the phone shows the task: the long-press hub (one link is its own row, several are
-one "Artifacts" row, as the desktop's menu has one item), a new form sheet (`task-artifacts`, the
-desktop's Artifacts menu: each link's name and its host where the desktop names the tool), and the
-completed task's header strip beside its PR chip. Archived rows carry them too. Only https links are
-shown and opened, through `Linking.openURL` as Chat's links are (`openableArtifacts`); the wire
-carries no platform, so there are no vendor logos, and the card itself carries no links chip.
+show) appear in ONE place on the phone: the long-press hub. One link is its own row; several are one
+"Artifacts" row, as the desktop's menu has one item, which opens a form sheet (`task-artifacts`, the
+desktop's Artifacts menu: each link's name and its host where the desktop names the tool). The
+desktop also carries them on the card, in the task window's header and in the completed strip; the
+phone deliberately does not (design decisions D2 and E2, task #145): the session header has no room
+for a button, and the hub is one long-press away from every card, on the session header's column
+chip too. Archived rows carry them, so a completed task's Done card lists them in its hub. Only https
+links are shown and opened, through `Linking.openURL` as Chat's links are (`openableArtifacts`); the
+wire carries no platform, so there are no vendor logos.
 
 **Resume** is the desktop task view's, from the phone, on three surfaces: the session screen's
 terminal lens shows the desktop's "Resume session" button in place of the terminal (`ResumePanel`,
