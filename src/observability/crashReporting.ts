@@ -202,6 +202,7 @@ export type HandledErrorSite =
   | 'crash-test'
   | 'create-task'
   | 'devices-paired-info'
+  | 'task-artifact-open'
   | 'task-automations';
 
 /**

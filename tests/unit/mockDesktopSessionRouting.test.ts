@@ -121,6 +121,29 @@ describe('interactive-terminal routing', () => {
   });
 });
 
+describe('the stopped mark (protocol 0.28.0)', () => {
+  /**
+   * Mutation seen failing: removing the `if (staticChatState.spec.stopped === true)`
+   * block in mockDesktop.ts's send-user-message handler. The re-subscribe then
+   * still reads `stopped: true`.
+   */
+  it('clears on a new turn for a fresh subscribe, without mutating the shared spec', async () => {
+    const sessionId = MOCK_IDLE_STATIC_SESSION.sessionId;
+    const before = await controller.verbs.readStreamSubscribe(sessionId, { terminal: false });
+    expect(before.activity.state).toBe('idle');
+    expect(before.activity.reason).toMatchObject({ kind: 'idle', stopped: true });
+
+    await controller.verbs.sendUserMessage(sessionId, 'carry on');
+
+    const after = await controller.verbs.readStreamSubscribe(sessionId, { terminal: false });
+    expect(after.activity.state).toBe('idle');
+    expect(after.activity.reason).toMatchObject({ kind: 'idle' });
+    expect(after.activity.reason).not.toHaveProperty('stopped');
+    // The exported spec is shared across mock desktops: it must keep its mark.
+    expect(MOCK_IDLE_STATIC_SESSION.stopped).toBe(true);
+  });
+});
+
 describe('read-stream terminal gating', () => {
   it('serves no PTY bytes to a list-only codex subscribe, proven against a running clock', async () => {
     // Gemini is the positive control: it repaints on the SAME feedTick % 2
@@ -809,6 +832,28 @@ describe('Resume (protocol 0.16.0)', () => {
       expect(row?.resumable).toBe(true);
       expect(row?.start_blocked_reason).toBe('worktree-missing');
     });
+
+    /**
+     * Mutation seen failing: removing the `if (startInFlight) return ok(... 'starting')`
+     * line in the open-trigger branch of mockDesktop.ts's start-session handler.
+     * The in-flight task then falls through to `not-eligible`.
+     */
+    it('answers starting to an open while a start is already in flight, without a second resume', async () => {
+      const first = await controller.verbs.startSession({ taskId: PAUSED_TASK_ID, projectId: 'mock-project' });
+      expect(first.outcome).toBe('starting');
+
+      const second = await controller.verbs.startSession({ taskId: PAUSED_TASK_ID, projectId: 'mock-project', trigger: 'open' });
+      expect(second.outcome).toBe('starting');
+
+      // Each resume announces its start with one task-updated board event
+      // (50 ms after the call). The resume gap is 2.5 s, so no bind has
+      // happened yet: exactly ONE announce means the open started no second
+      // resume. A second resume would add a second announce inside this window.
+      const resumeAnnounces = () => feedEvents.filter((event) => event.kind === 'board' && event.taskId === PAUSED_TASK_ID).length;
+      await waitUntil(() => resumeAnnounces() >= 1, { label: 'the first resume announces itself' });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(resumeAnnounces()).toBe(1);
+    }, 15_000);
 
     it('answers live for a running task', async () => {
       const response = await controller.verbs.startSession({ taskId: 'mock-task-1', projectId: 'mock-project', trigger: 'open' });

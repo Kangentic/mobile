@@ -86,6 +86,14 @@ export function hexWithAlpha(hex: string, alpha: number): string {
 }
 
 /**
+ * The desktop's tinted pill (TINTED_PILL_FILL / TINTED_PILL_EDGE): its color at
+ * 14% for the fill and 35% for the hairline edge, through `hexWithAlpha`. The
+ * priority pill and the queued panel's count pill both draw it.
+ */
+export const TINTED_PILL_FILL_ALPHA = 0.14;
+export const TINTED_PILL_EDGE_ALPHA = 0.35;
+
+/**
  * Mixes `fromHex` toward `toHex` by `amount` (0 = pure from, 1 = pure to),
  * per channel in sRGB space, returning a normalized lowercase `#rrggbb`.
  * Throws on unparseable input or an out-of-range amount: mixing is only ever

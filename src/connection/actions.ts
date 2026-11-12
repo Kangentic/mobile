@@ -200,10 +200,15 @@ export async function resumeTaskOnOpen(taskId: string, projectId: string): Promi
   watchResumeAttempt(taskId, startedAt, pausedSessionId, 'open');
 }
 
-/** Clears an attempt only while it is still the one this caller started: a newer one is not this caller's to clear. */
-function clearResumeAttempt(taskId: string, startedAt: number): void {
+/** Whether the task's attempt is still the one started at `startedAt`: a newer one, or a settled one, is not that caller's to settle. */
+function isCurrentResumeAttempt(taskId: string, startedAt: number): boolean {
   const attempt = useResumeStore.getState().byTaskId[taskId];
-  if (attempt?.phase === 'resuming' && attempt.startedAt === startedAt) useResumeStore.getState().clear(taskId);
+  return attempt?.phase === 'resuming' && attempt.startedAt === startedAt;
+}
+
+/** Clears an attempt only while it is still the one this caller started. */
+function clearResumeAttempt(taskId: string, startedAt: number): void {
+  if (isCurrentResumeAttempt(taskId, startedAt)) useResumeStore.getState().clear(taskId);
 }
 
 /**
@@ -232,10 +237,7 @@ function watchResumeAttempt(taskId: string, startedAt: number, pausedSessionId: 
     unsubscribe?.();
     unsubscribe = null;
   };
-  const isCurrentAttempt = (): boolean => {
-    const attempt = useResumeStore.getState().byTaskId[taskId];
-    return attempt?.phase === 'resuming' && attempt.startedAt === startedAt;
-  };
+  const isCurrentAttempt = (): boolean => isCurrentResumeAttempt(taskId, startedAt);
   const settleUnresumed = (): void => {
     if (origin === 'open') useResumeStore.getState().clear(taskId);
     else useResumeStore.getState().markFailed(taskId, null);

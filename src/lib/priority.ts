@@ -1,5 +1,7 @@
 import { PRIORITY_FALLBACK_COLOR, type PriorityLevelWire } from '@kangentic/protocol';
 
+const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
+
 /**
  * A task's priority as the desktop card draws it (protocol 0.28.0, kangentic
  * 6bc394e19 and `PriorityBadge.tsx`): the project's scale, lowest first, with
@@ -18,8 +20,6 @@ import { PRIORITY_FALLBACK_COLOR, type PriorityLevelWire } from '@kangentic/prot
  * throw there. It is drawn raw, as a column's color is, since it is the
  * project's own data rather than a theme choice.
  */
-const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
-
 export function priorityLevelFor(priority: number | null | undefined, scale: readonly PriorityLevelWire[] | null): PriorityLevelWire | null {
   if (scale === null) return null;
   if (typeof priority !== 'number' || !Number.isInteger(priority) || priority <= 0) return null;

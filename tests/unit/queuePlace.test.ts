@@ -62,7 +62,6 @@ describe('queuedReason', () => {
     expect(queuedReason(place({ kind: 'column', column_name: 'Merge', max_agents: 1 }))).toEqual({
       kind: 'column',
       text: 'Merge runs one agent at a time',
-      columnName: 'Merge',
     });
   });
   it('says N agents for a larger column limit', () => {
@@ -72,7 +71,6 @@ describe('queuedReason', () => {
     expect(queuedReason(place({ kind: 'global', column_name: null, max_agents: 1 }))).toEqual({
       kind: 'global',
       text: 'Up to 1 agent runs at a time',
-      columnName: null,
     });
     expect(queuedReason(place({ kind: 'global', column_name: null, max_agents: 4 }))?.text).toBe('Up to 4 agents run at a time');
   });

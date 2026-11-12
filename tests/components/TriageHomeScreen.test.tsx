@@ -158,6 +158,29 @@ function registerPausedCompanion(): void {
     .applySnapshot('paused-companion', 'task-paused-companion', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'suspended' }));
 }
 
+/** Gives project-1 a five-level priority scale and task-1 the top level (index 4). */
+function seedTaskOnePriority(): void {
+  useBoardStore.setState((state) => {
+    const board = state.boardsByProjectId['project-1'];
+    return {
+      boardsByProjectId: {
+        ...state.boardsByProjectId,
+        'project-1': {
+          ...board,
+          priorities: [
+            { label: 'None', color: '#6b7280' },
+            { label: 'Low', color: '#3b82f6' },
+            { label: 'Medium', color: '#eab308' },
+            { label: 'High', color: '#f97316' },
+            { label: 'Urgent', color: '#ef4444' },
+          ],
+          tasksById: { ...board.tasksById, 'task-1': { ...board.tasksById['task-1'], priority: 4 } },
+        },
+      },
+    };
+  });
+}
+
 function seedTwoProjectBoards(): void {
   useSettingsStore.setState({ collapsedTriageSections: [] });
   useChannelStore.setState({ pairedState: 'paired', transportState: 'connected', established: true });
@@ -379,6 +402,18 @@ describe('TriageHomeScreen', () => {
     expect(screen.getByTestId('activity-row-sess-1-usage')).toBeTruthy();
     expect(screen.getByText('Sonnet 5')).toBeTruthy();
     expect(screen.getByText('47%')).toBeTruthy();
+  });
+
+  /**
+   * Mutation seen failing: dropping `priorityLevel=` from ActivityRow's TaskCard
+   * in TriageHomeScreen.tsx leaves no `-priority` pill on the session card.
+   */
+  it('draws the task priority pill on an Agents session card (protocol 0.28.0)', async () => {
+    seedTaskOnePriority();
+    await renderHome();
+
+    const pill = screen.getByTestId('activity-row-sess-1-priority');
+    expect(pill.props.accessibilityLabel).toBe('Priority: Urgent');
   });
 
   it('falls back to a minimal card when a session outlives its board task entry', async () => {
@@ -2283,6 +2318,19 @@ describe('TriageHomeScreen', () => {
      * Mutation: dropping `noteTaskOpened(task.id)` from SessionlessTaskRow's
      * openTask.
      */
+    /**
+     * Mutation seen failing: dropping `priorityLevel=` from SessionlessTaskRow's
+     * TaskCard in TriageHomeScreen.tsx leaves no `-priority` pill on the card.
+     */
+    it('draws the task priority pill on a Paused card with no session (protocol 0.28.0)', async () => {
+      makeTaskOneSessionless({ resumable: true, priority: 4 });
+      seedTaskOnePriority();
+      await renderHome();
+
+      const pill = screen.getByTestId('task-row-task-1-priority');
+      expect(pill.props.accessibilityLabel).toBe('Priority: Urgent');
+    });
+
     it('records an open for the task when the Paused card is tapped, and none for its long press', async () => {
       makeTaskOneSessionless({ resumable: true });
       await renderHome();

@@ -67,12 +67,15 @@ export function queuedCount(place: BoardTaskQueuePlaceWire | null | undefined): 
   return known === null ? null : `${known.position} of ${known.total}`;
 }
 
-/** What the queued window's reason line says, and which glyph leads it. */
+/**
+ * What the queued window's reason line says, and which glyph leads it: the
+ * gauge for `global`, the task's own column's icon for `column` (a column
+ * limit always holds a task in its own column, so the panel takes that column
+ * from the task rather than from here).
+ */
 export interface QueuedReason {
   kind: 'column' | 'global';
   text: string;
-  /** The column the reason names, for its icon; null for `global`. */
-  columnName: string | null;
 }
 
 /**
@@ -86,9 +89,9 @@ export function queuedReason(place: BoardTaskQueuePlaceWire | null | undefined):
   if (known === null || known.max_agents === null || known.max_agents < 1) return null;
   const limit = known.max_agents;
   if (known.kind === 'global') {
-    return { kind: 'global', text: limit === 1 ? 'Up to 1 agent runs at a time' : `Up to ${limit} agents run at a time`, columnName: null };
+    return { kind: 'global', text: limit === 1 ? 'Up to 1 agent runs at a time' : `Up to ${limit} agents run at a time` };
   }
   if (known.column_name === null) return null;
   const agents = limit === 1 ? 'one agent' : `${limit} agents`;
-  return { kind: 'column', text: `${known.column_name} runs ${agents} at a time`, columnName: known.column_name };
+  return { kind: 'column', text: `${known.column_name} runs ${agents} at a time` };
 }

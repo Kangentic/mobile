@@ -6,6 +6,7 @@ import { ExternalLink, Link2 } from 'lucide-react-native';
 import { SheetActionRow, SheetScrollerSlot, Stack, Text, useTheme } from '@/components';
 import { ARTIFACTS_SHEET_RESERVED_HEIGHT, LIST_FLOOR_HEIGHT, clampSheetContentHeight } from '@/lib/sheetContentHeights';
 import type { TaskArtifactLink } from '@/lib/taskArtifacts';
+import { reportHandledError } from '@/observability/crashReporting';
 import { ARTIFACT_OPEN_FAILED_MESSAGE, openArtifactLink, useTaskArtifactLinks } from './artifacts/taskArtifactLinks';
 
 /** The hub's glyph size (SheetActionRow's icons). */
@@ -57,7 +58,8 @@ export function TaskArtifactsScreen(): React.JSX.Element {
         () => {
           if (mountedRef.current && router.canGoBack()) router.back();
         },
-        () => {
+        (error: unknown) => {
+          reportHandledError('task-artifact-open', error);
           if (mountedRef.current) setErrorMessage(ARTIFACT_OPEN_FAILED_MESSAGE);
         },
       );

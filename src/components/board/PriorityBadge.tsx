@@ -4,14 +4,9 @@ import { Flag } from 'lucide-react-native';
 import type { PriorityLevelWire } from '@kangentic/protocol';
 import { Row } from '../Row';
 import { Text } from '../Text';
-import { hexWithAlpha } from '../theme/color';
+import { TINTED_PILL_EDGE_ALPHA, TINTED_PILL_FILL_ALPHA, hexWithAlpha } from '../theme/color';
 import { useTheme } from '../theme/ThemeProvider';
-
-/** The desktop pill's flag (PriorityBadge.tsx: lucide Flag at 12). */
-const FLAG_SIZE = 12;
-/** The desktop's tinted pill: the level's color at 14% for the fill and 35% for the edge. */
-const FILL_ALPHA = 0.14;
-const EDGE_ALPHA = 0.35;
+import { PRIORITY_BADGE_FLAG_SIZE } from './labelFit';
 
 /**
  * A task's priority as the desktop card draws it (protocol 0.28.0, kangentic
@@ -23,7 +18,8 @@ const EDGE_ALPHA = 0.35;
  * Square-cornered like the phone's label pills beside it (`Badge`), where the
  * desktop's pills are round: the row reads as one family either way, and on
  * the phone that family is square. Same height as a label pill, so
- * `board/labelFit.ts` can count it (`estimatePriorityBadgeWidth`).
+ * `board/labelFit.ts` can count it (`priorityBadgeReserve`), which owns the
+ * flag size so its estimate and this drawing cannot drift apart.
  */
 export function PriorityBadge({ level, testID }: { level: PriorityLevelWire; testID?: string }): React.JSX.Element {
   const theme = useTheme();
@@ -35,8 +31,8 @@ export function PriorityBadge({ level, testID }: { level: PriorityLevelWire; tes
       style={[
         styles.pill,
         {
-          backgroundColor: hexWithAlpha(level.color, FILL_ALPHA),
-          borderColor: hexWithAlpha(level.color, EDGE_ALPHA),
+          backgroundColor: hexWithAlpha(level.color, TINTED_PILL_FILL_ALPHA),
+          borderColor: hexWithAlpha(level.color, TINTED_PILL_EDGE_ALPHA),
           borderRadius: theme.radii.sm,
           paddingHorizontal: theme.spacing.sm,
           paddingVertical: theme.spacing.xs / 2,
@@ -44,7 +40,7 @@ export function PriorityBadge({ level, testID }: { level: PriorityLevelWire; tes
       ]}
     >
       <Row gap="xs" style={styles.content}>
-        <Flag size={FLAG_SIZE} color={level.color} />
+        <Flag size={PRIORITY_BADGE_FLAG_SIZE} color={level.color} />
         <Text variant="caption" numberOfLines={1} style={[styles.label, { color: level.color }]}>
           {level.label}
         </Text>
