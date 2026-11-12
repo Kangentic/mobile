@@ -118,7 +118,7 @@ patches/                      # patch-package patches, applied by the `postinsta
                               #   .github/actions/setup-node-deps/action.yml now hashes
                               #   `patches/**` too, so a patch change misses the cache on its own
                               #   and no lockfile bump is needed. Keep those two in step.
-                              #   expo-task-manager+58.0.13.patch guards a null HeadlessAppLoader
+                              #   expo-task-manager+58.0.14.patch guards a null HeadlessAppLoader
                               #   at TaskService.executeTask:427, the one call site of three in
                               #   that file that did not. It returns null silently when the
                               #   WeakReference<Context> is empty, which is the normal state of a
@@ -139,7 +139,10 @@ patches/                      # patch-package patches, applied by the `postinsta
                               #   `expo.modules.taskmanager`, so the hunk's paths and index line
                               #   had to be regenerated, not just the filename. Windows hides a
                               #   case-only path difference, so only Linux `npm ci` in CI proves
-                              #   it. The call site was still unguarded. Do the same on every bump:
+                              #   it. The call site was still unguarded. Re-pinned from 58.0.13
+                              #   to 58.0.14 on 2026-11-11 (the SDK 58.0.24 drift bump): the
+                              #   hunk applied unchanged and only the filename moved. Do the
+                              #   same on every bump:
                               #   check the call site, re-apply, rename in the SAME commit as the
                               #   lockfile, because CI's cache key hashes patches/** and a stale
                               #   name is a mismatch warning today and a silent drop when the
