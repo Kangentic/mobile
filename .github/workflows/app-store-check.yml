@@ -13,7 +13,17 @@ name: App Store check
 #     screenshots, which is what the next version starts from if Apple carries
 #     them over;
 #   - is there another unreleased version (a draft, or one in review or waiting
-#     to release) that would make stage 1 refuse.
+#     to release) that would make stage 1 refuse;
+#   - do the listing screenshots show the committed frames
+#     (store/screenshots/ios/iphone-6.9/), and do the App Asset Library reads
+#     the upload depends on still answer: the app's library, Apple's reference
+#     data and the placement group it resolves the frame size to, and the
+#     placements with their images.
+#
+# It reads Apple only. The Play listing has its own read-only check in
+# store-listing.yml, kept out of here on purpose: that check has to open a Play
+# edit, opening one invalidates the service account's other open edit, and this
+# preflight is run while an Android submission may be uploading.
 #
 # Run it before a release day, `gh workflow run app-store-check.yml --ref main`,
 # or add `-f version=1.2.0` to inspect one version. It cannot prove write access:
@@ -65,4 +75,5 @@ jobs:
             --issuer-id "$ASC_ISSUER_ID" \
             --bundle-id com.kangentic.mobile \
             --version "$VERSION" \
+            --screenshots-dir store/screenshots/ios/iphone-6.9 \
             --mode check

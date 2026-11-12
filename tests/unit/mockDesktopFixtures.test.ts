@@ -162,7 +162,7 @@ function collectProse(value: unknown, label: string, into: { label: string; text
 function renderedFixtureText(): { label: string; text: string }[] {
   const collected: { label: string; text: string }[] = [];
   // The whole chat lens. Previously uncollected, which meant every string in
-  // the published 03-session-chat shelf was unguarded.
+  // the published 04-session-chat shelf was unguarded.
   collectProse(baseTranscriptForTest(), 'transcript', collected);
   // The Done columns and the completed-task screens behind them. Both real
   // project ids, because the two projects carry DISTINCT archived rows now -

@@ -190,9 +190,27 @@ describe('the shot list matches the capture flow', () => {
   });
 
   it('orders the names so the stores display them as intended', () => {
-    // Both stores show screenshots in upload order, and the upload tools sort by
-    // filename, so the numeric prefixes are load-bearing rather than decorative.
+    // Both stores show screenshots in upload order. The upload scripts walk
+    // SHOT_NAMES itself, and a hand upload sorts by filename, so the list has to
+    // be sorted for the two to agree: the numeric prefixes are load-bearing.
     expect([...SHOT_NAMES]).toEqual([...SHOT_NAMES].sort());
+  });
+
+  it('lists the Agents feed, then the Board, then the detail views', () => {
+    // The listing order the maintainer asked for on v1.4.0 (2026-11-01). Until
+    // task #149 the Board was numbered fifth, so a filename-order upload buried
+    // it behind the three session views and it was reordered by hand in the
+    // Console. Pinned as a literal, because the sorted check above passes for
+    // any numbering at all.
+    expect([...SHOT_NAMES]).toEqual([
+      '01-agents',
+      '02-board',
+      '03-session-terminal',
+      '04-session-chat',
+      '05-session-changes',
+      '06-file-diff',
+      '07-command-terminal',
+    ]);
   });
 
   /**
@@ -310,7 +328,8 @@ describe('the shot list matches the capture flow', () => {
    * mock lists no terminal until one is started, so nothing before this frame
    * can show one it left behind. So the flow starts it after every other shot,
    * and takes its own shot last. Compared by position in the flow, not by
-   * SHOT_NAMES order: the flow takes 06 before 05.
+   * SHOT_NAMES order: SHOT_NAMES is the listing order, and the flow visits the
+   * screens in its own (it takes the board, 02, second to last).
    */
   it('starts the Command Terminal only after every other shot, and takes its shot last', () => {
     expect(flowShotNames[flowShotNames.length - 1]).toBe('07-command-terminal');
@@ -339,7 +358,7 @@ describe('the shot list matches the capture flow', () => {
    * is pinned with the wait: a misspelt `platform` condition would skip the
    * wait on Android too, and nothing else would fail.
    */
-  it.each(['05-board', '06-file-diff'])('waits out the scrollbar flash on Android after the settle and before %s', (shotName) => {
+  it.each(['02-board', '06-file-diff'])('waits out the scrollbar flash on Android after the settle and before %s', (shotName) => {
     const shotAt = shotPathIndex(shotName);
     const settleAt = flowSource.lastIndexOf('- waitForAnimationToEnd:', shotAt);
     expect(settleAt, 'the settle step still precedes the shot').toBeGreaterThanOrEqual(0);
@@ -470,7 +489,7 @@ describe('the recorded terminal fills every shelf at the reference cell', () => 
 
   /**
    * MEASURED, not estimated. The pane bounds and the cell are read pixel by
-   * pixel off task #99's re-captures of 02-session-terminal (2026-10-06, the
+   * pixel off task #99's re-captures of the session terminal frame (2026-10-06, the
    * first captures taken after the reference cell landed): the pane is the
    * terminal-background run between the header and the quick-key bar, and the
    * cell is the then-committed 44x38 fixture's diff band divided by its 44

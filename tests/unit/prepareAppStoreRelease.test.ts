@@ -27,7 +27,17 @@ import {
   prepareAppStoreRelease,
   readWhatsNewFrom,
   submitAppStoreRelease,
+  syncAppStoreScreenshots,
 } from '../../scripts/prepareAppStoreRelease.mjs';
+import {
+  SCREENSHOT_GROUP,
+  createFakeAssetLibrary,
+  libraryWrites,
+  makeListingFrames,
+  placedFrames,
+  referenceNameOf,
+  type FakeAssetLibrary,
+} from '../helpers/storeListings';
 
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 
@@ -95,6 +105,12 @@ interface FakeSeed {
   screenshotShape?: 'linkage-only' | 'included-only';
   /** States a submitted review submission reads on successive reads. */
   submittedStates?: string[];
+  /**
+   * The app's asset library (tests/helpers/storeListings.ts), which answers the
+   * placement, image and reference-data routes. Without one those routes are
+   * "not routed", so a stage that reads them when it should not fails loudly.
+   */
+  assetLibrary?: FakeAssetLibrary;
 }
 
 const COMPLETE_REVIEW_DETAIL: Record<string, string> = {
@@ -380,7 +396,7 @@ function createFakeAppStoreConnect(seed: FakeSeed = {}) {
       }
       return respond(200, { data: { type: 'reviewSubmissions', id: submission.id, attributes: { state: submission.state } } });
     }
-    return notFound(method, apiPath);
+    return seed.assetLibrary?.route(method, apiPath, body) ?? notFound(method, apiPath);
   }
 
   return { request, calls, versions, localizations, reviewSubmissions };
@@ -1430,6 +1446,389 @@ describe('checkAppStoreRelease', () => {
   });
 });
 
+describe('the listing screenshots', () => {
+  // Task #149. A version created through the API INHERITS the previous
+  // version's screenshots, so "7 present" was true of a stale listing too, and
+  // they lock once the version is with App Review. These cover the three places
+  // the committed frames now reach: the `screenshots` mode that uploads them,
+  // the check mode that reports them, and the submit stage that refuses without
+  // them. The upload itself is covered in tests/unit/appStoreScreenshots.test.ts.
+  const oldFrames = makeListingFrames(1);
+  const frames = makeListingFrames();
+  const EDITABLE_LOCALIZATION = 'localization-en';
+  const LIVE_LOCALIZATION = 'localization-live';
+
+  const liveVersion = () =>
+    editableVersion({
+      id: 'version-live',
+      versionString: '1.1.0',
+      appVersionState: 'READY_FOR_DISTRIBUTION',
+      releaseType: 'AFTER_APPROVAL',
+      buildId: 'build-18',
+      createdDate: '2026-10-12T04:00:00-07:00',
+    });
+  const liveLocalization = () =>
+    englishLocalization({ id: LIVE_LOCALIZATION, versionId: 'version-live', whatsNew: 'Earlier notes.' });
+
+  /**
+   * What stage 1 finds: the new version carrying `shown`, and the live version
+   * placing the SAME library images, which is how App Store Connect shares them.
+   */
+  function libraryShowing(shown = oldFrames, by: 'size' | 'hash' = 'size') {
+    const editable = placedFrames(shown, { localizationId: EDITABLE_LOCALIZATION, by });
+    return createFakeAssetLibrary({
+      images: editable.images,
+      placements: [
+        ...editable.placements,
+        ...editable.images.map((image, index) => ({
+          id: `live-placement-${index}`,
+          localizationId: LIVE_LOCALIZATION,
+          imageId: image.id,
+        })),
+      ],
+    });
+  }
+
+  const releaseInProgress = (library: FakeAssetLibrary, seed: FakeSeed = {}) =>
+    createFakeAppStoreConnect({
+      versions: [liveVersion(), preparedVersion()],
+      localizations: [liveLocalization(), preparedLocalization()],
+      assetLibrary: library,
+      ...seed,
+    });
+
+  describe('syncAppStoreScreenshots', () => {
+    function syncAgainst(
+      fake: FakeAppStoreConnect,
+      library: FakeAssetLibrary,
+      overrides: Partial<Parameters<typeof syncAppStoreScreenshots>[0]> = {}
+    ) {
+      const logged: string[] = [];
+      const promise = syncAppStoreScreenshots({
+        request: fake.request,
+        uploadPart: library.uploadPart,
+        bundleId: BUNDLE_ID,
+        versionString: VERSION_STRING,
+        frames,
+        log: (line: string) => logged.push(line),
+        sleep: noWait,
+        ...overrides,
+      });
+      return { promise, logged };
+    }
+
+    it('replaces the frames a new version inherited, and leaves the live version showing its own', async () => {
+      const library = libraryShowing();
+      const { promise, logged } = syncAgainst(releaseInProgress(library), library);
+      const report = await promise;
+
+      expect(library.shownOn(EDITABLE_LOCALIZATION)).toEqual(frames.map(referenceNameOf));
+      // Same images, different version: untouched.
+      expect(library.shownOn(LIVE_LOCALIZATION)).toEqual(oldFrames.map((frame) => frame.fileName));
+      expect(report).toMatchObject({ versionString: VERSION_STRING, state: 'PREPARE_FOR_SUBMISSION', changed: true });
+      const output = logged.join('\n');
+      expect(output).toContain(`placement group ${SCREENSHOT_GROUP}`);
+      expect(output).toContain('- en-US: replaced. 7 uploaded, 0 reused from the asset library, 7 placed, 7 removed.');
+      expect(output).toContain('- The live version 1.1.0 still shows its 7 screenshot(s).');
+    });
+
+    it('writes nothing when the version already shows the committed frames', async () => {
+      // A release that re-captured nothing: the inherited frames ARE the frames.
+      const library = libraryShowing(frames, 'hash');
+      const fake = releaseInProgress(library);
+      const { promise, logged } = syncAgainst(fake, library);
+      const report = await promise;
+
+      expect(report.changed).toBe(false);
+      expect(writes(fake.calls)).toEqual([]);
+      expect(libraryWrites(library.calls)).toEqual([]);
+      expect(logged.join('\n')).toMatch(/in sync with the committed frames \(matched by content hash\)\. Nothing to upload\./);
+    });
+
+    it('updates every localization the version has', async () => {
+      const editable = placedFrames(oldFrames, { localizationId: EDITABLE_LOCALIZATION, by: 'size' });
+      const library = createFakeAssetLibrary({
+        images: editable.images,
+        placements: [
+          ...editable.placements,
+          ...editable.images.map((image, index) => ({
+            id: `german-placement-${index}`,
+            localizationId: 'localization-de',
+            imageId: image.id,
+          })),
+        ],
+      });
+      const fake = createFakeAppStoreConnect({
+        versions: [preparedVersion()],
+        localizations: [preparedLocalization(), englishLocalization({ id: 'localization-de', locale: 'de-DE' })],
+        assetLibrary: library,
+      });
+      const report = await syncAgainst(fake, library).promise;
+
+      expect(library.shownOn(EDITABLE_LOCALIZATION)).toEqual(frames.map(referenceNameOf));
+      expect(library.shownOn('localization-de')).toEqual(frames.map(referenceNameOf));
+      // The second localization reuses what the first one uploaded.
+      expect(report.localizations.map((entry) => [entry.locale, entry.result.uploaded, entry.result.reused])).toEqual([
+        ['en-US', 7, 0],
+        ['de-DE', 0, 7],
+      ]);
+    });
+
+    it('leaves a version that is already with App Review alone, and says why', async () => {
+      const library = libraryShowing();
+      const fake = createFakeAppStoreConnect({
+        versions: [preparedVersion()].map((version) => ({ ...version, appVersionState: 'WAITING_FOR_REVIEW' })),
+        localizations: [preparedLocalization()],
+        assetLibrary: library,
+      });
+      const { promise, logged } = syncAgainst(fake, library);
+      const report = await promise;
+
+      expect(report).toMatchObject({ state: 'WAITING_FOR_REVIEW', changed: false });
+      expect(logged.join('\n')).toMatch(/Version 1\.2\.0 is WAITING_FOR_REVIEW, so its screenshots are locked/);
+      // Not one asset-library call: it stopped before looking.
+      expect(library.calls).toEqual([]);
+    });
+
+    it('finds the version being prepared when it is not named', async () => {
+      // An on-demand run from store-listing.yml has no version to pass.
+      const library = libraryShowing();
+      const report = await syncAgainst(releaseInProgress(library), library, { versionString: undefined }).promise;
+      expect(report).toMatchObject({ versionString: VERSION_STRING, changed: true });
+    });
+
+    it('changes nothing between releases, when no version is being prepared', async () => {
+      const library = libraryShowing();
+      const fake = createFakeAppStoreConnect({
+        versions: [liveVersion()],
+        localizations: [liveLocalization()],
+        assetLibrary: library,
+      });
+      const { promise, logged } = syncAgainst(fake, library, { versionString: undefined });
+      const report = await promise;
+
+      expect(report).toMatchObject({ versionString: null, changed: false });
+      expect(logged.join('\n')).toMatch(/No App Store version is being prepared/);
+      expect(library.calls).toEqual([]);
+    });
+
+    it('changes nothing for a version that does not exist', async () => {
+      const library = libraryShowing();
+      const { promise, logged } = syncAgainst(releaseInProgress(library), library, { versionString: '9.9.9' });
+      expect((await promise).changed).toBe(false);
+      expect(logged.join('\n')).toMatch(/There is no App Store version 9\.9\.9/);
+      expect(libraryWrites(library.calls)).toEqual([]);
+    });
+
+    it('stops loudly if the live version loses a screenshot while the new one is updated', async () => {
+      // Placements belong to one version, so this should be impossible. It is a
+      // new Apple API and the two versions share images, so it is checked: here
+      // App Store Connect is made to drop a live placement along with the first
+      // stale one, and nothing else in the run would notice.
+      const library = libraryShowing();
+      const fake = releaseInProgress(library);
+      let sabotaged = false;
+      const request: typeof fake.request = async (method, apiPath, body) => {
+        const response = await fake.request(method, apiPath, body);
+        if (!sabotaged && method === 'DELETE' && apiPath.startsWith('/appAssetLibraryPlacements/')) {
+          sabotaged = true;
+          const liveIndex = library.placements.findIndex((entry) => entry.localizationId === LIVE_LOCALIZATION);
+          library.placements.splice(liveIndex, 1);
+        }
+        return response;
+      };
+      await expect(syncAgainst(fake, library, { request }).promise).rejects.toThrow(
+        /The LIVE version 1\.1\.0 had 7 screenshot\(s\) before this run and has 6 now/
+      );
+    });
+
+    it('names the role when the key may not write', async () => {
+      const library = libraryShowing();
+      const fake = releaseInProgress(library, { forbidden: ['POST /appAssetLibraryImages'] });
+      await expect(syncAgainst(fake, library).promise).rejects.toThrow(/App Manager/);
+      // Refused at the first upload, so the listing was never touched.
+      expect(library.shownOn(EDITABLE_LOCALIZATION)).toEqual(oldFrames.map((frame) => frame.fileName));
+    });
+  });
+
+  describe('checkAppStoreRelease, given the frames', () => {
+    // A flag, not an optional `frames` argument: passing `undefined` to a
+    // parameter with a default selects the default, which would quietly turn
+    // the "without the frames" case into a second "with the frames" one.
+    function checkWith(fake: FakeAppStoreConnect, { withFrames = true }: { withFrames?: boolean } = {}) {
+      const logged: string[] = [];
+      const promise = checkAppStoreRelease({
+        request: fake.request,
+        bundleId: BUNDLE_ID,
+        ...(withFrames ? { frames } : {}),
+        log: (line: string) => logged.push(line),
+      });
+      return { promise, logged };
+    }
+
+    const liveStore = (library: FakeAssetLibrary) =>
+      createFakeAppStoreConnect({ versions: [liveVersion()], localizations: [liveLocalization()], assetLibrary: library });
+    const libraryOnLive = (shown: typeof frames) =>
+      createFakeAssetLibrary(placedFrames(shown, { localizationId: LIVE_LOCALIZATION, by: 'size' }));
+
+    it('recognises frames uploaded by hand as the committed ones, and writes nothing', async () => {
+      const library = libraryOnLive(frames);
+      const fake = liveStore(library);
+      const { promise, logged } = checkWith(fake);
+      const report = await promise;
+
+      expect(report.screenshots).toEqual({
+        group: SCREENSHOT_GROUP,
+        localizations: [{ locale: 'en-US', placementCount: 7, inSync: true, evidence: 'size' }],
+      });
+      expect(writes(fake.calls)).toEqual([]);
+      expect(libraryWrites(library.calls)).toEqual([]);
+      const output = logged.join('\n');
+      expect(output).toContain(`- Placement group ${SCREENSHOT_GROUP}, cap 10; 7 image(s) in the asset library.`);
+      expect(output).toContain('- en-US: 7 screenshot(s), in sync with the committed frames (matched by file size, so uploaded by hand).');
+      expect(output).toContain(`- en-US: screenshot placements by group: ${SCREENSHOT_GROUP} 7; image details readable on 7 of 7.`);
+      expect(output).toMatch(/- en-US: deprecated screenshot set of unknown type: 7 screenshot\(s\)/);
+      expect(logged.at(-1)).toBe('Read-only: nothing was changed.');
+    });
+
+    it('makes every read the upload depends on, so a changed endpoint surfaces in the preflight', async () => {
+      const library = libraryOnLive(frames);
+      await checkWith(liveStore(library)).promise;
+      const reads = library.calls.map((call) => call.path.split('?')[0]);
+      expect(reads).toEqual(
+        expect.arrayContaining([
+          `/apps/${APP_ID}/assetLibrary`,
+          '/appAssetLibraryRefData',
+          `/appStoreVersionLocalizations/${LIVE_LOCALIZATION}/placements`,
+          '/appAssetLibraries/library-1/images',
+        ])
+      );
+    });
+
+    it('reports a listing that differs, and says what the release does about it', async () => {
+      const library = libraryOnLive(oldFrames);
+      const { promise, logged } = checkWith(liveStore(library));
+      const report = await promise;
+
+      expect(report.screenshots?.localizations).toEqual([
+        { locale: 'en-US', placementCount: 7, inSync: false, evidence: null },
+      ]);
+      expect(logged.join('\n')).toContain('- Stage 1 replaces a listing that differs, and stage 2 refuses to submit while it still does.');
+      expect(libraryWrites(library.calls)).toEqual([]);
+    });
+
+    it('reads no asset library, and reports no screenshots field, without the frames', async () => {
+      const library = libraryOnLive(frames);
+      const report = await checkWith(liveStore(library), { withFrames: false }).promise;
+      expect(report).not.toHaveProperty('screenshots');
+      expect(library.calls).toEqual([]);
+    });
+
+    it('carries on when the deprecated screenshot sets can no longer be read', async () => {
+      // Apple has deprecated that endpoint. The version report's own count still
+      // reads it first, so only the SECOND read (the checksum comparison) fails
+      // here, which is the one that must not take the preflight down with it.
+      const library = libraryOnLive(frames);
+      const fake = liveStore(library);
+      let legacyReads = 0;
+      const request: typeof fake.request = async (method, apiPath, body) => {
+        if (apiPath.includes('/appScreenshotSets') && (legacyReads += 1) > 1) {
+          return { ok: false, status: 404, body: { errors: [{ title: 'NOT_FOUND', detail: 'removed' }] } };
+        }
+        return fake.request(method, apiPath, body);
+      };
+      const logged: string[] = [];
+      const report = await checkAppStoreRelease({ request, bundleId: BUNDLE_ID, frames, log: (line: string) => logged.push(line) });
+
+      expect(report.screenshots?.localizations[0].inSync).toBe(true);
+      expect(logged.join('\n')).toMatch(/the deprecated screenshot sets could not be read/);
+    });
+  });
+
+  describe('submitAppStoreRelease, given the frames', () => {
+    // `withFrames` is a flag for the same reason as in checkWith above.
+    function submitWith(library: FakeAssetLibrary, { withFrames = true }: { withFrames?: boolean } = {}) {
+      const fake = releaseInProgress(library);
+      const logged: string[] = [];
+      const promise = submitAppStoreRelease({
+        request: fake.request,
+        ...releaseIdentity,
+        ...(withFrames ? { frames } : {}),
+        log: (line: string) => logged.push(line),
+        sleep: noWait,
+      });
+      return { fake, promise, logged };
+    }
+    const reviewWrites = (fake: FakeAppStoreConnect) =>
+      writes(fake.calls).filter((call) => call.path.startsWith('/reviewSubmission'));
+
+    it('submits when the listing shows the committed frames', async () => {
+      const { fake, promise, logged } = submitWith(libraryShowing(frames, 'hash'));
+      const report = await promise;
+
+      expect(report.state).toBe('WAITING_FOR_REVIEW');
+      expect(reviewWrites(fake).length).toBeGreaterThan(0);
+      expect(logged.join('\n')).toContain('- en-US listing: 7 screenshot(s), in sync with the committed frames (matched by content hash).');
+    });
+
+    it('refuses while the version still shows the previous release\'s frames', async () => {
+      // The v1.4.0 trap: seven screenshots present, so the count passed, and
+      // every one of them inherited from the release before.
+      const { fake, promise } = submitWith(libraryShowing(oldFrames));
+      const message = await rejectionMessage(promise);
+
+      expect(message).toMatch(/Not submitting version 1\.2\.0 for review: the listing screenshots for en-US are not the committed frames/);
+      expect(message).toContain('gh workflow run store-listing.yml -f platform=ios -f mode=sync');
+      expect(message).toContain('Media Manager');
+      // Nothing was sent to App Review.
+      expect(reviewWrites(fake)).toEqual([]);
+      expect(fake.versions.find((version) => version.id === 'version-1')?.appVersionState).toBe('PREPARE_FOR_SUBMISSION');
+    });
+
+    it('refuses the right frames in the wrong order', async () => {
+      const library = libraryShowing(frames, 'hash');
+      const editable = library.placements.filter((entry) => entry.localizationId === EDITABLE_LOCALIZATION);
+      const [first, second] = editable;
+      [first.imageId, second.imageId] = [second.imageId, first.imageId];
+      const { fake, promise } = submitWith(library);
+
+      await expect(promise).rejects.toThrow(/are not the committed frames/);
+      expect(reviewWrites(fake)).toEqual([]);
+    });
+
+    it('accepts the committed frames uploaded by hand, so the manual path still clears the gate', async () => {
+      // The recovery when the automated sync fails: upload in Media Manager,
+      // re-run the job. Those uploads carry no hash, so they have to be
+      // recognised some other way or the refusal could never be cleared.
+      const { promise } = submitWith(libraryShowing(frames, 'size'));
+      expect((await promise).state).toBe('WAITING_FOR_REVIEW');
+    });
+
+    it('only counts, as before, when it is not given the frames', async () => {
+      // `listing_images=skip` drops the flag. A stale listing then submits,
+      // which is the old behaviour and the reason the flag is on by default.
+      const library = libraryShowing(oldFrames);
+      const { fake, promise } = submitWith(library, { withFrames: false });
+      expect((await promise).state).toBe('WAITING_FOR_REVIEW');
+      expect(reviewWrites(fake).length).toBeGreaterThan(0);
+      expect(library.calls).toEqual([]);
+    });
+
+    it('still refuses for missing review notes first, without reading the listing', async () => {
+      const library = libraryShowing(frames, 'hash');
+      const fake = createFakeAppStoreConnect({
+        versions: [{ ...preparedVersion(), reviewDetail: { ...COMPLETE_REVIEW_DETAIL, notes: '' } }],
+        localizations: [preparedLocalization()],
+        assetLibrary: library,
+      });
+      await expect(
+        submitAppStoreRelease({ request: fake.request, ...releaseIdentity, frames, sleep: noWait })
+      ).rejects.toThrow(/App Review notes are empty/);
+      expect(library.calls).toEqual([]);
+    });
+  });
+});
+
 describe('prepareAppStoreRelease.mjs command line', () => {
   // The exported stages are driven above through an injected request. These
   // cover the wrapper the workflows actually run: argument parsing, the real
@@ -1443,7 +1842,10 @@ describe('prepareAppStoreRelease.mjs command line', () => {
     );
     expect(() => parseArguments([...credentials, '--mode', 'submit', '--build-number', '20'])).toThrow(/--version/);
     expect(parseArguments([...credentials, '--mode', 'check']).mode).toBe('check');
-    expect(() => parseArguments([...credentials, '--mode', 'release'])).toThrow(/prepare, submit or check/);
+    expect(() => parseArguments([...credentials, '--mode', 'release'])).toThrow(/prepare, submit, screenshots or check/);
+    // The screenshots mode needs the frames, and takes the version or finds it.
+    expect(() => parseArguments([...credentials, '--mode', 'screenshots'])).toThrow(/--screenshots-dir/);
+    expect(parseArguments([...credentials, '--mode', 'screenshots', '--screenshots-dir', 'frames']).mode).toBe('screenshots');
     // Strict pairs: a bare flag would otherwise swallow the next flag as its value.
     expect(() => parseArguments([...credentials, '--mode'])).toThrow(/Malformed argument/);
   });
@@ -1629,6 +2031,91 @@ describe('prepareAppStoreRelease.mjs command line', () => {
       expect(unnamed.written.join('')).toContain('Inspected version 1.1.0: READY_FOR_DISTRIBUTION');
     });
 
+    describe('--screenshots-dir', () => {
+      const committedFrames = makeListingFrames();
+      // `processingReads: 0`: main() takes no sleep to inject, so an upload that
+      // needed a second look would wait out the real five-second poll interval.
+      const staleLibrary = () =>
+        createFakeAssetLibrary({
+          ...placedFrames(makeListingFrames(1), { localizationId: 'localization-en', by: 'size' }),
+          processingReads: 0,
+        });
+      const prepared = (library: FakeAssetLibrary): FakeSeed => ({
+        versions: [preparedVersion()],
+        localizations: [preparedLocalization()],
+        assetLibrary: library,
+      });
+
+      it('screenshots: reads the frames from the directory the flag names, and puts them on the listing', async () => {
+        const library = staleLibrary();
+        const harness = createMainHarness(prepared(library));
+        const readFrames = vi.fn((_directory: string) => committedFrames);
+        await main(
+          [...harness.credentials, '--mode', 'screenshots', '--version', VERSION_STRING, '--screenshots-dir', 'a/shelf'],
+          { ...harness.dependencies, readFrames, uploadPart: library.uploadPart }
+        );
+
+        expect(readFrames).toHaveBeenCalledWith('a/shelf');
+        expect(library.shownOn('localization-en')).toEqual(committedFrames.map(referenceNameOf));
+        expect(harness.readSummary()).toContain('### App Store version (screenshots)\n\n');
+        expect(harness.readSummary()).toContain('- en-US: replaced.');
+      });
+
+      it('submit: refuses a stale listing when given the flag', async () => {
+        const harness = createMainHarness(prepared(staleLibrary()));
+        await expect(
+          main([...harness.credentials, '--mode', 'submit', ...releaseArguments, '--screenshots-dir', 'a/shelf'], {
+            ...harness.dependencies,
+            readFrames: () => committedFrames,
+          })
+        ).rejects.toThrow(/are not the committed frames/);
+      });
+
+      it('check: reports the listing when given the flag, and still writes nothing', async () => {
+        const library = staleLibrary();
+        const harness = createMainHarness(prepared(library));
+        await main([...harness.credentials, '--mode', 'check', '--screenshots-dir', 'a/shelf'], {
+          ...harness.dependencies,
+          readFrames: () => committedFrames,
+        });
+        expect(harness.written.join('')).toContain('Listing screenshots against 7 committed frame(s)');
+        expect(writes(harness.fake.calls)).toEqual([]);
+        expect(libraryWrites(library.calls)).toEqual([]);
+      });
+
+      it('prepare: does not read the frames, even when the flag is passed', async () => {
+        const harness = createMainHarness();
+        const readFrames = vi.fn((_directory: string) => committedFrames);
+        await main(
+          [
+            ...harness.credentials,
+            '--mode',
+            'prepare',
+            ...releaseArguments,
+            '--whatsnew-dir',
+            harness.notesDirectory,
+            '--screenshots-dir',
+            'a/shelf',
+          ],
+          { ...harness.dependencies, readFrames }
+        );
+        expect(readFrames).not.toHaveBeenCalled();
+      });
+
+      it('stops on a frame the store would refuse before it makes a single call', async () => {
+        const harness = createMainHarness(prepared(staleLibrary()));
+        await expect(
+          main([...harness.credentials, '--mode', 'screenshots', '--screenshots-dir', 'a/shelf'], {
+            ...harness.dependencies,
+            readFrames: () => {
+              throw new Error('The listing frames in a/shelf cannot be uploaded: 02-board.png has an alpha channel.');
+            },
+          })
+        ).rejects.toThrow(/alpha channel/);
+        expect(harness.fake.calls).toEqual([]);
+      });
+    });
+
     it('still appends what was logged to the job summary when the stage fails', async () => {
       // The report is what a human reads before the second approval, and a
       // failing stage is exactly when they need it. Fail AFTER a line is logged
@@ -1655,7 +2142,7 @@ describe('prepareAppStoreRelease.mjs command line', () => {
         { cwd: repositoryRoot, encoding: 'utf8', env: { ...process.env, GITHUB_STEP_SUMMARY: '' }, timeout: 30_000 }
       );
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain('--mode must be prepare, submit or check, not "bogus"');
+      expect(result.stderr).toContain('--mode must be prepare, submit, screenshots or check, not "bogus"');
     });
   });
 });
