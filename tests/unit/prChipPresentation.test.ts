@@ -26,6 +26,7 @@ describe('prChipPresentation', () => {
   describe('an open PR, where readiness is consulted', () => {
     it.each([
       ['ready', 'pull-request', 'success'],
+      ['failing', 'pull-request', 'conflict'],
       ['blocked', 'pull-request', 'warning'],
       ['conflicting', 'merge-conflict', 'conflict'],
       ['queued', 'pull-request', 'info'],
@@ -50,12 +51,25 @@ describe('prChipPresentation', () => {
       );
     });
 
+    /**
+     * The desktop's `failing` row (0df5c318a): the same "an agent can fix it"
+     * tint as a conflict, but the plain PR shape, so the glyph is what tells a
+     * failed check from a conflict, and neither reads as a closed PR.
+     */
+    it('paints failing checks in the conflict color on the plain PR shape, never the conflict shape and never danger', () => {
+      const failing = prChipPresentation('open', 'failing');
+      expect(failing.color).toBe(prChipPresentation('open', 'conflicting').color);
+      expect(failing.glyph).toBe('pull-request');
+      expect(failing.glyph).not.toBe(prChipPresentation('open', 'conflicting').glyph);
+      expect(failing.color).not.toBe(prChipPresentation('closed', null).color);
+    });
+
     it.each([[null], [undefined], ['unknown']])('%s draws plain open: the PR icon in the quiet secondary color', (readiness) => {
       expect(prChipPresentation('open', readiness)).toEqual({ glyph: 'pull-request', color: 'secondary' });
     });
 
     it('degrades an unrecognised verdict to plain open, per the protocol instruction', () => {
-      // A desktop that grows a seventh verdict must not blank the chip here.
+      // A desktop that grows a further verdict must not blank the chip here.
       expect(prChipPresentation('open', 'awaiting-signoff')).toEqual({ glyph: 'pull-request', color: 'secondary' });
     });
   });
@@ -70,7 +84,9 @@ describe('prChipPresentation', () => {
       ['closed', 'closed', 'danger'],
       [null, 'pull-request', 'secondary'],
     ])('%s draws the %s icon in %s whatever the verdict says', (state, glyph, color) => {
-      for (const readiness of ['ready', 'blocked', 'conflicting', 'queued', 'running', 'unknown', null, undefined]) {
+      // Every recognised verdict, read from the table, so a row added there
+      // is held to the open-only guard without editing this list.
+      for (const readiness of [...PR_READINESS_VERDICTS, 'unknown', null, undefined]) {
         expect(prChipPresentation(state, readiness)).toEqual({ glyph, color });
       }
     });
@@ -147,11 +163,11 @@ describe('a prototype-chain member as the readiness value degrades to plain open
 
 describe('every recognised verdict is wired into all three functions the same way', () => {
   // Iterates PR_READINESS_VERDICTS rather than a hand-copied list of the
-  // current five words. A verdict added to the table without being wired
+  // current verdicts. A verdict added to the table without being wired
   // into prChipPresentation, prStateSummary or prChipAccessibilityLabel fails
   // HERE the moment it is added, instead of waiting on a hand-updated test
   // list that would not know to extend itself. Verified failing: adding a
-  // sixth table entry (`timed_out`) and special-casing `prStateSummary` to
+  // further table entry (`timed_out`) and special-casing `prStateSummary` to
   // bypass the table for that one key (as a forgotten wiring would look)
   // turned this test red for exactly that verdict, while every hand-copied
   // list elsewhere in this file stayed green because it never saw the new key.
@@ -181,13 +197,15 @@ describe('prStateSummary', () => {
 
   it.each([
     ['ready', 'ready'],
+    ['failing', 'checks failing'],
     ['blocked', 'blocked'],
     ['conflicting', 'conflicts'],
     ['queued', 'queued'],
     ['running', 'running'],
-  ])('names the %s verdict "%s" - for conflicting, the word, not the wire value', (readiness, word) => {
-    // "conflicting" is a state of being; "conflicts" is what the PR has. The
-    // chip no longer carries a word, so the menu caption is where this lives.
+  ])('names the %s verdict "%s" - for conflicting and failing, the desktop word, not the wire value', (readiness, word) => {
+    // "conflicting" is a state of being; "conflicts" is what the PR has. And
+    // "failing" alone would not say what failed, so the desktop says "checks
+    // failing". The chip carries no word, so the menu caption is where these live.
     expect(prStateSummary('open', readiness)).toBe(word);
   });
 
@@ -208,9 +226,20 @@ describe('prStateSummary', () => {
 
 describe('prChipAccessibilityLabel', () => {
   it('carries the freshness caveat on every verdict, since touch has no tooltip', () => {
-    for (const readiness of ['ready', 'blocked', 'conflicting', 'queued', 'running']) {
+    for (const readiness of PR_READINESS_VERDICTS) {
       expect(prChipAccessibilityLabel('open', readiness)).toContain(PR_READINESS_FRESHNESS_CAVEAT);
     }
+  });
+
+  it('says checks for failing and never for blocked, which since the desktop split means reviews or branch rules', () => {
+    // Before 0df5c318a a failed check folded into `blocked`, and its spoken
+    // form listed "checks" among the causes. Now the two say different things,
+    // as the desktop's tooltips do.
+    expect(prChipAccessibilityLabel('open', 'failing')).toMatch(/check/i);
+    expect(prChipAccessibilityLabel('open', 'blocked')).not.toMatch(/check/i);
+    expect(prChipAccessibilityLabel('open', 'blocked')).toBe(
+      `Pull request merge blocked by reviews or branch rules, ${PR_READINESS_FRESHNESS_CAVEAT}`,
+    );
   });
 
   it('does not claim freshness where there is no verdict to be stale about', () => {
