@@ -659,6 +659,21 @@ describe('TaskCard', () => {
       expect(screen.queryByText('ready')).toBeNull();
     });
 
+    it('draws failing checks as the PR icon in the conflict color, never the conflict icon', async () => {
+      // The desktop's `failing` (0df5c318a) shares `conflicting`'s "an agent
+      // can fix it" tint but keeps the plain PR shape, so the shape alone tells
+      // a failed check from a merge conflict. Before this row existed the
+      // verdict degraded to plain open: a PR with red CI drew the quiet
+      // secondary icon, which is the stroke this test fails on without it.
+      await renderTaskCard({
+        task: boardTaskFixture({ pr_number: 42, pr_state: 'open', pr_merge_readiness: 'failing' }),
+      });
+
+      expect(prChipGlyph(GitPullRequest).props.stroke).toBe(darkTerminalTheme.colors.conflict);
+      expect(lucideGlyphs(screen.getByTestId(`${BASE_TEST_ID}-pr`), GitMergeConflict)).toHaveLength(0);
+      expect(screen.queryByText('checks failing')).toBeNull();
+    });
+
     it('draws an open PR with no verdict in the quiet secondary color, so green can only mean ready', async () => {
       await renderTaskCard({
         task: boardTaskFixture({ pr_number: 42, pr_state: 'open', pr_merge_readiness: null }),

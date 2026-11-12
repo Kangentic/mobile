@@ -27,11 +27,19 @@ import type { TextColorRole } from '../Text';
  *   ignore it rather than falling through to a shared lookup.
  * - `conflicting` is rust rather than red, so it never reads as `closed`, and
  *   its word is `conflicts` - NOT the wire value.
+ * - `failing` (a check or build failed) shares `conflicting`'s color, the
+ *   desktop's "an agent can fix it" tint, but keeps the plain PR shape, so the
+ *   shape alone tells a failed check from a conflict. Its word is the
+ *   desktop's two, `checks failing`. It ships from desktop v0.56.0 (commit
+ *   0df5c318a), which also narrowed `blocked` to reviews and branch rules, so
+ *   `blocked`'s spoken form here says the same. An older desktop still folds a
+ *   failed check into `blocked`, and against one that spoken form leaves the
+ *   check out: a deliberate match to the current desktop, not an oversight.
  * - `queued` / `running` mean a blocking check is still in flight, so they take
  *   a hue that is neither a pass nor a fail.
  * - `unknown`, null, an absent field, and any value this client does not
  *   recognise render as plain open. That last one is the protocol's own
- *   instruction, and it is what keeps a desktop that grows a seventh verdict
+ *   instruction, and it is what keeps a desktop that grows a further verdict
  *   from blanking the chip here.
  *
  * The verdict's word survives where there is room for it: the long-press menu
@@ -59,7 +67,7 @@ export type PrChipGlyph = 'pull-request' | 'merge' | 'merge-conflict' | 'closed'
  */
 export const PR_READINESS_FRESHNESS_CAVEAT = 'as of the last PR refresh';
 
-/** A recognised verdict: an icon and color for the chip, one word for the menu, one sentence for a reader. */
+/** A recognised verdict: an icon and color for the chip, a word or two for the menu, one sentence for a reader. */
 interface ReadinessPresentation {
   /**
    * Nested rather than spread alongside `word` and `spokenDetail`, so
@@ -69,7 +77,7 @@ interface ReadinessPresentation {
    * every caller.
    */
   chip: PrChipPresentation;
-  /** The verdict in one word, for a surface with room to say it (the long-press menu caption). */
+  /** The verdict in a word or two (the desktop's own label), for a surface with room to say it (the long-press menu caption). */
   word: string;
   /** The spoken form, minus the caveat, which is appended at the one call site. */
   spokenDetail: string;
@@ -104,11 +112,19 @@ const READINESS_PRESENTATION: ReadonlyMap<string, ReadinessPresentation> = new M
     },
   ],
   [
+    'failing',
+    {
+      chip: { glyph: 'pull-request', color: 'conflict' },
+      word: 'checks failing',
+      spokenDetail: 'Pull request has a failing check or build',
+    },
+  ],
+  [
     'blocked',
     {
       chip: { glyph: 'pull-request', color: 'warning' },
       word: 'blocked',
-      spokenDetail: 'Pull request merge blocked by reviews, checks, or branch rules',
+      spokenDetail: 'Pull request merge blocked by reviews or branch rules',
     },
   ],
   [
@@ -200,7 +216,7 @@ export function prChipPresentation(
 }
 
 /**
- * The PR's state as one always-present word, for a surface with room to say it
+ * The PR's state in an always-present word or two, for a surface with room to say it
  * (the chip itself never does). Its one caller today is the long-press menu's
  * caption (`TaskActionsScreen`).
  *

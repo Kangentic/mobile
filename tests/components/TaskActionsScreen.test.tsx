@@ -627,6 +627,15 @@ describe('TaskActionsScreen', () => {
       expect(screen.getByText('#42 - conflicts')).toBeTruthy();
     });
 
+    it('captions failing checks with the desktop two-word label, not plain open', async () => {
+      // Before the `failing` row existed this caption read "#42 - open" for a
+      // PR with red CI. The label is the desktop's own, two words.
+      seedBoard({ withDoneColumn: true, task: { ...linkedPr, pr_merge_readiness: 'failing' } });
+      await renderTaskActions();
+
+      expect(screen.getByText('#42 - checks failing')).toBeTruthy();
+    });
+
     it('captions an open PR whose wire omits the readiness field entirely as plain open', async () => {
       // `pr_merge_readiness` became OPTIONAL in protocol 0.13.1, so a desktop
       // may leave the key off rather than send null. `prStateSummary`'s only

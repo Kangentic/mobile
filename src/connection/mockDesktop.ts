@@ -2251,7 +2251,7 @@ export function initialTasks(): BoardTaskWire[] {
     boardTaskFixture({
       id: 'mock-task-merge-2',
       display_id: 13,
-      // The sixth and last readiness value, so Merge shows the in-flight pair
+      // The second in-flight readiness value, so the board shows the pair
       // (`queued` on the Gemini card, `running` here) reading identically to
       // each other and distinctly from pass and fail.
       title: 'Retry the webhook delivery before marking it failed',
@@ -2540,6 +2540,15 @@ export function initialTasks2(): BoardTaskWire[] {
       title: 'Document the metrics endpoint',
       description: 'Describe every counter the checkout service exposes, and which ones are safe to scrape from outside the cluster.',
       swimlane_id: 'lane2-backlog',
+      // A check or build failed: the PR icon in the conflict color. Here, on a
+      // sessionless checkout-api card, because no store shelf photographs it
+      // (the Agents feed draws only session-bearing cards, and the board shelf
+      // is storefront-web's Executing column), so the verdict joined dev:mock
+      // without moving a single listing frame.
+      pr_number: 29,
+      pr_url: 'https://github.com/Kangentic/kangentic-mobile/pull/29',
+      pr_state: 'open',
+      pr_merge_readiness: 'failing',
       created_at: nowIso,
       updated_at: nowIso,
     }),
