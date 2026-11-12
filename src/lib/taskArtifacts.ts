@@ -51,8 +51,3 @@ export function openableArtifacts(artifacts: readonly BoardTaskArtifactWire[] | 
 export function artifactNamesCaption(links: readonly TaskArtifactLink[]): string {
   return links.map((link) => link.name).join(', ');
 }
-
-/** The completed strip's chip for several links: the desktop chip's "N artifacts". */
-export function artifactCountLabel(count: number): string {
-  return count === 1 ? '1 artifact' : `${count} artifacts`;
-}

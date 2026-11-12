@@ -151,8 +151,8 @@ function RootStack(): React.JSX.Element {
         <Stack.Screen name="project-picker" options={formSheetOptions} />
         <Stack.Screen name="task-actions" options={formSheetOptions} />
         {/* A task's links (protocol 0.28.0, task #145), for a task with more
-            than one: from the long-press hub's Artifacts row and the
-            completed task's chip. */}
+            than one: from the long-press hub's Artifacts row, the one place
+            the phone shows a task's links (design decisions D2, E2). */}
         <Stack.Screen name="task-artifacts" options={formSheetOptions} />
         <Stack.Screen name="section-filter" options={formSheetOptions} />
         {/* Command Terminals (task #113): a project's terminals as a sheet, a

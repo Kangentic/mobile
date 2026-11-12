@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BoardTaskArtifactWire } from '@kangentic/protocol';
-import { ARTIFACT_NAME_MAX_LENGTH, artifactCountLabel, artifactNamesCaption, openableArtifacts } from '../../src/lib/taskArtifacts';
+import { ARTIFACT_NAME_MAX_LENGTH, artifactNamesCaption, openableArtifacts } from '../../src/lib/taskArtifacts';
 
 function artifact(url: string, name: string): BoardTaskArtifactWire {
   return { url, name } as BoardTaskArtifactWire;
@@ -51,12 +51,5 @@ describe('artifactNamesCaption', () => {
   it('joins the names with a comma and space', () => {
     const links = openableArtifacts([artifact('https://a.com', 'A'), artifact('https://b.com', 'B')]);
     expect(artifactNamesCaption(links)).toBe('A, B');
-  });
-});
-
-describe('artifactCountLabel', () => {
-  it('is singular for one and plural otherwise', () => {
-    expect(artifactCountLabel(1)).toBe('1 artifact');
-    expect(artifactCountLabel(3)).toBe('3 artifacts');
   });
 });

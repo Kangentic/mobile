@@ -3438,7 +3438,7 @@ export function archivedTasksFor(projectId: string): BoardTaskWire[] {
       pr_number: 48,
       pr_url: 'https://github.com/Kangentic/kangentic-mobile/pull/48',
       pr_state: 'merged',
-      // One link (protocol 0.28.0): the completed strip's chip beside the PR.
+      // One link (protocol 0.28.0): the long-press hub of its Done card lists it.
       artifacts: [{ url: 'https://www.notion.so/mock-grid-cache-notes', name: 'Grid cache notes' }],
       archived_at: '2026-07-20T18:30:00.000Z',
     }),

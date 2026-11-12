@@ -15,8 +15,9 @@ const TRAILING_GLYPH_SIZE = 16;
 /**
  * A task's links (protocol 0.28.0) as a native form sheet: the desktop's
  * Artifacts menu (`ArtifactsMenu.tsx`), for a task with more than one. Opened
- * from the long-press hub's Artifacts row and the completed task's chip, the
- * places where one link opens directly and several come here.
+ * from the long-press hub's Artifacts row, the one place the phone shows a
+ * task's links (design decisions D2 and E2: no header button, no completed
+ * strip chip); a single link opens from the hub's row directly.
  *
  * One raised row per link: its name, and under it the site it lives on, where
  * the desktop names the tool (the wire carries no platform, so no logo). A tap
