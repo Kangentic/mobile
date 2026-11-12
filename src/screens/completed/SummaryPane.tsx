@@ -3,6 +3,7 @@ import { View } from 'react-native';
 import { FlashList, type ListRenderItemInfo } from '@shopify/flash-list';
 import type { BoardTaskWire, SessionSummaryWire } from '@kangentic/protocol';
 import { Skeleton, Text, useTheme } from '@/components';
+import { openableArtifacts, type TaskArtifactLink } from '@/lib/taskArtifacts';
 import { headerStripModel } from '@/taskReport/headerStrip';
 import { summaryItemKey, summaryItems, type SummaryItem, type SummaryPhase } from '@/taskReport/summaryItems';
 import { CommitsCard } from './CommitsCard';
@@ -52,17 +53,20 @@ export function SummaryPane({
     return summaryItems({ read, strip, lastMessage, hasUsage: summary !== null, filesExpanded });
   }, [read, summary, task, lastMessage, filesExpanded, nowMs]);
 
+  // The task's links (protocol 0.28.0), for the strip's chip beside the PR.
+  const artifactLinks = useMemo(() => openableArtifacts(task.artifacts), [task.artifacts]);
+
   const renderItem = useCallback(
     ({ item, index }: ListRenderItemInfo<SummaryItem>) => {
       const sideMargin = item.kind === 'strip' ? 0 : theme.spacing.md;
       const gapAbove = startsBlock(item) ? (index <= 1 ? theme.spacing.md : theme.spacing.lg) : 0;
       return (
         <View style={{ paddingHorizontal: sideMargin, paddingTop: gapAbove }}>
-          {renderSummaryItem(item, { task, summary, nowMs, onShowAllFiles })}
+          {renderSummaryItem(item, { task, summary, nowMs, onShowAllFiles, artifactLinks })}
         </View>
       );
     },
-    [theme, task, summary, nowMs, onShowAllFiles],
+    [theme, task, summary, nowMs, onShowAllFiles, artifactLinks],
   );
 
   return (
@@ -79,7 +83,13 @@ export function SummaryPane({
 
 function renderSummaryItem(
   item: SummaryItem,
-  context: { task: BoardTaskWire; summary: SessionSummaryWire | null; nowMs: number; onShowAllFiles: () => void },
+  context: {
+    task: BoardTaskWire;
+    summary: SessionSummaryWire | null;
+    nowMs: number;
+    onShowAllFiles: () => void;
+    artifactLinks: readonly TaskArtifactLink[];
+  },
 ): React.JSX.Element | null {
   switch (item.kind) {
     case 'loading':
@@ -90,6 +100,8 @@ function renderSummaryItem(
           strip={item.strip}
           prState={context.task.pr_state}
           prMergeReadiness={context.task.pr_merge_readiness}
+          taskId={context.task.id}
+          artifactLinks={context.artifactLinks}
         />
       );
     case 'taskSummary':

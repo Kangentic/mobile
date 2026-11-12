@@ -362,7 +362,7 @@ describe('resumeTaskSession - following the board row', () => {
     await resumeTaskSession('task-1', 'project-1');
     publishRow({ ...PAUSED_ROW, spawn_progress: RESUME_LABEL });
     vi.advanceTimersByTime(1_000);
-    useResumeStore.getState().markResuming('task-1', Date.now());
+    useResumeStore.getState().markResuming('task-1', Date.now(), 'button');
     const newerAttempt = attemptFor();
 
     // The label clearing onto a paused row is exactly what the older watcher

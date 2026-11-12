@@ -1,11 +1,14 @@
 import React, { useCallback } from 'react';
 import { StyleSheet, View } from 'react-native';
 import * as Linking from 'expo-linking';
-import { CircleCheck, CircleX } from 'lucide-react-native';
+import { useRouter } from 'expo-router';
+import { CircleCheck, CircleX, ExternalLink, Link2, Shapes } from 'lucide-react-native';
 import { PressScale, Text, colorForTextRole, useTheme } from '@/components';
 import { prChipPresentation } from '@/components/board/prChipPresentation';
 import { prGlyph } from '@/components/board/prGlyph';
+import { artifactCountLabel, type TaskArtifactLink } from '@/lib/taskArtifacts';
 import type { HeaderStripModel, StripCell, StripPullRequest } from '@/taskReport/headerStrip';
+import { openArtifactLink } from '../artifacts/taskArtifactLinks';
 import { FigureRow, type FigureCellSpec } from './FigureRow';
 
 /** The approved drawing's row padding: 10 pt above and below each row of figures. */
@@ -17,6 +20,9 @@ const PR_GLYPH_SIZE = 16;
 const STATUS_ICON_SIZE = 16;
 /** Grows the 36 pt chip's touch area to the 44 pt floor without growing what is drawn. */
 const PR_CHIP_HIT_SLOP = { top: 4, bottom: 4, left: 0, right: 0 };
+const ARTIFACT_GLYPH_SIZE = 16;
+const ARTIFACT_TRAILING_GLYPH_SIZE = 12;
+const NO_ARTIFACT_LINKS: readonly TaskArtifactLink[] = [];
 
 function figureCellSpec(cell: StripCell, addColor: string, removeColor: string): FigureCellSpec {
   if (cell.kind === 'changes') {
@@ -50,10 +56,16 @@ export function CompletedHeaderStrip({
   strip,
   prState,
   prMergeReadiness,
+  taskId = null,
+  artifactLinks = NO_ARTIFACT_LINKS,
 }: {
   strip: HeaderStripModel;
   prState: string | null;
   prMergeReadiness: string | null | undefined;
+  /** The task, for the Artifacts sheet a chip with several links opens. */
+  taskId?: string | null;
+  /** The task's openable links (protocol 0.28.0, `openableArtifacts`): a chip beside the PR chip when there are any. */
+  artifactLinks?: readonly TaskArtifactLink[];
 }): React.JSX.Element {
   const theme = useTheme();
   const addColor = theme.colors.diffAddText;
@@ -85,11 +97,12 @@ export function CompletedHeaderStrip({
           rows.length > 0 ? { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.border } : null,
         ]}
       >
-        {strip.pullRequest !== null ? (
-          <PullRequestChip pullRequest={strip.pullRequest} prState={prState} prMergeReadiness={prMergeReadiness} />
-        ) : (
-          <View />
-        )}
+        <View style={[styles.chips, { gap: theme.spacing.sm }]}>
+          {strip.pullRequest !== null ? (
+            <PullRequestChip pullRequest={strip.pullRequest} prState={prState} prMergeReadiness={prMergeReadiness} />
+          ) : null}
+          {artifactLinks.length > 0 ? <ArtifactsChip links={artifactLinks} taskId={taskId} /> : null}
+        </View>
         <View testID="completed-strip-status" style={[styles.status, { gap: theme.spacing.xs }]}>
           {strip.status.kind === 'exited' ? (
             <CircleX size={STATUS_ICON_SIZE} color={theme.colors.danger} />
@@ -167,9 +180,81 @@ function PullRequestChip({
   );
 }
 
+/**
+ * The task's links (protocol 0.28.0), as the desktop's completed strip carries
+ * them beside its PR: one link is a chip naming it, which opens it in the OS
+ * handler; several are "N artifacts", which opens the Artifacts sheet. The
+ * same chip as the PR's, so the two read as a pair. There is no error surface
+ * in the strip, so a link the OS refuses does nothing, as the PR chip's does.
+ */
+function ArtifactsChip({ links, taskId }: { links: readonly TaskArtifactLink[]; taskId: string | null }): React.JSX.Element {
+  const theme = useTheme();
+  const router = useRouter();
+  const single = links.length === 1 ? links[0] : null;
+  const onPress = useCallback(() => {
+    if (single !== null) {
+      void openArtifactLink(single).catch((error: unknown) => {
+        if (__DEV__) console.warn('[completed-task] could not open the link:', error);
+      });
+      return;
+    }
+    if (taskId !== null) router.push({ pathname: '/task-artifacts', params: { taskId } });
+  }, [single, taskId, router]);
+  return (
+    <PressScale
+      testID="completed-strip-artifacts"
+      accessibilityRole={single !== null ? 'link' : 'button'}
+      accessibilityLabel={single !== null ? `Open ${single.name}` : `${artifactCountLabel(links.length)}, open the list`}
+      hitSlop={PR_CHIP_HIT_SLOP}
+      onPress={onPress}
+      style={[
+        styles.chip,
+        styles.artifactsChip,
+        {
+          backgroundColor: theme.colors.surfaceRaised,
+          borderColor: theme.colors.border,
+          borderRadius: theme.radii.md,
+          gap: theme.spacing.xs,
+          paddingHorizontal: theme.spacing.md,
+        },
+      ]}
+    >
+      {single !== null ? (
+        <>
+          <Link2 size={ARTIFACT_GLYPH_SIZE} color={theme.colors.textSecondary} />
+          <Text color="secondary" numberOfLines={1} style={styles.artifactName}>
+            {single.name}
+          </Text>
+          <ExternalLink size={ARTIFACT_TRAILING_GLYPH_SIZE} color={theme.colors.textMuted} />
+        </>
+      ) : (
+        <>
+          <Shapes size={ARTIFACT_GLYPH_SIZE} color={theme.colors.textSecondary} />
+          <Text color="secondary" numberOfLines={1}>
+            {artifactCountLabel(links.length)}
+          </Text>
+        </>
+      )}
+    </PressScale>
+  );
+}
+
 const styles = StyleSheet.create({
   band: {
     borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  chips: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  artifactsChip: {
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  artifactName: {
+    flexShrink: 1,
   },
   foot: {
     alignItems: 'center',

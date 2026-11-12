@@ -45,6 +45,8 @@ function seedLocatedTask(): void {
         taskCountsByColumnId: {},
         commandTerminals: [],
         commandTerminalsOffered: false,
+        resumeOnOpenOffered: false,
+        priorities: null,
       },
     },
     pendingMoves: [],

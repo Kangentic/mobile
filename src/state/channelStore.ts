@@ -11,6 +11,14 @@ interface ChannelState {
    * connection banner warns about).
    */
   everEstablished: boolean;
+  /**
+   * Epoch ms the CURRENT secure session was established, null while there is
+   * none. A board snapshot applied at or after it was read on this connection;
+   * one from before is what the phone held while it was away, which can be
+   * minutes stale after a background (the resume on open reads it so a push
+   * tap never decides on the pre-pause row it cached).
+   */
+  establishedAt: number | null;
   rekeyCount: number;
   relayUrl: string | null;
   /** 'unknown' until the trust anchor has been checked at least once this launch. */
@@ -30,6 +38,7 @@ const initialState: ChannelState = {
   transportState: 'idle',
   established: false,
   everEstablished: false,
+  establishedAt: null,
   rekeyCount: 0,
   relayUrl: null,
   pairedState: 'unknown',
@@ -44,11 +53,13 @@ export const useChannelStore = create<ChannelState & ChannelActions>((set, get) 
       // Leaving 'connected' always drops session state (ChannelController's
       // reconnect model: transport resumes, crypto restarts).
       established: transportState === 'connected' ? get().established : false,
+      establishedAt: transportState === 'connected' ? get().establishedAt : null,
     }),
   markEstablished: () =>
     set({
       established: true,
       everEstablished: true,
+      establishedAt: Date.now(),
     }),
   // Counted from SessionManager.onRekey, NOT from markEstablished. A rekey
   // never re-fires onEstablished, and a transport drop clears `established`

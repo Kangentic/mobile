@@ -48,6 +48,8 @@ function board(tasks: BoardTaskWire[]): ProjectBoard {
     taskCountsByColumnId: {},
     commandTerminals: [],
     commandTerminalsOffered: false,
+    resumeOnOpenOffered: false,
+    priorities: null,
   };
 }
 

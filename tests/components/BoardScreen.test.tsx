@@ -138,6 +138,8 @@ function seedBoard(): void {
         taskCountsByColumnId: {},
         commandTerminals: [],
         commandTerminalsOffered: false,
+        resumeOnOpenOffered: false,
+        priorities: null,
       },
     },
     pendingMoves: [],
@@ -938,6 +940,8 @@ describe('BoardScreen', () => {
           taskCountsByColumnId: {},
           commandTerminals: [],
           commandTerminalsOffered: false,
+          resumeOnOpenOffered: false,
+          priorities: null,
         },
         'project-2': {
           columns: [column('lane-review', 'Review', 0)],
@@ -950,6 +954,8 @@ describe('BoardScreen', () => {
           taskCountsByColumnId: {},
           commandTerminals: [],
           commandTerminalsOffered: false,
+          resumeOnOpenOffered: false,
+          priorities: null,
         },
       },
       pendingMoves: [],
@@ -998,6 +1004,8 @@ describe('BoardScreen', () => {
         taskCountsByColumnId: {},
         commandTerminals: [],
         commandTerminalsOffered,
+        resumeOnOpenOffered: false,
+        priorities: null,
       };
     }
 
@@ -1131,6 +1139,8 @@ describe('BoardScreen', () => {
             taskCountsByColumnId: {},
             commandTerminals: [],
             commandTerminalsOffered: false,
+            resumeOnOpenOffered: false,
+            priorities: null,
           },
         },
         pendingMoves: [],

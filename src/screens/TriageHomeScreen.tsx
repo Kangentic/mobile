@@ -30,7 +30,9 @@ import {
   type SessionActivityEntry,
   useActivityStore,
 } from '@/state/activityStore';
-import { selectTaskColumn, useBoardStore } from '@/state/boardStore';
+import { priorityLevelFor } from '@/lib/priority';
+import { noteTaskOpened } from '@/navigation/taskOpenIntent';
+import { selectPriorityScale, selectTaskColumn, useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import {
@@ -668,6 +670,7 @@ const ActivityRow = React.memo(function ActivityRow({
    */
   const column = useBoardStore((state) => selectTaskColumn(state, entry.taskId));
   const boardColumns = useBoardStore((state) => state.boardsByProjectId[entry.projectId]?.columns ?? null);
+  const priorityScale = useBoardStore((state) => selectPriorityScale(state, entry.projectId));
 
   /**
    * Which of the desktop card's states this row is in (cardSessionDisplay):
@@ -709,6 +712,8 @@ const ActivityRow = React.memo(function ActivityRow({
   const isPermission = section === 'needs-you';
 
   const openTask = useCallback(() => {
+    // An open of the task, for the resume on open (protocol 0.28.0).
+    noteTaskOpened(entry.taskId);
     router.push({
       pathname: '/task/[taskId]',
       // A prompt-pending row lands on the chat lens, where the answerable
@@ -886,6 +891,7 @@ const ActivityRow = React.memo(function ActivityRow({
         columnStrip={columnStrip}
         // Never the fallback stand-in's: it cannot tell, so it draws no strip.
         automationsDisabled={locatedTask?.automations_disabled === true}
+        priorityLevel={priorityLevelFor(locatedTask?.priority, priorityScale)}
         bodyText={bodyText}
         bodyNumberOfLines={SNIPPET_LINES}
         bodyMinHeight={snippetSlotHeight}
@@ -959,8 +965,12 @@ const SessionlessTaskRow = React.memo(function SessionlessTaskRow({
   );
   const respawn = useActivityStore((state) => selectTaskRespawn(state, task.id));
   const sessionDisplay = cardSessionDisplay({ session: null, respawn, task });
+  const priorityScale = useBoardStore((state) => selectPriorityScale(state, projectId));
 
   const openTask = useCallback(() => {
+    // An open of the task, for the resume on open (protocol 0.28.0): a paused
+    // task's sessionless row is the commonest way into one.
+    noteTaskOpened(task.id);
     router.push({ pathname: '/task/[taskId]', params: { taskId: task.id, projectId } });
   }, [router, task.id, projectId]);
   const onLongPress = useCallback(() => onLongPressTask(task, projectId), [onLongPressTask, task, projectId]);
@@ -975,6 +985,7 @@ const SessionlessTaskRow = React.memo(function SessionlessTaskRow({
       usage={null}
       columnStrip={columnStrip}
       automationsDisabled={task.automations_disabled === true}
+      priorityLevel={priorityLevelFor(task.priority, priorityScale)}
       bodyText={collapseToSnippetText(task.description)}
       bodyNumberOfLines={SNIPPET_LINES}
       bodyMinHeight={theme.typography.caption.lineHeight * SNIPPET_LINES}

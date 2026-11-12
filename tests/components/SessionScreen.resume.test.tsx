@@ -64,7 +64,7 @@ jest.mock('@/connection/actions', () => ({
   moveTaskOptimistic: jest.fn().mockResolvedValue(undefined),
   loadArchivedTasks: jest.fn().mockResolvedValue(undefined),
   setDiffWatch: jest.fn(),
-  resumeTaskSession: jest.fn().mockResolvedValue({ phase: 'resuming', startedAt: 0 }),
+  resumeTaskSession: jest.fn().mockResolvedValue({ phase: 'resuming', startedAt: 0, origin: 'button' }),
 }));
 
 // The panes are heavy and beside the point: this suite is about what the
@@ -184,6 +184,8 @@ function seedBoard({
         taskCountsByColumnId: {},
         commandTerminals: [],
         commandTerminalsOffered: false,
+        resumeOnOpenOffered: false,
+        priorities: null,
       },
     },
     pendingMoves: [],
@@ -331,7 +333,7 @@ describe('SessionScreen Resume (a paused session)', () => {
 
   it('reads "Resuming agent..." with a spinner, and takes no second tap, while the resume runs', async () => {
     seedPausedSession({ resumable: true });
-    useResumeStore.getState().markResuming('task-1', Date.now());
+    useResumeStore.getState().markResuming('task-1', Date.now(), 'button');
     await renderSessionScreen();
 
     expect(screen.getByText('Resuming agent...')).toBeTruthy();
@@ -362,7 +364,7 @@ describe('SessionScreen Resume (a paused session)', () => {
    */
   it('gives way, and keeps the attempt running, when the paused session ends into its resume', async () => {
     seedPausedSession({ resumable: true });
-    useResumeStore.getState().markResuming('task-1', Date.now());
+    useResumeStore.getState().markResuming('task-1', Date.now(), 'button');
     await renderSessionScreen();
     expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
 
@@ -382,7 +384,7 @@ describe('SessionScreen Resume (a paused session)', () => {
   /** Once a session holds the task the attempt is over, whichever lens is showing. */
   it('ends a running attempt once the task reads as running', async () => {
     seedPausedSession({ resumable: true });
-    useResumeStore.getState().markResuming('task-1', Date.now());
+    useResumeStore.getState().markResuming('task-1', Date.now(), 'button');
     await renderSessionScreen();
 
     await act(() => {

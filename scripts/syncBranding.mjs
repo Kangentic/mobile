@@ -140,9 +140,10 @@ const BRANDMARK_SOURCES = [
  *   both states and no blink is generated or implemented.
  * - `control-pause-*`: the phone's Pause is a sheet row, not the desktop's
  *   ring control.
- * - `agent-stopped` (2.13.0): the board has stopped and wants a person. Drawing
- *   it needs a reason to pair it with, so it is a feature, not a sync, and until
- *   it is adopted `agent-idle` covers that state, as upstream's README says.
+ *
+ * `agent-stopped` (2.13.0, the board has stopped and wants a person) was left
+ * out here until a feature paired it with a reason; protocol 0.28.0's
+ * `stopped` idle reason is that reason (AgentStatusIcon's `stopped` kind).
  *
  * Same reason BRANDMARK_SOURCES omits brandmark-filled.svg: geometry nothing
  * draws stays out of the bundle. Adding a mark here is all it takes when a
@@ -154,6 +155,7 @@ const ACTIVITY_MARKS = [
   'agent-working',
   'agent-question',
   'agent-approval',
+  'agent-stopped',
   'terminal-idle',
   'terminal-new',
   'control-stop-idle',

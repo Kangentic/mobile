@@ -43,6 +43,8 @@ function board(overrides: Partial<ProjectBoard> = {}): ProjectBoard {
     taskCountsByColumnId: {},
     commandTerminals: [],
     commandTerminalsOffered: false,
+    resumeOnOpenOffered: false,
+    priorities: null,
     ...overrides,
   };
 }

@@ -98,6 +98,8 @@ function seedBoard({
         taskCountsByColumnId: {},
         commandTerminals: [],
         commandTerminalsOffered: false,
+        resumeOnOpenOffered: false,
+        priorities: null,
       },
     },
     pendingMoves: [],
@@ -469,7 +471,7 @@ describe('TaskActionsScreen', () => {
 
     it('closes once the desktop accepts the resume', async () => {
       seedPausedSession({ resumable: true });
-      mockResumeTaskSession.mockResolvedValue({ phase: 'resuming', startedAt: 0 });
+      mockResumeTaskSession.mockResolvedValue({ phase: 'resuming', startedAt: 0, origin: 'button' });
       await renderTaskActions();
 
       await act(async () => {
@@ -518,7 +520,7 @@ describe('TaskActionsScreen', () => {
       expect(screen.getByTestId('task-action-resume').props.accessibilityState).toEqual(expect.objectContaining({ disabled: false }));
 
       await act(() => {
-        useResumeStore.getState().markResuming('task-1', 0);
+        useResumeStore.getState().markResuming('task-1', 0, 'button');
       });
 
       expect(screen.getByTestId('task-action-resume').props.accessibilityState).toEqual(expect.objectContaining({ disabled: true }));
@@ -549,7 +551,7 @@ describe('TaskActionsScreen', () => {
 
       await unmount();
       await act(async () => {
-        resolveResume({ phase: 'resuming', startedAt: 0 });
+        resolveResume({ phase: 'resuming', startedAt: 0, origin: 'button' });
       });
 
       expect(mockBack).not.toHaveBeenCalled();
@@ -567,7 +569,7 @@ describe('TaskActionsScreen', () => {
     it('says why and never calls the resume action when the route has no projectId', async () => {
       seedPausedSession({ resumable: true });
       mockParams = { taskId: 'task-1' };
-      mockResumeTaskSession.mockResolvedValue({ phase: 'resuming', startedAt: 0 });
+      mockResumeTaskSession.mockResolvedValue({ phase: 'resuming', startedAt: 0, origin: 'button' });
       await renderTaskActions();
       expect(screen.getByTestId('task-action-resume')).toBeTruthy();
 

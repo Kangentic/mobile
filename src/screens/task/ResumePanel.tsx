@@ -27,6 +27,12 @@ const GLYPH_SIZE = 16;
  * resume one task of a paused workflow, so the button takes the user to the
  * workflow view, the one place a workflow resumes.
  *
+ * When the task's last start never reached its agent (protocol 0.28.0's
+ * `start_blocked_reason`), the desktop card's hover tip for it ("Its worktree
+ * folder is gone. Resume makes it again from the branch.") sits under the
+ * button: the phone has no hover, and this is where the person decides whether
+ * to resume.
+ *
  * Drawn over the terminal pane rather than in place of it: the xterm WebView
  * must never unmount, and the opaque panel hides it exactly as the desktop's
  * body hides its terminal.
@@ -36,11 +42,14 @@ export function ResumePanel({
   projectId,
   attempt,
   pausedWorkflow = null,
+  startBlockedTip = null,
 }: {
   taskId: string;
   projectId: string;
   attempt: ResumeAttempt | null;
   pausedWorkflow?: ResumeOffer['pausedWorkflow'];
+  /** The desktop's words for why the last start never reached an agent (`startBlockedCopy(...).tip`), or null. */
+  startBlockedTip?: string | null;
 }): React.JSX.Element {
   const theme = useTheme();
   const router = useRouter();
@@ -76,6 +85,11 @@ export function ResumePanel({
             onPress={() => void resumeTaskSession(taskId, projectId)}
             testID="session-resume-button"
           />
+          {startBlockedTip !== null ? (
+            <Text variant="caption" color="muted" style={styles.failure} testID="session-resume-start-blocked">
+              {startBlockedTip}
+            </Text>
+          ) : null}
           {attempt?.phase === 'failed' ? (
             <Text variant="caption" color="muted" style={styles.failure} testID="session-resume-error">
               {attempt.message ?? RESUME_FAILED_MESSAGE}

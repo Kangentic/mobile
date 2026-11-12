@@ -3,6 +3,7 @@ import type {
   BoardColumnWire,
   BoardTaskWire,
   CommandTerminalWire,
+  PriorityLevelWire,
   ReadBoardArchivedResponsePayload,
   ReadBoardProjectGroup,
   ReadBoardProjectSummary,
@@ -47,6 +48,24 @@ export interface ProjectBoard {
    * Pause. Absent on the wire (an older desktop) reads false.
    */
   commandTerminalsOffered: boolean;
+  /**
+   * Whether this desktop answers `start-session` with `trigger: 'open'` AND
+   * this phone holds `start-session` (protocol 0.28.0): the resume on open.
+   * Absent on the wire (an older desktop, which would drop the trigger and take
+   * the Resume button's paid path) reads false, and the phone sends nothing.
+   *
+   * The read-stream response carries the same flag, for a client that reads a
+   * stream before any board. This phone never does (bootstrap reads the boards
+   * first, and the open needs the task's row to decide anyway), so the board's
+   * copy is the only one kept.
+   */
+  resumeOnOpenOffered: boolean;
+  /**
+   * The project's priority scale, lowest first (protocol 0.28.0): a task's
+   * `priority` is an index into it (see `priorityLevelFor`). Null from an older
+   * desktop, which never said what an index means, so no card draws one.
+   */
+  priorities: PriorityLevelWire[] | null;
 }
 
 /**
@@ -369,6 +388,8 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
           .sort((first, second) => first.slot - second.slot)
           .map((terminal) => ({ ...terminal, name: capCommandTerminalName(terminal.name) })),
         commandTerminalsOffered: snapshot.commandTerminalsOffered === true,
+        resumeOnOpenOffered: snapshot.resumeOnOpenOffered === true,
+        priorities: snapshot.priorities ?? null,
       };
       // Re-apply in-flight optimistic mutations on top, so a snapshot racing
       // one does not visibly bounce the card before the mutation commits.
@@ -699,6 +720,24 @@ export function selectCommandTerminalsOffered(
 ): boolean {
   if (projectId === null) return false;
   return state.boardsByProjectId[projectId]?.commandTerminalsOffered ?? false;
+}
+
+/** Whether the project's desktop offers the resume on open (protocol 0.28.0); false until a snapshot says so. */
+export function selectResumeOnOpenOffered(
+  state: { boardsByProjectId: Record<string, ProjectBoard> },
+  projectId: string | null,
+): boolean {
+  if (projectId === null) return false;
+  return state.boardsByProjectId[projectId]?.resumeOnOpenOffered ?? false;
+}
+
+/** The project's priority scale (protocol 0.28.0), the stored array itself, or null when no snapshot carried one. */
+export function selectPriorityScale(
+  state: { boardsByProjectId: Record<string, ProjectBoard> },
+  projectId: string | null,
+): PriorityLevelWire[] | null {
+  if (projectId === null) return null;
+  return state.boardsByProjectId[projectId]?.priorities ?? null;
 }
 
 /**

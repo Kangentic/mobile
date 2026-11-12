@@ -1073,6 +1073,11 @@ export function selectWaitingSince(entry: SessionActivityEntry): number | null {
   if (entry.feedStatus !== 'live') return null;
   if (sectionForEntry(entry) === 'working') return null;
   const reason = entry.reason;
+  // A turn the BOARD has stopped (protocol 0.28.0's `stopped`) shows no
+  // elapsed time: the desktop draws its pennant with no tip and stops the
+  // clock (`TitleRowActivityMark`), and this wait time is the phone's stand-in
+  // for that tip. The pennant alone says the card waits on a person.
+  if (reason !== null && reason.kind === 'idle' && reason.stopped === true) return null;
   if (reason !== null && (reason.kind === 'idle' || reason.kind === 'permission') && typeof reason.since === 'number') {
     return reason.since;
   }

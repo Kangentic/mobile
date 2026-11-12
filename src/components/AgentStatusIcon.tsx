@@ -19,24 +19,30 @@ import { useTheme } from './theme/ThemeProvider';
 
 /**
  * `question` and `approval` are the two waits on the user (protocol 0.26.0);
- * `idle` and `idle-unread` are a finished turn.
+ * `idle` and `idle-unread` are a finished turn; `stopped` is a finished turn
+ * the BOARD has stopped (protocol 0.28.0): its column's turn-end rows ended the
+ * run, or the reply ends on "Needs owner:", and nothing moves the card until a
+ * person acts.
  */
-export type AgentStatusKind = 'working' | 'question' | 'approval' | 'idle-unread' | 'idle';
+export type AgentStatusKind = 'working' | 'question' | 'approval' | 'stopped' | 'idle-unread' | 'idle';
 
 /**
  * The kind a running agent session wears, as the desktop's `agentActivityMark`
  * picks its mark: the working ring while it thinks; while it waits on the user,
  * the bubble for a question or a wait of unknown kind and the quartered shield for
- * an approval (src/lib/agentWait.ts); otherwise the envelope of a finished
- * turn. Every surface that draws an agent's own status asks this one function,
- * so the board card, the Agents feed and the session header cannot draw the
- * same wait two ways. The project picker's needs-you COUNT does not: it keeps
- * one envelope for all three waits, as the desktop's sidebar count does.
+ * an approval (src/lib/agentWait.ts); the stopped pennant when the board has
+ * stopped it (the idle reason's `stopped`, protocol 0.28.0, which an older
+ * desktop never sends); otherwise the envelope of a finished turn. Every
+ * surface that draws an agent's own status asks this one function, so the
+ * board card, the Agents feed and the session header cannot draw the same wait
+ * two ways. The project picker's needs-you COUNT does not: it keeps one
+ * envelope for all of them, as the desktop's sidebar count does.
  */
 export function agentStatusKindFor(state: ActivityStateWire, reason: ActivityReasonWire | null, unread: boolean): AgentStatusKind {
   if (state === 'thinking') return 'working';
   const waitKind = agentWaitKind(state, reason);
   if (waitKind !== null) return waitMarkKind(waitKind);
+  if (reason !== null && reason.kind === 'idle' && reason.stopped === true) return 'stopped';
   return unread ? 'idle-unread' : 'idle';
 }
 
@@ -64,10 +70,14 @@ const DOT_CENTER_X = ACTIVITY_GRID_WIDTH / 2;
 const DOT_CENTER_Y = ACTIVITY_GRID_HEIGHT / 2;
 const DOT_RADIUS_UNITS = 3;
 
+/** The desktop's accessible name for the stopped pennant (activity-reason-text.ts, context "Agent status"). */
+export const STOPPED_ACCESSIBILITY_LABEL = 'Stopped';
+
 const MARK_BY_KIND: Record<AgentStatusKind, ActivityMarkName> = {
   working: 'agent-working',
   question: 'agent-question',
   approval: 'agent-approval',
+  stopped: 'agent-stopped',
   'idle-unread': 'agent-idle',
   idle: 'agent-idle',
 };
@@ -81,6 +91,7 @@ const FALLBACK_TESTID_BY_KIND: Record<AgentStatusKind, string> = {
   working: 'agent-status-working',
   question: 'agent-status-question',
   approval: 'agent-status-approval',
+  stopped: 'agent-status-stopped',
   'idle-unread': 'agent-status-idle-unread',
   idle: 'agent-status-idle',
 };
@@ -236,5 +247,16 @@ export function AgentStatusIcon({ kind, size = 16, testID, still = false }: Agen
   }
 
   // A wait's mark, reduced motion, a blurred screen, a legend: static, no animated hooks.
-  return renderMarkSvg({ mark, markName, size, color, testID: resolvedTestID, spinning: false, marching: false });
+  // The stopped pennant says what the desktop's accessible name says ("Stopped"):
+  // it has no tip and no elapsed time beside it, so the mark alone carries it.
+  return renderMarkSvg({
+    mark,
+    markName,
+    size,
+    color,
+    testID: resolvedTestID,
+    spinning: false,
+    marching: false,
+    accessibilityLabel: kind === 'stopped' ? STOPPED_ACCESSIBILITY_LABEL : undefined,
+  });
 }

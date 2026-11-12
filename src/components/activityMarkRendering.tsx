@@ -61,6 +61,8 @@ export interface MarkSvgParams {
   marchAnimatedProps?: ReturnType<typeof useAnimatedProps>;
   /** Defaults to every shape. */
   layer?: MarkLayer;
+  /** What a screen reader says for the mark, when it carries a meaning nothing beside it says (the stopped pennant). */
+  accessibilityLabel?: string;
 }
 
 function inLayer(shape: ActivityShape, layer: MarkLayer): boolean {
@@ -89,6 +91,7 @@ export function renderMarkSvg({
   marching,
   marchAnimatedProps,
   layer = 'all',
+  accessibilityLabel,
 }: MarkSvgParams): React.JSX.Element {
   return (
     // `color` is what resolves the marks' `currentColor`, so the tone stays a
@@ -104,6 +107,8 @@ export function renderMarkSvg({
       strokeLinecap={ACTIVITY_STROKE_LINECAP}
       strokeLinejoin={ACTIVITY_STROKE_LINEJOIN}
       testID={testID}
+      accessible={accessibilityLabel !== undefined}
+      accessibilityLabel={accessibilityLabel}
     >
       {mark.shapes.map((shape, shapeIndex) => {
         if (!inLayer(shape, layer)) return null;

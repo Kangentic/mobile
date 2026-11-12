@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
-import type { BoardColumnWire, BoardTaskWire, SessionUsageWire } from '@kangentic/protocol';
+import type { BoardColumnWire, BoardTaskWire, PriorityLevelWire, SessionUsageWire } from '@kangentic/protocol';
 import {
   AgentStatusIcon,
   Badge,
@@ -18,7 +18,8 @@ import { cardStatusFooter } from './CardStatusFooter';
 import type { CardSessionDisplay } from './cardSessionDisplay';
 import { ColumnStrip, type StripWorkflow } from './ColumnStrip';
 import type { ColumnTrackStep } from './columnTrack';
-import { computeVisibleLabelCount } from './labelFit';
+import { computeVisibleLabelCount, priorityBadgeReserve } from './labelFit';
+import { PriorityBadge } from './PriorityBadge';
 import { prChipAccessibilityLabel, prChipPresentation } from './prChipPresentation';
 import { prGlyph } from './prGlyph';
 import type { WorkflowWaitingFooter } from '@/workflow/workflowWaiting';
@@ -107,6 +108,13 @@ export interface TaskCardProps {
    * Defaults true (the board).
    */
   showMetaRow?: boolean;
+  /**
+   * The task's priority level (protocol 0.28.0), from `priorityLevelFor`
+   * against its project's scale: the first pill in the labels row, as the
+   * desktop card draws it. Null draws nothing, which is the bottom of the
+   * scale, or a desktop that sends no scale.
+   */
+  priorityLevel?: PriorityLevelWire | null;
   onPress: () => void;
   onLongPress?: () => void;
   /** Absolutely-positioned content painted over the whole card - the Agents feed's section-change pulse. The board has none. */
@@ -137,6 +145,7 @@ export function TaskCard({
   waiting = null,
   automationsDisabled = false,
   showMetaRow = true,
+  priorityLevel = null,
   onPress,
   onLongPress,
   overlay,
@@ -145,12 +154,14 @@ export function TaskCard({
   // The labels row stretches to the card's full content width regardless of
   // how many labels are inside it (a Stack's default cross-axis stretch), so
   // its first onLayout reports the real available width - reused directly
-  // to decide how many labels actually fit before falling back to "+N".
+  // to decide how many labels actually fit before falling back to "+N". A
+  // priority pill leads the row and spends its share of that width first.
   const [labelsRowWidth, setLabelsRowWidth] = useState<number | null>(null);
+  const priorityShown = showMetaRow && priorityLevel !== null;
   const visibleLabelCount =
     labelsRowWidth === null
-      ? Math.min(task.labels.length, FALLBACK_LABEL_LIMIT)
-      : computeVisibleLabelCount(task.labels, labelsRowWidth);
+      ? Math.min(task.labels.length, FALLBACK_LABEL_LIMIT - (priorityShown ? 1 : 0))
+      : computeVisibleLabelCount(task.labels, labelsRowWidth - priorityBadgeReserve(priorityShown ? priorityLevel.label : null));
   const visibleLabels = task.labels.slice(0, visibleLabelCount);
   const hiddenLabelCount = task.labels.length - visibleLabels.length;
   // Existence + state is what matters here (it decides whether the task is
@@ -160,8 +171,15 @@ export function TaskCard({
   // (see prChipPresentation). The number itself is one tap away in the detail view.
   const hasPr = showMetaRow && task.pr_number !== null;
   const prChip = prChipPresentation(task.pr_state, task.pr_merge_readiness);
-  const hasMetaRow = showMetaRow && task.labels.length > 0;
-  const footer = cardStatusFooter({ display: sessionDisplay, usage, waiting, testID });
+  const hasMetaRow = showMetaRow && (task.labels.length > 0 || priorityShown);
+  const footer = cardStatusFooter({
+    display: sessionDisplay,
+    usage,
+    waiting,
+    queuePlace: task.queue_place ?? null,
+    startBlockedReason: task.start_blocked_reason ?? null,
+    testID,
+  });
 
   return (
     <Card testID={testID} onPress={onPress} onLongPress={onLongPress}>
@@ -251,6 +269,7 @@ export function TaskCard({
             style={styles.metaRow}
             onLayout={(event: LayoutChangeEvent) => setLabelsRowWidth(event.nativeEvent.layout.width)}
           >
+            {priorityShown ? <PriorityBadge level={priorityLevel} testID={`${testID}-priority`} /> : null}
             {visibleLabels.map((label) => (
               <Badge key={label} label={label} color="secondary" />
             ))}

@@ -10,22 +10,34 @@ import { hasSpawnLabel } from '@/state/boardStore';
  *
  * In memory only: an attempt means nothing after a relaunch, when the next
  * subscribe reports the session's real status.
+ *
+ * `origin` says what started it. `button` is a person's Resume (the panel, the
+ * header, the long-press row). `open` is the resume on open (protocol 0.28.0,
+ * `resumeTaskOnOpen`): the desktop resumes an idle-paused task because the
+ * person opened it, and an open is not a request the person can fail, so an
+ * open attempt never ends `failed`. It clears instead, leaving the plain
+ * Resume button with no error line. Both read "Resuming agent..." while they
+ * run, and neither can be pressed again then, which is what keeps a Resume tap
+ * (the paid path) from going out on top of an open.
  */
+export type ResumeOrigin = 'button' | 'open';
+
 export type ResumeAttempt =
-  | { phase: 'resuming'; startedAt: number }
+  | { phase: 'resuming'; startedAt: number; origin: ResumeOrigin }
   /** `message` is the desktop's own refusal text when it gave one, or null for the generic failure line. */
   | { phase: 'failed'; message: string | null };
 
 interface ResumeStoreState {
   byTaskId: Record<string, ResumeAttempt>;
-  markResuming: (taskId: string, startedAt: number) => void;
+  markResuming: (taskId: string, startedAt: number, origin: ResumeOrigin) => void;
   markFailed: (taskId: string, message: string | null) => void;
   clear: (taskId: string) => void;
 }
 
 export const useResumeStore = create<ResumeStoreState>((set) => ({
   byTaskId: {},
-  markResuming: (taskId, startedAt) => set((state) => ({ byTaskId: { ...state.byTaskId, [taskId]: { phase: 'resuming', startedAt } } })),
+  markResuming: (taskId, startedAt, origin) =>
+    set((state) => ({ byTaskId: { ...state.byTaskId, [taskId]: { phase: 'resuming', startedAt, origin } } })),
   markFailed: (taskId, message) => set((state) => ({ byTaskId: { ...state.byTaskId, [taskId]: { phase: 'failed', message } } })),
   clear: (taskId) =>
     set((state) => {
