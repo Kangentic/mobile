@@ -3457,7 +3457,8 @@ All tests passed with each of these broken:
   `scrollToEnd` reads the content view's height when it runs (`ReactScrollViewManager.kt`), so it
   scrolled to the old bottom and no later change came to correct it. `useFeedEndAnchor` scrolls
   again on the next frame unless the reader has dragged by then, and the same shelf then opened on
-  Approve. Not measured on a release build, and whether iOS does it is not known.
+  Approve, on the dev client. That the next frame is late enough is inferred from that run, not
+  read from source. Not measured on a release build, and whether iOS does it is not known.
 
 **Known limit, kept on purpose.** The band is only measured before the first reveal. A window that
 lands later re-anchors at the resting distance, so the first drag there can still snap. That covers

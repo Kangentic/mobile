@@ -318,11 +318,10 @@ describe('ConversationTab', () => {
 });
 
 /**
- * The 7-inch store shelf opened a session 147 points short of its end, with the
- * permission card's Approve and Deny under the composer, every run. A
- * content-size change reaches JS before the taller content is mounted, and
- * Android runs the scroll command ahead of that mount, so the immediate
- * re-anchor scrolls to the old bottom. The anchor scrolls once more on the next
+ * The 7-inch store shelf opened a session short of its end, with the permission
+ * card's Approve and Deny under the composer (the measurement is in the MOBILE-F
+ * section of docs/developer-guide.md). The immediate re-anchor can run before
+ * the taller content is mounted, so the anchor scrolls once more on the next
  * frame, after the mount, unless the reader has dragged by then.
  *
  * Mutations that redden these: drop the deferred `scrollFeedToEnd` from
@@ -371,6 +370,32 @@ describe('ConversationTab - the end anchor lands after the mount', () => {
     });
 
     expect(mockNativeScrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Mutation that reddens this: make `jumpToLatest` in ConversationTab.tsx call
+   * `scrollFeedToEnd(listRef.current)` directly (imported from
+   * '@/components/conversation/scrollFeedToEnd') instead of `anchorToEnd()`.
+   */
+  it('scrolls again on the next frame after Jump to latest', async () => {
+    await settleRender();
+
+    await fireEvent.scroll(screen.getByTestId('conversation-list'), {
+      nativeEvent: {
+        contentOffset: { x: 0, y: 0 },
+        contentSize: { width: 400, height: 12_000 },
+        layoutMeasurement: { width: 400, height: 800 },
+      },
+    });
+    mockNativeScrollToEnd.mockClear();
+    await fireEvent.press(screen.getByTestId('jump-to-latest'));
+    expect(mockNativeScrollToEnd).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      jest.advanceTimersByTime(32);
+    });
+    expect(mockNativeScrollToEnd).toHaveBeenCalledTimes(2);
+    expect(mockNativeScrollToEnd).toHaveBeenLastCalledWith({ animated: false });
   });
 });
 

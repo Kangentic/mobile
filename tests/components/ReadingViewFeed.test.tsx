@@ -200,6 +200,80 @@ describe('ReadingViewFeed end anchor after the mount', () => {
 
     expect(mockNativeScrollToEnd).toHaveBeenCalledTimes(1);
   });
+
+  /**
+   * Mutation that reddens this: delete `if (pendingFrameRef.current !== null)
+   * cancelAnimationFrame(pendingFrameRef.current);` from the callback
+   * `useFeedEndAnchor` returns. Two frames' worth of calls then each schedule
+   * their own deferred scroll, so 4 native calls land instead of 3.
+   */
+  it('coalesces two anchors inside one frame into one deferred scroll', async () => {
+    await act(() => {
+      mockCapturedProps.current.onContentSizeChange?.();
+      mockCapturedProps.current.onContentSizeChange?.();
+    });
+    expect(mockNativeScrollToEnd).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      jest.advanceTimersByTime(32);
+    });
+    expect(mockNativeScrollToEnd).toHaveBeenCalledTimes(3);
+  });
+
+  /**
+   * The mock's ref goes null on unmount, so a leaked frame's scroll would be a
+   * no-op and the native call count alone cannot see it. Assert the mechanism:
+   * the pending frame's id is cancelled.
+   *
+   * Mutation that reddens this: delete the cleanup `useEffect` in
+   * `useFeedEndAnchor`. The pending frame then survives the unmount.
+   */
+  it('cancels the pending frame when the feed unmounts', async () => {
+    const requestSpy = jest.spyOn(globalThis, 'requestAnimationFrame');
+    const cancelSpy = jest.spyOn(globalThis, 'cancelAnimationFrame');
+    await act(() => {
+      mockCapturedProps.current.onContentSizeChange?.();
+    });
+    expect(requestSpy).toHaveBeenCalledTimes(1);
+    const pendingFrameId = requestSpy.mock.results[0]?.value as number;
+    mockNativeScrollToEnd.mockClear();
+    cancelSpy.mockClear();
+
+    await act(() => {
+      screen.unmount();
+    });
+    expect(cancelSpy).toHaveBeenCalledWith(pendingFrameId);
+
+    await act(async () => {
+      jest.advanceTimersByTime(32);
+    });
+    expect(mockNativeScrollToEnd).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Mutation that reddens this: make `jumpToLatest` in ReadingViewFeed.tsx call
+   * `scrollFeedToEnd(listRef.current)` directly (imported from
+   * './scrollFeedToEnd') instead of `anchorToEnd()`.
+   */
+  it('scrolls again on the next frame after Jump to latest', async () => {
+    await act(() => {
+      mockCapturedProps.current.onScroll?.({
+        nativeEvent: {
+          contentOffset: { x: 0, y: 0 },
+          contentSize: { width: 400, height: 30000 },
+          layoutMeasurement: { width: 400, height: 800 },
+        },
+      });
+    });
+    await fireEvent.press(screen.getByTestId('reading-view-jump-to-latest'));
+    expect(mockNativeScrollToEnd).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      jest.advanceTimersByTime(32);
+    });
+    expect(mockNativeScrollToEnd).toHaveBeenCalledTimes(2);
+    expect(mockNativeScrollToEnd).toHaveBeenLastCalledWith({ animated: false });
+  });
 });
 
 describe('ReadingViewFeed list data identity', () => {
