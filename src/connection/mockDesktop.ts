@@ -2564,7 +2564,7 @@ export function initialTasks2(): BoardTaskWire[] {
         description: seed.description,
         swimlane_id: seed.columnId,
         position: 10 + seedIndex,
-        automations_disabled: seed.held,
+        automations_disabled: false,
         created_at: nowIso,
         updated_at: nowIso,
       }),
@@ -2574,11 +2574,13 @@ export function initialTasks2(): BoardTaskWire[] {
 
 /**
  * checkout-api's workflows (protocol 0.21.0), one per state the phone draws
- * differently: one RUNNING (a locked card, a card in a human gate, cards
- * blocked by one and by two tasks, the first of them held by its own
- * automations switch (protocol 0.25.0), a queued one, and a finished one), one
- * PAUSED, and one not started (a draft, which has no board rows at all, so it
- * is reached only through `list_workflows` and `get_workflow`).
+ * differently: one RUNNING (a card in motion, so locked; a stopped card, which
+ * a hand may take to any column but To Do; cards blocked by one and by two
+ * tasks; a queued one; and a finished one), one PAUSED, and one not started (a
+ * draft, which has no board rows at all, so it is reached only through
+ * `list_workflows` and `get_workflow`). No workflow card is held: this is a
+ * v0.55.0 desktop, whose migration cleared every hold on a workflow task
+ * outside Done and which refuses a new one (see `update_task`).
  */
 interface MockWorkflowDefinition {
   id: string;
@@ -2603,10 +2605,14 @@ interface MockWorkflowTaskSeed {
   route: string[];
   /** The tasks it waits for, finished ones included, by number. */
   waitsFor: string[];
-  /** A column no agent judges, and the one column a hand may move it on to from there. */
-  humanGate: { columnId: string; targetColumnId: string } | null;
-  /** Starts with its own automations paused (protocol 0.25.0): held out of its workflow while the rest runs. */
-  held: boolean;
+  /**
+   * Its agent has finished and nothing is left that could move it, the
+   * desktop's `isWorkflowTaskStopped`: while the workflow runs, a hand may take
+   * it to any column but To Do. False is a card in motion, so locked. The mock
+   * runs no agent for these sessionless cards, so this stands in for one. Never
+   * true in To Do or Done, which `mockWorkflowWire` enforces as the desktop does.
+   */
+  stopped: boolean;
 }
 
 export const MOCK_WORKFLOW_TASK_SEEDS: readonly MockWorkflowTaskSeed[] = [
@@ -2619,8 +2625,7 @@ export const MOCK_WORKFLOW_TASK_SEEDS: readonly MockWorkflowTaskSeed[] = [
     workflowId: MOCK_WORKFLOW_HARDENING.id,
     route: ['lane2-executing', 'lane2-code-review', 'lane2-merge'],
     waitsFor: ['#5'],
-    humanGate: null,
-    held: false,
+    stopped: false,
   },
   {
     taskId: 'mock-task-wf-refunds',
@@ -2631,8 +2636,9 @@ export const MOCK_WORKFLOW_TASK_SEEDS: readonly MockWorkflowTaskSeed[] = [
     workflowId: MOCK_WORKFLOW_HARDENING.id,
     route: ['lane2-executing', 'lane2-testing', 'lane2-merge'],
     waitsFor: ['#5'],
-    humanGate: { columnId: 'lane2-testing', targetColumnId: 'lane2-merge' },
-    held: false,
+    // The stopped card: its agent finished in Testing, so the row carries no
+    // lock and names Merge, the next column on its route.
+    stopped: true,
   },
   {
     taskId: 'mock-task-wf-soak',
@@ -2643,10 +2649,7 @@ export const MOCK_WORKFLOW_TASK_SEEDS: readonly MockWorkflowTaskSeed[] = [
     workflowId: MOCK_WORKFLOW_HARDENING.id,
     route: ['lane2-executing', 'lane2-code-review', 'lane2-merge'],
     waitsFor: ['#6'],
-    humanGate: null,
-    // The held workflow card: both strips, its blocker still named in the
-    // footer, and Resume automations plus an open Move in its sheet.
-    held: true,
+    stopped: false,
   },
   {
     taskId: 'mock-task-wf-runbook',
@@ -2657,8 +2660,7 @@ export const MOCK_WORKFLOW_TASK_SEEDS: readonly MockWorkflowTaskSeed[] = [
     workflowId: MOCK_WORKFLOW_HARDENING.id,
     route: ['lane2-planning', 'lane2-executing'],
     waitsFor: ['#6', '#7'],
-    humanGate: null,
-    held: false,
+    stopped: false,
   },
   {
     taskId: 'mock-task-wf-keys',
@@ -2669,8 +2671,7 @@ export const MOCK_WORKFLOW_TASK_SEEDS: readonly MockWorkflowTaskSeed[] = [
     workflowId: MOCK_WORKFLOW_HARDENING.id,
     route: ['lane2-executing'],
     waitsFor: [],
-    humanGate: null,
-    held: false,
+    stopped: false,
   },
   {
     taskId: 'mock-task-wf-currency',
@@ -2681,8 +2682,7 @@ export const MOCK_WORKFLOW_TASK_SEEDS: readonly MockWorkflowTaskSeed[] = [
     workflowId: MOCK_WORKFLOW_PRICING.id,
     route: ['lane2-executing', 'lane2-code-review'],
     waitsFor: [],
-    humanGate: null,
-    held: false,
+    stopped: false,
   },
   {
     taskId: 'mock-task-wf-euro',
@@ -2693,10 +2693,27 @@ export const MOCK_WORKFLOW_TASK_SEEDS: readonly MockWorkflowTaskSeed[] = [
     workflowId: MOCK_WORKFLOW_PRICING.id,
     route: ['lane2-planning', 'lane2-executing'],
     waitsFor: [],
-    humanGate: null,
-    held: false,
+    stopped: false,
   },
 ];
+
+/**
+ * Where a checkout-api workflow card goes next, the desktop's `nextOnRoute`
+ * (src/shared/workflow-route.ts): the first route column after it on the
+ * board, else the Done column; from To Do, the route's first column; from
+ * Done, nowhere. Works from any column, on the route or not, so a card a hand
+ * moved off its route continues from where it landed.
+ */
+function mockNextOnRoute(route: readonly string[], currentColumnId: string): string | null {
+  const columns = [...mockColumns2()].sort((left, right) => left.position - right.position);
+  const doneColumnId = columns.find((column) => isDoneRole(column.role))?.id ?? null;
+  const currentColumn = columns.find((column) => column.id === currentColumnId) ?? null;
+  const routeColumns = columns.filter((column) => route.includes(column.id));
+  if (isTodoRole(currentColumn?.role ?? null)) return routeColumns[0]?.id ?? doneColumnId;
+  if (isDoneRole(currentColumn?.role ?? null)) return null;
+  const nextRouteColumn = currentColumn ? routeColumns.find((column) => column.position > currentColumn.position) : routeColumns[0];
+  return nextRouteColumn?.id ?? doneColumnId;
+}
 
 /** Checkout hardening's first task, already finished: it is in no board projection, so only the workflow's own read names it. */
 const MOCK_WORKFLOW_DONE_MEMBER = { key: '#5', displayId: 5, title: 'Add an idempotency key to charges', workflowId: MOCK_WORKFLOW_HARDENING.id };
@@ -4653,25 +4670,31 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
     return task !== undefined && (task.archived_at !== null || mockColumnRoleOf(task, MOCK_PROJECT_2.id) === 'done');
   }
 
-  /**
-   * A row's `workflow`, as the desktop's workflow-wire.ts builds it: the lock
-   * sentence only while the workflow runs and the card is neither held nor in
-   * a human gate, and the gate's target only while it sits in that gate and is
-   * not held. A held card (its own automations paused, protocol 0.25.0) moves
-   * by hand, so it gets neither, as the desktop's `humanGateExit` and
-   * `workflowWireFacts` give it none. Every row says this desktop honours the
-   * hold (`automations_pausable`).
-   */
-  function mockWorkflowWire(task: BoardTaskWire): BoardTaskWorkflowWire | null {
+  /** The workflow `task` belongs to, its seed, and that workflow's current state; null for a task in none. */
+  function mockWorkflowOf(task: BoardTaskWire): { seed: MockWorkflowTaskSeed; definition: MockWorkflowDefinition; state: string } | null {
     const seed = MOCK_WORKFLOW_TASK_SEEDS.find((candidate) => candidate.taskId === task.id);
     const definition = seed ? mockWorkflowDefinition(seed.workflowId) : null;
     if (!seed || !definition) return null;
-    const state = workflowStates.get(definition.id) ?? definition.initialState;
-    const held = task.automations_disabled === true;
-    const gateTargetId =
-      state === 'running' && !held && seed.humanGate !== null && task.swimlane_id === seed.humanGate.columnId
-        ? seed.humanGate.targetColumnId
-        : null;
+    return { seed, definition, state: workflowStates.get(definition.id) ?? definition.initialState };
+  }
+
+  /**
+   * A row's `workflow`, as the v0.55.0 desktop's workflow-wire.ts builds it:
+   * the lock sentence while the workflow runs and the card is in motion, and
+   * for a stopped card no lock and the next column on its route, the move a
+   * person is most likely waiting to make (a hand may take it to any column
+   * but To Do). A card in To Do or Done is never stopped, as the desktop's
+   * `isWorkflowTaskStopped` says. A running or paused workflow's task cannot
+   * pause its automations, which `automations_pausable` says; the phone reads
+   * that `false` as the desktop that moves stopped cards (workflowMove.ts).
+   */
+  function mockWorkflowWire(task: BoardTaskWire): BoardTaskWorkflowWire | null {
+    const membership = mockWorkflowOf(task);
+    if (!membership) return null;
+    const { seed, definition, state } = membership;
+    const columnRole = mockColumnRoleOf(task, MOCK_PROJECT_2.id);
+    const stopped = state === 'running' && seed.stopped && !isTodoRole(columnRole) && !isDoneRole(columnRole);
+    const gateTargetId = stopped ? mockNextOnRoute(seed.route, task.swimlane_id) : null;
     return {
       id: definition.id,
       title: definition.title,
@@ -4680,10 +4703,28 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       color_slot: definition.colorSlot,
       route: seed.route,
       waiting_for: seed.waitsFor.filter((key) => !workflowTaskDone(key)),
-      lock_reason: state === 'running' && !held && gateTargetId === null ? `#${task.display_id} is locked while ${definition.title} runs.` : null,
+      lock_reason: state === 'running' && !stopped ? `#${task.display_id} is locked while ${definition.title} runs.` : null,
       gate_target_id: gateTargetId,
-      automations_pausable: true,
+      automations_pausable: state !== 'running' && state !== 'paused',
     };
+  }
+
+  /**
+   * Why `update_task` refuses to pause this task's automations, in the words
+   * the desktop's handleUpdateTask sends (`taskHoldRefusal` plus its "The task
+   * was not updated."), or null when it may: a running or paused workflow's
+   * task cannot pause them; to stop work, pause the workflow.
+   */
+  function mockTaskHoldRefusal(task: BoardTaskWire): string | null {
+    const membership = mockWorkflowOf(task);
+    if (!membership) return null;
+    const { definition, state } = membership;
+    if (state !== 'running' && state !== 'paused') return null;
+    return (
+      `#${task.display_id} is in ${definition.title}, so its automations cannot be paused. ` +
+      'To review its plan, set planApproval to manual. To wait on something outside, end a turn on the "Needs owner:" line. ' +
+      'If it must never start on its own, leave it out of the workflow. To stop work, pause the workflow. The task was not updated.'
+    );
   }
 
   /** `list_workflows`: a project's unfinished workflows. Only checkout-api has any, so storefront-web's Board shows no Workflows button. */
@@ -5351,15 +5392,20 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
           const params = (payload.params ?? {}) as { taskId?: string; title?: string; description?: string; automationsDisabled?: unknown };
           // The automations switch (protocol 0.22.0), checked the way the
           // desktop's handleUpdateTask checks it, in its words, and before
-          // anything is written: a truthy string must not pause a task. A
-          // workflow task takes it too since protocol 0.25.0 (kangentic #923),
-          // where it holds that task out of its workflow (see mockWorkflowWire).
+          // anything is written: a truthy string must not pause a task. Then,
+          // once the task is found, a running or paused workflow's task refuses
+          // a pause (v0.55.0, 7aff391f1, `taskHoldRefusal`); a resume is always
+          // taken, so a card left held has a way back.
           const automationsDisabled = params.automationsDisabled;
           if (automationsDisabled !== undefined && automationsDisabled !== null && typeof automationsDisabled !== 'boolean') {
             return failWith(request, 'automationsDisabled must be true or false.');
           }
           const located = locateTask(params.taskId);
           if (!located) return failWith(request, `No such task: ${params.taskId}`);
+          if (automationsDisabled === true) {
+            const holdRefusal = mockTaskHoldRefusal(located.task);
+            if (holdRefusal !== null) return failWith(request, holdRefusal);
+          }
           if (typeof params.title === 'string') located.task.title = params.title;
           if (typeof params.description === 'string') located.task.description = params.description;
           if (typeof automationsDisabled === 'boolean') located.task.automations_disabled = automationsDisabled;

@@ -10,11 +10,38 @@ export interface WorkflowMoveCheck {
   toRole: string | null;
   /**
    * The task's own automations are paused (`automations_disabled` is true),
-   * the desktop's `taskHeld`. Not gated on `automations_pausable`: a desktop
-   * older than that field clears the switch when a task joins a workflow and
-   * refuses to set it on one, so it never sends a held workflow row.
+   * the desktop's old `taskHeld`. Read only for a desktop before v0.55.0
+   * (see `movesStoppedCards`): a current one has no hold in its lock, refuses
+   * to set one on a running or paused workflow's task, and cleared the old
+   * ones. Not gated on `automations_pausable`: a desktop older than that field
+   * clears the switch when a task joins a workflow and refuses to set it on
+   * one, so it never sends a held workflow row.
    */
   held: boolean;
+}
+
+/**
+ * Whether this row comes from a desktop that lets a hand take a STOPPED card
+ * of a running workflow to any column but To Do (kangentic v0.55.0, ec403ad81
+ * "a stopped card is the owner's to move"). There `lock_reason` alone says
+ * whether the card is in motion: null means stopped, and `gate_target_id`
+ * only names the likeliest next column.
+ *
+ * No protocol field marks that desktop, so this reads the one that changed
+ * with it. The same release made a running or paused workflow's task refuse
+ * a hold (7aff391f1), and its rows say so with `automations_pausable: false`.
+ * Every older desktop sends `true` on every workflow row (v0.51.0 to v0.54.0,
+ * protocol 0.25.0 to 0.27.0) or omits the field (before 0.25.0), and there a
+ * null lock on a running card meant held or in a human gate, which opens only
+ * the gate's target. Read from the desktop's tags and its workflow-wire.ts at
+ * v0.54.0, not measured against a live older desktop.
+ *
+ * Decision (task #143): the phone keeps the older rule for an older desktop
+ * rather than reading a null lock as "any column" everywhere, as the protocol
+ * doc does, because that desktop refuses those columns itself.
+ */
+function movesStoppedCards(workflow: BoardTaskWorkflowWire): boolean {
+  return workflow.automations_pausable === false;
 }
 
 /**
@@ -28,17 +55,20 @@ export interface WorkflowMoveCheck {
  * - A draft or finished workflow's task may go anywhere, To Do included.
  * - No other workflow task moves into To Do: that move ends its session and
  *   deletes its worktree and branch.
- * - A paused workflow's task moves by hand to any other column, and so does a
- *   held one (its own automations paused, kangentic #923) while the rest of
- *   its workflow runs: the person working it is the one who moves it on. A
- *   held card is not limited to a human gate's target either.
- * - A running workflow's task moves only by the workflow, except out of a
- *   human gate into the next column on its route (`gate_target_id`), which is
- *   how a person reports that step done.
+ * - A paused workflow's task moves by hand to any other column.
+ * - A running workflow's task is locked while it is in motion and the
+ *   owner's once it stops (the desktop's "in motion, locked; stopped, the
+ *   owner's", 2026-11-05): a stopped card moves by hand to any column but To
+ *   Do. The desktop decides which, and says so with `lock_reason`, null on a
+ *   stopped card. A card in To Do or Done is never stopped.
+ * - On a desktop before v0.55.0 (`movesStoppedCards`), a running workflow's
+ *   card moves by hand only while held (its own automations paused, kangentic
+ *   #923), to any column but To Do, or out of a human gate into the gate's
+ *   target (`gate_target_id`). The hold is checked first, so a stale gate
+ *   left by an optimistic hold cannot pin it.
  *
- * `lock_reason` is not consulted: it is set exactly when the workflow runs and
- * the card is neither held nor gated, which the state, the hold and the gate
- * already say.
+ * The stopped-card branch asks for the RAW state `running`, so a state this
+ * app does not know (read as running) never unlocks a card.
  */
 export function workflowAllowsMove(check: WorkflowMoveCheck): boolean {
   const { workflow } = check;
@@ -47,7 +77,10 @@ export function workflowAllowsMove(check: WorkflowMoveCheck): boolean {
   const state = normalizeWorkflowState(workflow.state);
   if (state === 'draft' || state === 'done') return true;
   if (isTodoRole(check.toRole)) return false;
-  if (state === 'paused' || check.held) return true;
+  if (state === 'paused') return true;
+  if (workflow.state === 'running' && movesStoppedCards(workflow)) return workflow.lock_reason === null;
+  // A desktop before v0.55.0: a null lock meant held or in a human gate.
+  if (check.held) return true;
   return workflow.gate_target_id !== null && workflow.gate_target_id === check.toColumnId;
 }
 

@@ -319,7 +319,7 @@ describe('MoveTaskScreen workflow tasks', () => {
    * false" on its selected state, before Move was even looked at; and the same
    * `return true` mutation as above opened the columns the gate refuses.
    */
-  it('opens only the gate target for a running workflow task at a human gate, already chosen', async () => {
+  it('opens only the gate target for a running workflow task at a human gate, already chosen, on a desktop before v0.55.0', async () => {
     seedWorkflowBoard({ state: 'running', gate_target_id: 'lane-review' });
     await renderMoveTaskScreen();
 
@@ -341,6 +341,42 @@ describe('MoveTaskScreen workflow tasks', () => {
       targetSwimlaneId: 'lane-review',
       targetPosition: 0,
     });
+  });
+
+  /**
+   * Desktop v0.55.0 (kangentic ec403ad81): a stopped card of a running
+   * workflow is the owner's to move, to any column but To Do. That desktop says
+   * a card stopped with a null lock, names the next column on its route in
+   * `gate_target_id`, and marks itself with `automations_pausable: false`.
+   * Mutation seen failing: deleting the stopped-card branch in
+   * `workflowAllowsMove` left Done refused ("Expected: false, Received: true"
+   * on its disabled state).
+   */
+  it('opens every column but To Do for a stopped card on a v0.55.0 desktop, its next column chosen', async () => {
+    seedWorkflowBoard({ state: 'running', lock_reason: null, gate_target_id: 'lane-review', automations_pausable: false });
+    await renderMoveTaskScreen();
+
+    expect(rowDisabled('lane-todo')).toBe(true);
+    expect(rowDisabled('lane-review')).toBe(false);
+    expect(rowDisabled('lane-done')).toBe(false);
+    // The next column on its route is chosen, so the likeliest move is one press.
+    expect(rowSelected('lane-review')).toBe(true);
+    expect(screen.getByTestId('move-confirm').props.accessibilityState.disabled).toBe(false);
+
+    await act(async () => {
+      await fireEvent.press(screen.getByTestId('move-target-lane-done'));
+    });
+    expect(rowSelected('lane-done')).toBe(true);
+  });
+
+  it('refuses every column for a card in motion on a v0.55.0 desktop', async () => {
+    seedWorkflowBoard({ state: 'running', lock_reason: WORKFLOW_LOCK_REASON, gate_target_id: null, automations_pausable: false });
+    await renderMoveTaskScreen();
+
+    for (const columnId of ['lane-todo', 'lane-doing', 'lane-review', 'lane-done']) {
+      expect(rowDisabled(columnId)).toBe(true);
+    }
+    expect(screen.getByTestId('move-confirm').props.accessibilityState.disabled).toBe(true);
   });
 
   /**

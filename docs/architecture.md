@@ -592,7 +592,10 @@ resumes them. Planning, starting and deleting a workflow stay on the desktop.
 
 - **What the board rows say.** `BoardTaskWire.workflow` names the workflow (id, title, home
   project, state, color slot), the task's route, the unfinished tasks it waits for, the desktop's
-  lock sentence while only the workflow may move it, and a human gate's one open column. The
+  lock sentence while only the workflow may move it, and `gate_target_id`. On a desktop from
+  v0.55.0 the lock means the card is in motion (its agent working or at a prompt, a turn-end pass
+  or a message under way, or starting), and `gate_target_id` names a stopped card's next column on
+  its route. Before v0.55.0 it named a human gate's one open column. The
   rules over those fields are ported in `src/workflow/` and pinned to the desktop's own sources:
   `workflowAllowsMove` is `workflow-lock.ts` for its `mobile` origin, `workflowWaitingFooter` is
   `workflow-waiting.ts`, and an unknown state reads as running, so a state a newer desktop adds
@@ -602,23 +605,32 @@ resumes them. Planning, starting and deleting a workflow stay on the desktop.
   its name, and the task's route as the step track. A paused workflow draws no pause glyph, as
   the desktop's strips draw none since kangentic #877 (at 11 px it read as stray bars); the
   band's spoken label still says "paused". A workflow task waiting in To Do gets the desktop's
-  footer ("Blocked by #14...", "Queued...", "Paused"). A task held by its own automations switch
-  (see below) reads "Paused" there too, since the engine starts no held task; a blocker still
-  wins.
+  footer ("Blocked by #14...", "Queued...", "Paused"). On a desktop before v0.55.0, a task held
+  by its own automations switch (see below) reads "Paused" there too, since that engine starts no
+  held task; a blocker still wins.
 - **Moves.** The Move sheet lists every column and disables the ones a hand may not take the
   task to, with no reason, as the desktop's menu keeps them. A locked card's Move and every
   workflow task's Archive are disabled in the long-press sheet. Archive is disabled by the
   phone itself, because the desktop would accept a paused workflow's archive as a plain move
-  into Done. A held card (its own automations paused, protocol 0.25.0) moves by hand to any
-  column but To Do while the rest of its workflow runs, as a paused workflow's card does, and is
-  not limited to a human gate's target; the Move sheet chooses no column for it in advance.
+  into Done. A running workflow's card follows the desktop's "in motion, locked; stopped, the
+  owner's" (kangentic v0.55.0): a stopped card (no lock) moves by hand to any column but To Do,
+  as a paused workflow's card does, and the Move sheet chooses its next column for it in advance.
+  A card in To Do or Done is never stopped. No protocol field marks that desktop, so
+  `workflowMove.ts` reads the field that changed in the same release: its running and paused
+  rows send `automations_pausable: false`, where v0.51.0 to v0.54.0 send `true` on every
+  workflow row and older desktops omit it. On those older desktops the phone keeps their rule,
+  because they refuse anything more: a running card moves by hand only out of a human gate into
+  its target, or while held (its own automations paused, protocol 0.25.0) to any column but To
+  Do. A held card is not limited to a gate's target, and the Move sheet chooses no column for
+  it (task #143 recorded that decision).
 - **Pause and Resume** live only in the workflow view, and act at once, as the desktop's header
   does. They are the board-tool writes `pause_workflow` and `resume_workflow`, asked of the
   workflow's home project. Both answer with no data, which the bridge forwards as `{}`, so
   `verbClient.boardToolWrite` accepts a missing `result` for those two tools only. A paused
-  workflow's task offers View workflow where the desktop would refuse its Resume, except a held
-  task (its own automations paused): the workflow's Pause and Resume leave a held task's agent
-  alone (kangentic #923), so it keeps its own Resume session.
+  workflow's task offers View workflow where the desktop would refuse its Resume. The one
+  exception is a held task (its own automations paused) on a desktop before v0.55.0: there the
+  workflow's Pause and Resume leave a held task's agent alone (kangentic #923), so it keeps its
+  own Resume session. A current desktop sends no held workflow task (see Automations switch).
 - **Reading.** `list_workflows` (the Board header's Workflows button and sheet) and
   `get_workflow` (the workflow view) are board-tool reads asked of the workflow's HOME project,
   held in `useWorkflowStore` and re-read when a member task's row moves or changes state.
@@ -633,7 +645,10 @@ The desktop can hold one task's column automations: no On task enter, On agent t
 task exit row runs for it, and a move types no column message (protocol 0.22.0, task #119; the
 design was signed off on 2026-10-18). On a workflow task the same switch holds that one task out
 of its workflow while the rest runs: the workflow neither judges, moves nor starts it (protocol
-0.25.0, task #133, mirroring kangentic #923; the design was signed off on 2026-10-27). The phone
+0.25.0, task #133, mirroring kangentic #923; the design was signed off on 2026-10-27). Desktop
+v0.55.0 took that back (7aff391f1): a running or paused workflow's task refuses a pause, a
+resume is always taken, and a migration cleared every hold on a workflow task outside Done. Its
+rows say so with `automations_pausable: false`, so the phone leaves the row out there. The phone
 shows the switch and flips it. Editing a column's automations stays on the desktop
 (`set_automations` is not on the board-tool allowlist).
 
@@ -659,7 +674,8 @@ shows the switch and flips it. Editing a column's automations stays on the deskt
   (`Columns3Cog`), directly above View workflow, as the desktop's menu puts it before Open
   workflow. The row is LEFT OUT, not disabled, for a row whose field is not a boolean, and for a
   workflow task unless its `workflow.automations_pausable` is `true`: a desktop older than
-  protocol 0.25.0 refuses `true` for a workflow task. There is no Pause workflow row on a task:
+  protocol 0.25.0 refuses `true` for a workflow task, and one from v0.55.0 refuses it for a
+  running or paused workflow's task. There is no Pause workflow row on a task:
   the sheet acts on one task, and the workflow's own Pause stays in the workflow view.
 - **The write.** There is no verb: it is the existing `board-tool-write` `update_task` with the
   camelCase `automationsDisabled` param (the desktop ignores the row's snake_case spelling as an

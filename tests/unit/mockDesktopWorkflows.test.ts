@@ -6,7 +6,8 @@
  * reading the mock back:
  *
  *  - a board row carries `workflow`, with a lock sentence only while the
- *    workflow runs and the card is not in a human gate;
+ *    workflow runs and the card is in motion, and for a stopped card the next
+ *    column on its route instead;
  *  - `list_workflows` answers per project, and storefront-web (the project the
  *    store screenshots photograph) has none, so its Board grows no button;
  *  - `get_workflow` reads into the phone's view, a draft's tasks planned;
@@ -73,14 +74,70 @@ describe('mock desktop workflows', () => {
     expect(rowById(rows, 'mock-task-wf-retry').workflow?.title).toBe('Checkout hardening');
   });
 
-  it('locks a running card outside a gate and opens only the gate target inside one', async () => {
+  /**
+   * The v0.55.0 desktop's workflow-wire.ts: a card in motion carries the lock
+   * sentence and names no column; a stopped one carries no lock and names the
+   * next column on its route (`nextOnRoute`), and a hand may take it anywhere
+   * but To Do.
+   */
+  it('locks a running card in motion, and names the next column on its route for a stopped one', async () => {
     const rows = await boardRows(MOCK_PROJECT_2_ID);
     const locked = rowById(rows, 'mock-task-wf-retry').workflow;
     expect(locked?.lock_reason).toBe('#6 is locked while Checkout hardening runs.');
     expect(locked?.gate_target_id).toBeNull();
-    const gated = rowById(rows, 'mock-task-wf-refunds').workflow;
-    expect(gated?.lock_reason).toBeNull();
-    expect(gated?.gate_target_id).toBe('lane2-merge');
+    const stopped = rowById(rows, 'mock-task-wf-refunds').workflow;
+    expect(stopped?.lock_reason).toBeNull();
+    expect(stopped?.gate_target_id).toBe('lane2-merge');
+  });
+
+  /**
+   * The route carries on from wherever a hand put the card (`nextOnRoute` works
+   * from any column, on the route or not). Mutation seen failing:
+   * `mockNextOnRoute` stepping to the column after the card's ROUTE index
+   * instead of its board position fell through to Done from Code Review, which
+   * is off this card's route ("expected 'lane2-shipped' to be
+   * 'lane2-testing'").
+   */
+  it('names the next route column from wherever a hand moved the stopped card', async () => {
+    await controller.verbs.moveTask({ projectId: MOCK_PROJECT_2_ID, taskId: 'mock-task-wf-refunds', targetSwimlaneId: 'lane2-code-review', targetPosition: 0 });
+    expect(rowById(await boardRows(MOCK_PROJECT_2_ID), 'mock-task-wf-refunds').workflow?.gate_target_id).toBe('lane2-testing');
+
+    await controller.verbs.moveTask({ projectId: MOCK_PROJECT_2_ID, taskId: 'mock-task-wf-refunds', targetSwimlaneId: 'lane2-merge', targetPosition: 0 });
+    // Nothing on its route after Merge, so Done.
+    expect(rowById(await boardRows(MOCK_PROJECT_2_ID), 'mock-task-wf-refunds').workflow?.gate_target_id).toBe('lane2-shipped');
+  });
+
+  /**
+   * The desktop's `isWorkflowTaskStopped`: a card is never stopped in To Do, so
+   * there it carries the lock sentence again and names no column. The Done half
+   * is not observable over the wire: a move into Done archives the task and it
+   * leaves the board projection.
+   * Mutation seen failing: dropping `!isTodoRole(columnRole)` from `stopped`.
+   */
+  it('locks the stopped card again once a hand moves it into To Do', async () => {
+    await controller.verbs.moveTask({ projectId: MOCK_PROJECT_2_ID, taskId: 'mock-task-wf-refunds', targetSwimlaneId: 'lane2-backlog', targetPosition: 0 });
+    const workflow = rowById(await boardRows(MOCK_PROJECT_2_ID), 'mock-task-wf-refunds').workflow;
+    expect(workflow?.lock_reason).toBe('#7 is locked while Checkout hardening runs.');
+    expect(workflow?.gate_target_id).toBeNull();
+  });
+
+  /**
+   * Only a RUNNING workflow's stopped card names a next column: a paused
+   * workflow gates nothing, so the card reads neither lock nor gate.
+   * Mutation seen failing: dropping `state === 'running' &&` from `stopped`.
+   */
+  it('names no next column for a stopped card once its workflow is paused', async () => {
+    await controller.verbs.boardToolWrite('pause_workflow', { project: MOCK_PROJECT_2_ID, workflow: 'mock-workflow-hardening' });
+    const workflow = rowById(await boardRows(MOCK_PROJECT_2_ID), 'mock-task-wf-refunds').workflow;
+    expect(workflow?.state).toBe('paused');
+    expect(workflow?.gate_target_id).toBeNull();
+    expect(workflow?.lock_reason).toBeNull();
+  });
+
+  it('says on every running or paused workflow row that the task cannot pause its automations', async () => {
+    const workflowRows = (await boardRows(MOCK_PROJECT_2_ID)).filter((row) => (row.workflow ?? null) !== null);
+    expect(workflowRows.length).toBeGreaterThan(0);
+    expect(workflowRows.every((row) => row.workflow?.automations_pausable === false)).toBe(true);
   });
 
   it('names only the unfinished tasks a card waits for', async () => {

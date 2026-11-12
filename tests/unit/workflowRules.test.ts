@@ -120,19 +120,6 @@ describe('workflowAllowsMove (the desktop lock, mobile origin)', () => {
     expect(move(workflowFixture(), 'lane-doing')).toBe(true);
   });
 
-  it('refuses every other column for a running card outside a gate', () => {
-    expect(move(workflowFixture(), 'lane-review')).toBe(false);
-    expect(move(workflowFixture(), 'lane-done', 'done')).toBe(false);
-    expect(move(workflowFixture(), 'lane-todo', 'todo')).toBe(false);
-  });
-
-  it('opens only the gate target to a running card in a human gate', () => {
-    const gated = workflowFixture({ lock_reason: null, gate_target_id: 'lane-review' });
-    expect(move(gated, 'lane-review')).toBe(true);
-    expect(move(gated, 'lane-merge')).toBe(false);
-    expect(move(gated, 'lane-todo', 'todo')).toBe(false);
-  });
-
   it('lets a paused workflow card go anywhere but To Do', () => {
     const paused = workflowFixture({ state: 'paused', lock_reason: null });
     expect(move(paused, 'lane-review')).toBe(true);
@@ -149,29 +136,122 @@ describe('workflowAllowsMove (the desktop lock, mobile origin)', () => {
     expect(move(workflowFixture({ state: 'archived', lock_reason: null }), 'lane-review')).toBe(false);
   });
 
-  /**
-   * Kangentic #923 (protocol 0.25.0): a card whose own automations are paused
-   * moves by hand like a paused workflow's card while the rest of its workflow
-   * runs (the desktop's `byHand && taskHeld`). Mutation seen failing: dropping
-   * `|| check.held` from workflowAllowsMove left every one of these refused.
-   */
-  it('lets a held card of a running workflow go anywhere but To Do', () => {
-    const running = workflowFixture({ lock_reason: null });
-    expect(move(running, 'lane-review', null, true)).toBe(true);
-    expect(move(running, 'lane-done', 'done', true)).toBe(true);
-    expect(move(running, 'lane-todo', 'todo', true)).toBe(false);
-  });
-
-  // The hold is checked before the gate, as on the desktop, so a stale gate
-  // (the optimistic flip lands before the snapshot that drops it) cannot pin it.
-  it('does not limit a held card to a human gate it still carries', () => {
-    const gated = workflowFixture({ lock_reason: null, gate_target_id: 'lane-review' });
-    expect(move(gated, 'lane-merge', null, true)).toBe(true);
-    expect(move(gated, 'lane-merge')).toBe(false);
-  });
-
-  it('leaves a held card of a draft or finished workflow free, To Do included', () => {
+  it('lets a held card of a draft or finished workflow go free, To Do included', () => {
     expect(move(workflowFixture({ state: 'done', lock_reason: null }), 'lane-todo', 'todo', true)).toBe(true);
+  });
+
+  /**
+   * Desktop v0.55.0 (ec403ad81, workflow-lock.ts): in motion, locked; stopped,
+   * the owner's. The desktop says a running card has stopped with a null
+   * `lock_reason`, and `gate_target_id` only names the likeliest next column.
+   * Its rows say `automations_pausable: false` on a running workflow (7aff391f1,
+   * the same release), which is how the phone knows this desktop.
+   */
+  describe('on a desktop that moves stopped cards (v0.55.0)', () => {
+    const current = (overrides: Partial<BoardTaskWorkflowWire> = {}): BoardTaskWorkflowWire =>
+      workflowFixture({ automations_pausable: false, ...overrides });
+
+    /**
+     * Mutation seen failing: deleting the stopped-card branch in
+     * workflowAllowsMove, so only the named column opened: Merge and Done
+     * came back refused.
+     */
+    it('lets a stopped card go to any column but To Do, not just the one it names', () => {
+      const stopped = current({ lock_reason: null, gate_target_id: 'lane-review' });
+      expect(move(stopped, 'lane-review')).toBe(true);
+      expect(move(stopped, 'lane-merge')).toBe(true);
+      expect(move(stopped, 'lane-done', 'done')).toBe(true);
+      expect(move(stopped, 'lane-todo', 'todo')).toBe(false);
+    });
+
+    it('lets a stopped card move when the desktop names no next column', () => {
+      const stopped = current({ lock_reason: null, gate_target_id: null });
+      expect(move(stopped, 'lane-review')).toBe(true);
+      expect(move(stopped, 'lane-todo', 'todo')).toBe(false);
+    });
+
+    it('refuses every column for a card in motion, To Do included', () => {
+      const inMotion = current();
+      expect(move(inMotion, 'lane-review')).toBe(false);
+      expect(move(inMotion, 'lane-done', 'done')).toBe(false);
+      expect(move(inMotion, 'lane-todo', 'todo')).toBe(false);
+    });
+
+    /**
+     * This desktop has no hold in its lock, and a hold can outlive its
+     * migration in Done, where the card stays locked. Mutation seen failing:
+     * moving `if (check.held) return true` above the stopped-card branch
+     * opened the locked card.
+     */
+    it('does not let a leftover hold open a locked card', () => {
+      expect(move(current(), 'lane-review', null, true)).toBe(false);
+    });
+
+    /**
+     * Mutation seen failing: dropping the raw `workflow.state === 'running'`
+     * guard from the stopped-card branch, so a state this app does not know
+     * (normalized to running), with no lock, opened every column.
+     */
+    it('keeps a card of an unknown workflow state locked, even with no lock', () => {
+      expect(move(current({ state: 'archived', lock_reason: null }), 'lane-review')).toBe(false);
+    });
+
+    it('keeps the paused, draft and finished rules', () => {
+      expect(move(current({ state: 'paused', lock_reason: null }), 'lane-review')).toBe(true);
+      expect(move(current({ state: 'paused', lock_reason: null }), 'lane-todo', 'todo')).toBe(false);
+      expect(move(workflowFixture({ state: 'done', lock_reason: null, automations_pausable: true }), 'lane-todo', 'todo')).toBe(true);
+    });
+  });
+
+  /**
+   * A desktop before v0.55.0: `automations_pausable` is true on every workflow
+   * row (v0.51.0 to v0.54.0) or absent (before protocol 0.25.0), and a null
+   * lock on a running card meant held or in a human gate. Each case runs for
+   * both, since both refuse every column but the gate's target.
+   */
+  describe.each([
+    ['true (v0.51.0 to v0.54.0)', { automations_pausable: true }],
+    ['absent (before protocol 0.25.0)', {}],
+  ] as const)('on an older desktop, automations_pausable %s', (_label, pausable: Partial<BoardTaskWorkflowWire>) => {
+    const older = (overrides: Partial<BoardTaskWorkflowWire> = {}): BoardTaskWorkflowWire => workflowFixture({ ...pausable, ...overrides });
+
+    /**
+     * Mutation seen failing: reading the desktop as `automations_pausable !==
+     * true`, so the absent case took the stopped-card branch and opened Merge.
+     */
+    it('opens only the gate target to a running card in a human gate', () => {
+      const gated = older({ lock_reason: null, gate_target_id: 'lane-review' });
+      expect(move(gated, 'lane-review')).toBe(true);
+      expect(move(gated, 'lane-merge')).toBe(false);
+      expect(move(gated, 'lane-todo', 'todo')).toBe(false);
+    });
+
+    it('refuses every column for a locked running card', () => {
+      expect(move(older(), 'lane-review')).toBe(false);
+      expect(move(older(), 'lane-done', 'done')).toBe(false);
+      expect(move(older(), 'lane-todo', 'todo')).toBe(false);
+    });
+
+    /**
+     * Kangentic #923 (protocol 0.25.0): a card whose own automations are paused
+     * moves by hand like a paused workflow's card while the rest of its workflow
+     * runs (the desktop's `byHand && taskHeld` before v0.55.0). Mutation seen
+     * failing: dropping `if (check.held) return true` left every one refused.
+     */
+    it('lets a held card of a running workflow go anywhere but To Do', () => {
+      const running = older({ lock_reason: null });
+      expect(move(running, 'lane-review', null, true)).toBe(true);
+      expect(move(running, 'lane-done', 'done', true)).toBe(true);
+      expect(move(running, 'lane-todo', 'todo', true)).toBe(false);
+    });
+
+    // The hold is checked before the gate, as that desktop did, so a stale gate
+    // (the optimistic flip lands before the snapshot that drops it) cannot pin it.
+    it('does not limit a held card to a human gate it still carries', () => {
+      const gated = older({ lock_reason: null, gate_target_id: 'lane-review' });
+      expect(move(gated, 'lane-merge', null, true)).toBe(true);
+      expect(move(gated, 'lane-merge')).toBe(false);
+    });
   });
 });
 
@@ -191,8 +271,17 @@ describe('workflowMoveTargetIds (the columns the Move sheet and the long-press h
     expect(targetIds(null)).toEqual(['lane-done', 'lane-merge', 'lane-review', 'lane-todo']);
   });
 
-  it("offers a running card in a human gate only the gate's target", () => {
+  it("offers a running card in a human gate only the gate's target, on a desktop before v0.55.0", () => {
     expect(targetIds(workflowFixture({ lock_reason: null, gate_target_id: 'lane-review' }))).toEqual(['lane-review']);
+  });
+
+  it('offers a stopped card every other column but To Do, and a card in motion nothing, on a v0.55.0 desktop', () => {
+    expect(targetIds(workflowFixture({ lock_reason: null, gate_target_id: 'lane-review', automations_pausable: false }))).toEqual([
+      'lane-done',
+      'lane-merge',
+      'lane-review',
+    ]);
+    expect(targetIds(workflowFixture({ automations_pausable: false }))).toEqual([]);
   });
 
   it('offers a running card outside a gate nothing, so the hub can disable Move', () => {
