@@ -45,22 +45,19 @@ export function scrollFeedToEnd<Item>(list: FlashListRef<Item> | null): void {
  * The end anchor both chat feeds share: scroll to the end now, and once more on
  * the next frame unless the reader has taken over by then.
  *
- * The second scroll is the one that lands. On Android's new architecture a
+ * The second scroll is the one that lands when the content grew in the same
+ * commit. Read from React Native's source: on Android's new architecture a
  * content-size change reaches JS from the layout pass, before the taller content
- * is mounted, and the mounting layer runs a view command AHEAD of the mount items
- * it is dispatched with (`MountItemDispatcher.kt`). `scrollToEnd` reads the
- * content view's height when it executes (`ReactScrollViewManager.kt`), so the
+ * is mounted, the mounting layer runs a view command AHEAD of the mount items it
+ * is dispatched with (`MountItemDispatcher.kt`), and `scrollToEnd` reads the
+ * content view's height when it executes (`ReactScrollViewManager.kt`). So the
  * immediate call can scroll to the OLD bottom, and no later size change comes to
- * correct it. Measured on the 7-inch store shelf (1080x1920 at 280 dpi, dev
- * client, 2026-11-12): the feed scrolled to 1249 against content 2107, the
- * content grew to 2254 two milliseconds later, the immediate re-anchor moved
- * nothing, and the session opened 147 points short with the permission card's
- * buttons under the composer, every run. The mechanism is read from React
- * Native's source; that the next frame is late enough is what the same shelf
- * showed once this landed.
+ * correct it. That the next frame is late enough is inferred, and was seen on one
+ * store shelf on the dev client only. The measurement is in the MOBILE-F section
+ * of docs/developer-guide.md.
  *
  * The immediate call stays: it is right whenever the mount is already in, and
- * the feed is held invisible while it settles anyway.
+ * without it every growth would leave the feed a frame behind.
  */
 export function useFeedEndAnchor<Item>(
   listRef: RefObject<FlashListRef<Item> | null>,

@@ -60,7 +60,7 @@ const TAIL_FETCH_RETRY_DELAYS_MS = [2000, 5000, 10000];
 // transcript shorter than the viewport it makes FlashList v2 re-anchor to the
 // bottom in a layout loop ("Maximum update depth exceeded"). We pin to the
 // bottom manually on every content-size change instead (see
-// `onContentSizeChange` and `scrollFeedToEnd`), and
+// `onContentSizeChange` and `useFeedEndAnchor`), and
 // autoscrollToBottomThreshold keeps it pinned as the turn streams.
 const MAINTAIN_VISIBLE_CONTENT_POSITION = { autoscrollToBottomThreshold: 0.2 } as const;
 
