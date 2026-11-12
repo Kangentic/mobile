@@ -1685,6 +1685,7 @@ describe('the listing screenshots', () => {
       expect(libraryWrites(library.calls)).toEqual([]);
       const output = logged.join('\n');
       expect(output).toContain(`- Placement group ${SCREENSHOT_GROUP}, cap 10; 7 image(s) in the asset library.`);
+      expect(output).toContain('- Of the 7 committed frame(s), 7 are in the asset library (0 by content hash, 7 by file size).');
       expect(output).toContain('- en-US: 7 screenshot(s), in sync with the committed frames (matched by file size, so uploaded by hand).');
       expect(output).toContain(`- en-US: screenshot placements by group: ${SCREENSHOT_GROUP} 7; image details readable on 7 of 7.`);
       expect(output).toMatch(/- en-US: deprecated screenshot set of unknown type: 7 screenshot\(s\)/);
@@ -1713,7 +1714,18 @@ describe('the listing screenshots', () => {
       expect(report.screenshots?.localizations).toEqual([
         { locale: 'en-US', placementCount: 7, inSync: false, evidence: null },
       ]);
-      expect(logged.join('\n')).toContain('- Stage 1 replaces a listing that differs, and stage 2 refuses to submit while it still does.');
+      const output = logged.join('\n');
+      expect(output).toContain('- Stage 1 replaces a listing that differs, and stage 2 refuses to submit while it still does.');
+      // Both sides are listed, so a person can see which frames the listing
+      // holds. The first live read (2026-11-12) said only "differs", and it took
+      // a second run to learn the listing was still showing v1.1.0's frames.
+      expect(output).toContain(
+        `  - listing 1: ${oldFrames[0].fileName}, ${oldFrames[0].byteLength} bytes, reference name none, APPROVED.`
+      );
+      expect(output).toContain(
+        `  - committed 1: ${frames[0].fileName}, ${frames[0].byteLength} bytes, sha256 ${frames[0].sha256.slice(0, 16)}, md5 ${frames[0].md5}.`
+      );
+      expect(output).toContain('- Of the 7 committed frame(s), 0 are in the asset library (0 by content hash, 0 by file size).');
       expect(libraryWrites(library.calls)).toEqual([]);
     });
 
