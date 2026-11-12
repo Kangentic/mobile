@@ -2662,6 +2662,7 @@ describe('generated xterm.html', () => {
       'historyScroll.js',
       'webglRenderer.js',
       'cleanFeed.js',
+      'links.js',
       'lifecycle.js',
       'heightFit.js',
       'cellFit.js',
@@ -4112,11 +4113,14 @@ describe('generated xterm.html', () => {
       hostFitHeightPx: number | null;
       fitStrategy: string;
       longPressMenuGuard: boolean | string;
+      terminalLinksEnabled: boolean | string;
     };
     /** The fit strategy the font was chosen under, one entry per fittedFontPxForGrid call. */
     strategyWhenFontWasFitted: () => string[];
     /** Every document.body.classList.toggle call, in order. */
     bodyClassToggles: () => { name: string; force: unknown }[];
+    /** How many times an init cleared the link overlay (links.js clearTerminalLinks). */
+    clearTerminalLinksCallCount: () => number;
   } {
     const source = pageModule('lifecycle.js');
     const resetSource = source.slice(source.indexOf('function resetSessionViewState('), source.indexOf('function seedAndSettle('));
@@ -4132,9 +4136,12 @@ describe('generated xterm.html', () => {
       'setupCleanFeed',
       'fitStrategy',
       'longPressMenuGuard',
+      'terminalLinksEnabled',
+      'clearTerminalLinks',
     ]);
     const strategyWhenFontWasFitted: string[] = [];
     let readFitStrategy: () => string = () => '';
+    let clearTerminalLinksCallCount = 0;
     const build = new Function(
       'textureCappedFontPx',
       'fittedFontPxForGrid',
@@ -4144,6 +4151,7 @@ describe('generated xterm.html', () => {
       'fallbackRowCount',
       'document',
       'initialState',
+      'clearTerminalLinks',
       `var knownCols = initialState.knownCols;
        var knownRows = initialState.knownRows;
        var hostFitHeightPx = null;
@@ -4151,6 +4159,7 @@ describe('generated xterm.html', () => {
        var currentFontSizePx = 0;
        var fitStrategy = 'unset';
        var longPressMenuGuard = 'unset';
+       var terminalLinksEnabled = 'unset';
        var lastAppCursorMode = false;
        var lastReportedModes = null;
        var activeInitSeq = null;
@@ -4166,7 +4175,7 @@ describe('generated xterm.html', () => {
          state: function () {
            return { pinchOverrideFontPx: pinchOverrideFontPx, currentFontSizePx: currentFontSizePx,
                     hostFitHeightPx: hostFitHeightPx, fitStrategy: fitStrategy,
-                    longPressMenuGuard: longPressMenuGuard };
+                    longPressMenuGuard: longPressMenuGuard, terminalLinksEnabled: terminalLinksEnabled };
          },
        };`,
     ) as (...dependencies: unknown[]) => {
@@ -4177,6 +4186,7 @@ describe('generated xterm.html', () => {
         hostFitHeightPx: number | null;
         fitStrategy: string;
         longPressMenuGuard: boolean | string;
+        terminalLinksEnabled: boolean | string;
       };
     };
     const bodyClassToggles: { name: string; force: unknown }[] = [];
@@ -4202,12 +4212,16 @@ describe('generated xterm.html', () => {
       () => 48,
       { documentElement: fakeElement, body: fakeElement, getElementById: () => fakeElement },
       options,
+      () => {
+        clearTerminalLinksCallCount += 1;
+      },
     );
     readFitStrategy = () => built.state().fitStrategy;
     return {
       ...built,
       strategyWhenFontWasFitted: () => strategyWhenFontWasFitted,
       bodyClassToggles: () => bodyClassToggles,
+      clearTerminalLinksCallCount: () => clearTerminalLinksCallCount,
     };
   }
 
@@ -4348,6 +4362,30 @@ describe('generated xterm.html', () => {
 
     it('ships the CSS that takes the textarea out of hit testing under the guard class', () => {
       expect(generatedHtml).toContain('body.long-press-guard .xterm .xterm-helper-textarea { pointer-events: none; }');
+    });
+
+    /**
+     * Tappable links are on for every init unless the host sends an explicit
+     * false (the retention probe's control arm), the same reading as the
+     * bridge decoder, and every init clears the previous grid's underlines
+     * and any pressed link before the new grid's first render draws its own.
+     *
+     * Mutations that redden this: read the flag as `=== true`, or drop the
+     * clearTerminalLinks() call.
+     */
+    it.each([
+      [undefined, true],
+      [true, true],
+      [false, false],
+      ['false', true],
+      [0, true],
+    ])('adopts terminalLinks %s from an init as %s, and clears the old links', (sent, adopted) => {
+      const harness = buildResetSessionViewStateHarness({ knownCols: 210, knownRows: 48, pinchOverrideFontPx: null });
+
+      harness.reset({ cols: 210, rows: 48, terminalLinks: sent });
+
+      expect(harness.state().terminalLinksEnabled).toBe(adopted);
+      expect(harness.clearTerminalLinksCallCount()).toBe(1);
     });
   });
 
@@ -4594,6 +4632,9 @@ describe('generated xterm.html', () => {
     terminalOptions: () => Record<string, unknown>[];
     seedCalls: () => unknown[];
     autoFitCalls: () => number;
+    /** Fires every listener the page registered with terminal.onRender, as one xterm render would. */
+    render: () => void;
+    refreshTerminalLinksCalls: () => number;
   } {
     const source = pageModule('lifecycle.js');
     const createSource = source.slice(source.indexOf('function createTerminal('), source.indexOf('function softReinit('));
@@ -4608,8 +4649,10 @@ describe('generated xterm.html', () => {
       'knownCols',
       'knownRows',
       'TERMINAL_FONT_FAMILY',
+      'refreshTerminalLinks',
     ]);
     const terminalOptions: Record<string, unknown>[] = [];
+    const renderListeners: (() => void)[] = [];
     class FakeTerminal {
       textarea = null;
       constructor(options: Record<string, unknown>) {
@@ -4617,9 +4660,13 @@ describe('generated xterm.html', () => {
       }
       open = (): void => undefined;
       onData = (): void => undefined;
+      onRender = (listener: () => void): void => {
+        renderListeners.push(listener);
+      };
     }
     const seedCalls: unknown[] = [];
     let autoFitCalls = 0;
+    let refreshTerminalLinksCalls = 0;
     const build = new Function(
       'window',
       'document',
@@ -4635,6 +4682,7 @@ describe('generated xterm.html', () => {
       // lands here instead of throwing a ReferenceError.
       'autoFitFontToScreen',
       'chosen',
+      'refreshTerminalLinks',
       `var terminal = null;
        var cleanFeedEnabled = false;
        var manualPanUntil = 0;
@@ -4670,12 +4718,19 @@ describe('generated xterm.html', () => {
         autoFitCalls += 1;
       },
       chosen,
+      () => {
+        refreshTerminalLinksCalls += 1;
+      },
     );
     return {
       createTerminal: built.createTerminal,
       terminalOptions: () => terminalOptions,
       seedCalls: () => seedCalls,
       autoFitCalls: () => autoFitCalls,
+      render: () => {
+        for (const listener of renderListeners) listener();
+      },
+      refreshTerminalLinksCalls: () => refreshTerminalLinksCalls,
     };
   }
 
@@ -4741,6 +4796,42 @@ describe('generated xterm.html', () => {
 
       expect(harness.autoFitCalls()).toBe(0);
       expect(harness.terminalOptions()[0]).toMatchObject({ fontSize: 11 });
+    });
+
+    /**
+     * An OSC 8 hyperlink must do nothing. Without a linkHandler, xterm's
+     * default activation calls confirm() and then window.open on the URI
+     * inside the WebView, past the host's https check. The handler is called
+     * here the way xterm calls it, and must neither throw nor open anything
+     * (the harness window has no open, so a call to it would throw).
+     *
+     * Mutation that reddens this: drop the linkHandler option.
+     */
+    it('hands xterm an OSC 8 link handler that opens nothing', () => {
+      const harness = buildCreateTerminalHarness({ pinchOverrideFontPx: null, currentFontSizePx: 11, fittedLineHeight: 1 });
+
+      harness.createTerminal(initMessage);
+
+      const linkHandler = harness.terminalOptions()[0].linkHandler as { activate: (event: unknown, uri: string) => unknown };
+      expect(typeof linkHandler?.activate).toBe('function');
+      expect(linkHandler.activate({}, 'https://example.com/a')).toBeUndefined();
+    });
+
+    /**
+     * The link underlines are redrawn from xterm's render, which fires once a
+     * frame at most and after every write, scroll and resize.
+     *
+     * Mutation that reddens this: drop the onRender registration.
+     */
+    it('redraws the link underlines on every render', () => {
+      const harness = buildCreateTerminalHarness({ pinchOverrideFontPx: null, currentFontSizePx: 11, fittedLineHeight: 1 });
+      harness.createTerminal(initMessage);
+      expect(harness.refreshTerminalLinksCalls()).toBe(0);
+
+      harness.render();
+      harness.render();
+
+      expect(harness.refreshTerminalLinksCalls()).toBe(2);
     });
   });
 
@@ -5160,6 +5251,8 @@ describe('generated xterm.html', () => {
     createTerminalCalls: () => unknown[];
     terminalDisposeCallCount: () => number;
     stopHistoryFlingCallCount: () => number;
+    /** How many times a branch dropped a pressed link (links.js releaseLinkPress). */
+    releaseLinkPressCallCount: () => number;
     refitTriggers: () => unknown[];
     pinchActive: () => boolean;
     historyDragAnchorY: () => number | null;
@@ -5209,6 +5302,7 @@ describe('generated xterm.html', () => {
       'settledFit',
       'hostFitHeightPx',
       'webglAddon',
+      'releaseLinkPress',
     ]);
 
     const initCounts = { hard: 0, soft: 0 };
@@ -5218,6 +5312,7 @@ describe('generated xterm.html', () => {
     const refitTriggers: unknown[] = [];
     let terminalDisposeCallCount = 0;
     let stopHistoryFlingCallCount = 0;
+    let releaseLinkPressCallCount = 0;
 
     const initialTerminal =
       options.terminal === undefined
@@ -5247,6 +5342,7 @@ describe('generated xterm.html', () => {
       'scrollToLatest',
       'pinchMessageCounts',
       'fitStateArgument',
+      'releaseLinkPress',
       `var terminal = terminalArgument;
        var cleanFeedEnabled = cleanFeedEnabledArgument;
        var pinchActive = false;
@@ -5317,6 +5413,9 @@ describe('generated xterm.html', () => {
         hostFitHeightPx: options.hostFitHeightPx ?? null,
         webglAddon: options.webglAddon ?? null,
       },
+      () => {
+        releaseLinkPressCallCount += 1;
+      },
     );
 
     return {
@@ -5327,6 +5426,7 @@ describe('generated xterm.html', () => {
       createTerminalCalls: () => createTerminalCalls,
       terminalDisposeCallCount: () => terminalDisposeCallCount,
       stopHistoryFlingCallCount: () => stopHistoryFlingCallCount,
+      releaseLinkPressCallCount: () => releaseLinkPressCallCount,
       refitTriggers: () => refitTriggers,
       pinchActive: built.pinchActive,
       historyDragAnchorY: built.historyDragAnchorY,
@@ -5355,6 +5455,21 @@ describe('generated xterm.html', () => {
 
       expect(harness.fitState()).toMatchObject({ pinchOverrideFontPx: null, settledFit: null, knownCols: 120, knownRows: 30 });
       expect(harness.refitTriggers()).toEqual(['refit-msg']);
+    });
+
+    /**
+     * The fit button is the last-resort recovery, so it also drops a link the
+     * finger is tinting (links.js), or the tint would outlive the reset.
+     *
+     * Mutation that reddens this: drop releaseLinkPress() from the 'refit' branch.
+     */
+    it('drops a pressed link on the fit button', () => {
+      const harness = buildDispatchHarness({ terminal: {} });
+
+      harness.onHostMessage(JSON.stringify({ type: 'refit', cols: 120, rows: 30 }));
+
+      expect(harness.releaseLinkPressCallCount()).toBe(1);
+      expect(harness.tapDirty()).toBe(true);
     });
 
     it('keeps the current grid when the fit button arrives with an unknown one', () => {
@@ -5472,6 +5587,22 @@ describe('generated xterm.html', () => {
       expect(harness.historyDragAnchorY()).toBeNull();
       expect(harness.historyDragAxis()).toBeNull();
       expect(harness.tapDirty()).toBe(true);
+    });
+
+    /**
+     * A pinch is never a tap: a link the first finger landed on (tinted, see
+     * links.js) must not stay pressed through it, or the tint would hang on
+     * screen after the pinch. The RN layer owns the pinch, so its message is
+     * the only signal this page gets.
+     *
+     * Mutation that reddens this: drop releaseLinkPress() from the pinch branch.
+     */
+    it('drops a pressed link when a pinch starts', () => {
+      const harness = buildDispatchHarness();
+
+      harness.onHostMessage(JSON.stringify({ type: 'pinch', active: true }));
+
+      expect(harness.releaseLinkPressCallCount()).toBe(1);
     });
   });
 

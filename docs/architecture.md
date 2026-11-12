@@ -556,6 +556,80 @@ field (`DirectKeyInput`) is not the source: focusing it started no autofill sess
 (`dumpsys autofill`, both with and without a two-line minimum that AOSP's heuristic reads), so
 that field is unchanged.
 
+**A printed https link is underlined, and a tap opens it (task #144).** Agents print links a
+person has to open (a design review page, a pull request, a CI run), so the mirror finds them the
+way the desktop does since 44ea91522: in the SCREEN TEXT, never in an escape sequence. The desktop
+strips OSC 8 from the phone's feed and keeps the labels, so a link counts only when its URL is
+printed. `scripts/xterm-page/links.js` is a port of the desktop's `parse-links.ts` and
+`buffer-line-text.ts`, including the join of a URL a TUI wrapped across indented rows itself (the
+row runs to its edge, its last word holds a separator, and the next row's first word could not
+have fit in the gap), with three forced deviations: **https only** (the app's one opener rule,
+`src/lib/httpsUrl.ts`, which the Chat lens's links use too; an http link an agent prints is
+nearly always a dev server on the desktop's own localhost, which on the phone is the phone),
+**no file paths** (they name files on the other machine), and **no hover or modifier** (a tap on
+a link writes nothing to the PTY, because its touchend is cancelled, so a plain tap is free; a tap
+off a link is the plain tap it always was). One finder feeds two consumers, so
+what is underlined is exactly what a tap opens:
+
+- **The underline** is a hairline in the link text's own colour, drawn in a layer inside xterm's
+  screen element and sized in percent of the grid, so a pan, the vertical follow and a pinch move
+  it with the text and redraw nothing. It is rescanned from xterm's `onRender`, at most once a
+  frame (read from xterm's `RenderDebouncer`, which batches every refresh into one
+  `requestAnimationFrame`), and a frame whose links did not change touches no DOM. It sits under
+  the frame hold, so a swap never shows the old grid's underlines on the new one. Not
+  `registerDecoration`, which returns nothing while the alternate buffer is active.
+- **The tap** is the page's own clean-tap detection (`bootstrap.js`), not xterm's link provider,
+  which activates from compatibility mouse events that need a hover and arrive after the tap was
+  already reported. A finger landing within 12 px above or below a link, or one cell either side
+  (a row is about 13 px at the reference cell), tints it in the accent; a drag, a second finger,
+  a pinch or a cancel clears the tint and opens nothing. On a clean release the page posts
+  `open-link` INSTEAD of `tapped` and cancels the touchend, so no compatibility mouse event follows
+  it into xterm's mouse reporting or the container's focus click. Two links close together split
+  the space between them, nearest first.
+- **The host** (`TerminalPane`) opens the URL through `httpsUrlOrNull` and `Linking.openURL`, the
+  same path and the same dropped refusal as Chat's markdown links. That check is the boundary,
+  since the URL is agent-printed text; the page applies the same rule only so it underlines
+  nothing a tap would refuse. It runs ahead of the input gate: opening a link writes nothing, so
+  a Command Terminal whose agent is not classified yet still opens one.
+
+An OSC 8 link that does reach the page (an older desktop, or a seed) does nothing: the Terminal
+gets a no-op `linkHandler`, because xterm's default would `confirm()` and then `window.open` the
+URI inside the WebView, past the host's check and to a destination its label need not show.
+Checked 2026-11-11 on the mock rig (emulator, dev client): the underline lands under the https
+URL and not under an http one beside it, a tap on the row and a tap 10 px above it each sent a
+VIEW intent for exactly that URL, a horizontal drag starting on the link panned and opened
+nothing, and the pane's PTY write counter stayed at zero throughout.
+
+**What the scan costs, measured 2026-11-11** on a release build with the retention probe compiled
+in, on the demo-paired `kangentic_profile` AVD, all in ONE process. The terminal was the demo's
+active opencode session, whose TUI repaints every couple of seconds, with no link on screen. The
+probe's `no-terminal-links` arm turns the scan, the underline and the tap off together, and the
+arms alternated on, off, on, off, on, each a fresh terminal init after a 13 s settle, with gfxinfo
+reset and then 20 `top` samples over 40 s on the app AND the WebView renderer process (the page's
+JavaScript, and so the scan, runs in the renderer, never the app):
+
+| Arm | Renderer CPU | App CPU, median (range) | Frames / 40 s |
+|---|---|---|---|
+| links on | 0-1.5% | 100% (96.5-103) | 2268 |
+| links off | 0-1.5% | 86.75% (84-100) | 2273 |
+| links on | 0-2.5% | 102% (90-108) | 2244 |
+| links off | 0-2% | 92% (87.5-95) | 2273 |
+| links on | 0-2% | 92% (86-103) | 2265 |
+
+The renderer, where the scan runs, never left 0-2.5% in either arm. The app process carries the
+demo's own load (spinners, streaming). Its medians read on 100, 102 and 92 against off 86.75 and 92:
+the on arm sat higher in three of the four adjacent pairs and level in the fourth, and the two arms'
+ranges of medians touch at 92. Those gaps (0-15 points) are no larger than the wider windows' own
+ranges (16-18 points), so this run resolves no difference; it does not show that there is none.
+Inferred, not measured: the arm should not reach the app process at all, since the scan runs in the
+renderer, and read out of `renderLinkOverlay`, with no link on screen the overlay is never created.
+The frame counts (2244-2273) agree that the WebView drew the same frames. What this does
+NOT cover is a terminal streaming at full frame rate with links on screen, which the mock cannot
+produce. The page times every scan (`linkStats` on the dev `term` probe), and on a dev-client
+emulator warm scans read 0.2-0.7 ms, one a cold 16.8 ms, and one 251 ms at page start that did not
+repeat. That is a page-side clock on a dev client, so it bounds nothing; it is where to look first
+if a heavy stream ever reads hot.
+
 **An open waits visibly (`TerminalWaitOverlay`).** From opening a session until the desktop's
 answer is on screen, the pane shows the swap veil's wait cursor at the grid's origin instead of a
 bare black pane, which read as a broken phone while the desktop was slow (task #107; the

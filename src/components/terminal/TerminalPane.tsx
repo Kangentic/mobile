@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, Keyboard, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import { AppState, Keyboard, Linking, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import { Asset } from 'expo-asset';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -16,6 +16,7 @@ import { XTERM_BUILD_ID } from '@/terminal/xtermBuildId';
 import { traceConnection } from '@/devsupport/connectionTrace';
 import type { InspectTerminalHandle, InspectTerminalWriteStats } from '@/devsupport/inspectState';
 import { getRetentionProbeVariant } from '@/devsupport/retentionProbe';
+import { httpsUrlOrNull } from '@/lib/httpsUrl';
 import {
   getBufferedData,
   getTerminalDimensions,
@@ -667,6 +668,9 @@ export function TerminalPane({
         // The page cancels the long-press menu (the "Autofill" pill); the
         // probe's control arm leaves it to the WebView.
         longPressMenuGuard: getRetentionProbeVariant() !== 'autofillable-terminal-input',
+        // Underlined, tappable https links; the probe's control arm turns
+        // the page's scan off.
+        terminalLinks: getRetentionProbeVariant() !== 'no-terminal-links',
       });
       armBlankRecovery();
     },
@@ -1086,6 +1090,21 @@ export function TerminalPane({
         // input is held: there is nothing the keyboard may send.
         if (!inputEnabledRef.current) return;
         directKeyRef.current?.toggle();
+        return;
+      }
+      if (message.type === 'open-link') {
+        // A tap on a link the page found in the screen text. Ahead of the
+        // input gate on purpose: opening a link writes nothing to the PTY.
+        // The URL is agent-printed, so this https check is the boundary: a
+        // scheme allowlist, which is all it enforces (the page applies the
+        // same rule only so it underlines nothing a tap would refuse). The OS opener hands a github.com link to the GitHub
+        // app where installed, as Chat's links do. A refusal is dropped: the
+        // terminal has no error surface, and the tap simply does nothing.
+        const url = httpsUrlOrNull(message.url);
+        if (url === null) return;
+        void Linking.openURL(url).catch((error: unknown) => {
+          if (__DEV__) console.warn('[terminal] could not open link:', error);
+        });
         return;
       }
       // Input held (see `inputEnabled`): the keys go nowhere, and are not

@@ -62,6 +62,7 @@ const PAGE_MODULE_ORDER = [
   'historyScroll.js',
   'webglRenderer.js',
   'cleanFeed.js',
+  'links.js',
   'lifecycle.js',
   'heightFit.js',
   'cellFit.js',

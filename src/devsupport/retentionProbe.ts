@@ -35,7 +35,8 @@ export type RetentionProbeVariant =
   | 'composer-no-dictation'
   | 'measured-fit'
   | 'autofillable-terminal-input'
-  | 'description-commonmark';
+  | 'description-commonmark'
+  | 'no-terminal-links';
 
 export const RETENTION_PROBE_VARIANTS: {
   variant: RetentionProbeVariant;
@@ -122,6 +123,17 @@ export const RETENTION_PROBE_VARIANTS: {
     variant: 'description-commonmark',
     label: 'Description as CommonMark',
     description: 'No GitHub flavor on a completed task',
+  },
+  {
+    // The control arm of tappable terminal links (task #144,
+    // scripts/xterm-page/links.js): the page neither scans the screen for
+    // links on each render nor underlines them, and a tap is a plain tap.
+    // Read idle and streaming CPU with frames over the same window in each
+    // arm, and the page's linkStats (`term probe`). Takes effect from the next
+    // terminal init.
+    variant: 'no-terminal-links',
+    label: 'No terminal links',
+    description: 'No link scan, underline or tap',
   },
 ];
 
