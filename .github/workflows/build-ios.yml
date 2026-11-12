@@ -1741,8 +1741,9 @@ jobs:
       # it could never pick up a fix to the script. Instead the job stays green,
       # the summary below says the sync failed, and submit-app-review refuses to
       # submit while the listing differs from the committed frames, whoever
-      # approves it. The way out is store-listing.yml (which runs from main, so
-      # it does carry a fix) or a hand upload, then the second approval.
+      # approves it. The way out is store-listing.yml (it runs the script from
+      # the ref it is dispatched on, so dispatched on main it carries a merged
+      # fix) or a hand upload, then the second approval.
       #
       # The summary reads this step's `outcome`, never its `conclusion`: under
       # continue-on-error a failed step's conclusion is "success".

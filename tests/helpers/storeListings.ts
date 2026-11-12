@@ -205,6 +205,13 @@ export interface AssetLibrarySeed {
   processingReads?: number;
   /** File names whose processing ends FAILED. */
   failProcessing?: string[];
+  /** The finished state every uploaded image ends processing in, instead of PREPARE_FOR_SUBMISSION (for example REJECTED). */
+  processingEndsAs?: string;
+  /**
+   * The ordering request answers 201 but only takes effect after this many
+   * placement reads that follow it, as Apple may not apply it before answering.
+   */
+  orderingAppliesAfterReads?: number;
   /** File names whose part upload is refused by storage. */
   failUploadPart?: string[];
   /** The ordering request answers 201 but is not applied. */
@@ -313,6 +320,15 @@ export function createFakeAssetLibrary(seed: AssetLibrarySeed = {}) {
   const countIn = (localizationId: string, group: string) =>
     placements.filter((placement) => placement.localizationId === localizationId && placement.group === group).length;
 
+  let deferredOrdering: { current: FakePlacement[]; orderedIds: string[]; readsLeft: number } | null = null;
+
+  function applyOrdering(current: FakePlacement[], orderedIds: string[]) {
+    for (const placement of current) placements.splice(placements.indexOf(placement), 1);
+    for (const placementId of orderedIds) {
+      placements.push(current.find((placement) => placement.id === placementId) as FakePlacement);
+    }
+  }
+
   function route(method: string, apiPath: string, body?: unknown) {
     calls.push({ method, path: apiPath, body });
     const failure = (seed.failWith ?? []).find((candidate) => `${method} ${apiPath}`.startsWith(candidate.prefix));
@@ -333,6 +349,13 @@ export function createFakeAssetLibrary(seed: AssetLibrarySeed = {}) {
       return respond(200, seed.referenceData ?? appleReferenceData({ maxCount }));
     }
     if ((match = pathname.match(/^\/appStoreVersionLocalizations\/([^/]+)\/placements$/)) && method === 'GET') {
+      if (deferredOrdering) {
+        if (deferredOrdering.readsLeft > 0) deferredOrdering.readsLeft -= 1;
+        else {
+          applyOrdering(deferredOrdering.current, deferredOrdering.orderedIds);
+          deferredOrdering = null;
+        }
+      }
       const group = params.get('filter[placementGroup]');
       const selected = placements.filter(
         (placement) => placement.localizationId === match?.[1] && (group === null || placement.group === group)
@@ -388,7 +411,9 @@ export function createFakeAssetLibrary(seed: AssetLibrarySeed = {}) {
         if (image.state === 'UPLOAD_COMPLETE') {
           if (image.readsUntilProcessed > 0) image.readsUntilProcessed -= 1;
           else {
-            image.state = (seed.failProcessing ?? []).includes(image.fileName ?? '') ? 'FAILED' : 'PREPARE_FOR_SUBMISSION';
+            image.state = (seed.failProcessing ?? []).includes(image.fileName ?? '')
+              ? 'FAILED'
+              : (seed.processingEndsAs ?? 'PREPARE_FOR_SUBMISSION');
           }
         }
         return respond(200, { data: imageResource(image) });
@@ -450,11 +475,10 @@ export function createFakeAssetLibrary(seed: AssetLibrarySeed = {}) {
       if (current.length !== orderedIds.length || current.some((placement) => !orderedIds.includes(placement.id))) {
         return refuse(409, 'ENTITY_ERROR', 'the ordering does not name exactly the placements in the group');
       }
-      if (!seed.ignoreOrdering) {
-        for (const placement of current) placements.splice(placements.indexOf(placement), 1);
-        for (const placementId of orderedIds) {
-          placements.push(current.find((placement) => placement.id === placementId) as FakePlacement);
-        }
+      if (seed.orderingAppliesAfterReads !== undefined && !seed.ignoreOrdering) {
+        deferredOrdering = { current, orderedIds, readsLeft: seed.orderingAppliesAfterReads };
+      } else if (!seed.ignoreOrdering) {
+        applyOrdering(current, orderedIds);
       }
       return respond(201, { data: { type: 'appAssetLibraryPlacementOrderingRequests', id: 'ordering-1' } });
     }

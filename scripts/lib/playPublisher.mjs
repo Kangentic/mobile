@@ -106,6 +106,20 @@ export async function requestAccessToken(serviceAccount) {
 }
 
 /**
+ * What a 404 on opening an edit means. Every script that opens one says it the
+ * same way, because the fix is the same: the first upload is by hand.
+ *
+ * @param {string} packageName
+ * @returns {string}
+ */
+export function describeMissingPackage(packageName) {
+  return (
+    `Play has no record of ${packageName}. The very first release for a package must be uploaded by hand ` +
+    'through the Play Console UI before the Play Developer API will accept anything.'
+  );
+}
+
+/**
  * The real transport behind the injected `request`.
  *
  * `apiPath` is relative to the applications collection (`/<package>/edits...`).

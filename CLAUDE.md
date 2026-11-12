@@ -329,7 +329,8 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   checkPlayVersionCode.mjs), lib/appStoreScreenshots.mjs (App Store
                   #   screenshots through the App Asset Library; Apple deprecated
                   #   appScreenshotSets in API 4.5.x. WRITE PATH UNPROVEN until the
-                  #   first App Store release after 2026-11-12),
+                  #   first App Store release after 2026-11-12), lib/cliArguments.mjs
+                  #   (the strict `--flag value` parser the store scripts share),
                   #   waitForReleaseGate.mjs (read-only: polls a release run until a gate
                   #   waits or the run ends, so /release is woken once per gate),
                   #   build-review-pack.mjs (gathers the /code-review diff once into a

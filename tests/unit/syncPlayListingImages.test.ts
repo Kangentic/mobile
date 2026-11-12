@@ -448,6 +448,51 @@ describe('syncPlayListingImages: an edit pulled out from under the run', () => {
     expect(fake.commitCount()).toBe(0);
   });
 
+  it('starts again when the edit is invalidated at the commit itself', async () => {
+    // Another edit opened between the last write and the commit is the failure
+    // the script exists to survive. The commit answers 404 and so does the edit,
+    // so it is a lost edit and a fresh start, not a hard failure.
+    const shelves = makeShelves();
+    let pulled = false;
+    const fake = createFakePlay({
+      listing: listingOf(makeShelves(1)),
+      beforeCall: (call, edits) => {
+        if (!pulled && isCommit(call)) {
+          pulled = true;
+          edits.clear();
+        }
+      },
+    });
+    const { promise, logged } = run(fake, shelves);
+    const report = await promise;
+
+    expect(report.committed).toBe(true);
+    expect(fake.editCount()).toBe(2);
+    expect(fake.commitCount()).toBe(1);
+    for (const shelf of shelves) {
+      expect(hashesOn(fake.committedListing(), shelf.imageType)).toEqual(hashesOf(shelf.frames));
+    }
+    const lostIndex = logged.findIndex((line) => /invalidated while trying to commit the listing edit/.test(line));
+    expect(lostIndex).toBeGreaterThanOrEqual(0);
+    expect(logged[lostIndex]).toMatch(/Starting again with a fresh edit \(attempt 2 of 3\)/);
+  });
+
+  it('reports a commit refused with 409 as itself when the edit still exists, and does not start again', async () => {
+    // A 409 is as ambiguous as a 404. The edit is still there, so the commit
+    // itself was refused and a fresh edit would only be refused the same way.
+    const fake = createFakePlay({
+      failures: [{ when: (call) => isCommit(call), status: 409, message: 'Conflict.' }],
+    });
+    const { promise, logged } = run(fake, makeShelves());
+    await expect(promise).rejects.toThrow(/Could not commit the listing edit \(409\)/);
+
+    expect(fake.editCount()).toBe(1);
+    expect(fake.calls.filter(isCommit)).toHaveLength(1);
+    expect(fake.commitCount()).toBe(0);
+    expect(fake.committedListing()).toEqual({});
+    expect(logged.some((line) => /Starting again/.test(line))).toBe(false);
+  });
+
   it('starts again when an upload landed twice, so the listing never gets a duplicate frame', async () => {
     // A 503 whose request DID apply: the retry uploads the same frame again.
     // Read back by id, the shelf holds four images after three uploads.

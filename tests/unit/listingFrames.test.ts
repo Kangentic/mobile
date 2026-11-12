@@ -11,7 +11,7 @@
  * committed shelves, because what ships is those files.
  */
 import { createHash } from 'node:crypto';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -142,6 +142,51 @@ describe('the Play shelves', () => {
       expect(shelf.directory).toBe(captured.outputDirectory);
       expect({ width: shelf.width, height: shelf.height }).toEqual({ width: captured.width, height: captured.height });
     }
+  });
+});
+
+describe('readPlayShelves against a temporary repository root', () => {
+  /** A repository root holding every shelf, each frame at the size the shelf asks for unless overridden. */
+  function repositoryRootWith(sizeOverrides: Record<string, { width: number; height: number }> = {}): string {
+    const repositoryRoot = mkdtempSync(join(tmpdir(), 'listing-root-'));
+    for (const shelf of PLAY_LISTING_SHELVES) {
+      const shelfDirectory = join(repositoryRoot, shelf.directory);
+      mkdirSync(shelfDirectory, { recursive: true });
+      const size = sizeOverrides[shelf.name] ?? { width: shelf.width, height: shelf.height };
+      for (const shotName of SHOT_NAMES) {
+        writeFileSync(join(shelfDirectory, `${shotName}.png`), makePng({ ...size, payloadBytes: 8 }));
+      }
+    }
+    return repositoryRoot;
+  }
+
+  it('reads all three shelves with their image types and one frame per shot when every size is right', () => {
+    // The control for the refusal below: it proves the fixture is valid, so
+    // that refusal comes from the size and from nothing else.
+    const shelves = readPlayShelves(repositoryRootWith());
+    expect(shelves.map((shelf) => shelf.imageType)).toEqual(PLAY_LISTING_SHELVES.map((shelf) => shelf.imageType));
+    for (const shelf of shelves) expect(shelf.frames).toHaveLength(SHOT_NAMES.length);
+  });
+
+  it('refuses a shelf whose frames are another shelf\'s size, so they never reach the public listing', () => {
+    // The tablet frames committed into the phone directory. The per-shelf size
+    // readPlayShelves passes is the only guard against it; without it every
+    // frame is the same size as its neighbours and the shelf reads as fine.
+    // The phone and seven-inch shelves share a size, so the wrong size is taken
+    // from the first shelf that differs from the phone's (the ten-inch one).
+    const phoneShelf = PLAY_LISTING_SHELVES[0];
+    const otherSizedShelf = PLAY_LISTING_SHELVES.find(
+      (shelf) => shelf.width !== phoneShelf.width || shelf.height !== phoneShelf.height
+    );
+    if (!otherSizedShelf) throw new Error('every Play shelf has the same size, so there is no wrong size to commit');
+    const repositoryRoot = repositoryRootWith({
+      [phoneShelf.name]: { width: otherSizedShelf.width, height: otherSizedShelf.height },
+    });
+    expect(() => readPlayShelves(repositoryRoot)).toThrow(
+      new RegExp(
+        `${SHOT_NAMES[0]}\\.png is ${otherSizedShelf.width}x${otherSizedShelf.height}, expected ${phoneShelf.width}x${phoneShelf.height}`
+      )
+    );
   });
 });
 

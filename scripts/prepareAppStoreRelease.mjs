@@ -75,6 +75,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import { createAppStoreConnectToken } from './checkAppStoreBuild.mjs';
 import {
+  ASC_API_BASE,
+  describeApiErrors,
   describeScreenshotPlan,
   matchEvidence,
   planScreenshotSync,
@@ -85,10 +87,9 @@ import {
   syncScreenshots,
   uploadPartWithFetch,
 } from './lib/appStoreScreenshots.mjs';
+import { parseFlagPairs } from './lib/cliArguments.mjs';
 import { isEntrypoint } from './lib/is-entrypoint.mjs';
 import { readListingFrames } from './lib/listingFrames.mjs';
-
-const ASC_API_BASE = 'https://api.appstoreconnect.apple.com/v1';
 
 const FULL_RELEASE_TYPE = 'AFTER_APPROVAL';
 
@@ -165,11 +166,6 @@ const OPEN_REVIEW_SUBMISSION_STATES = ['READY_FOR_REVIEW', 'UNRESOLVED_ISSUES'];
 
 /** Review submission states that mean the submit landed. */
 const SUBMITTED_REVIEW_SUBMISSION_STATES = new Set(['WAITING_FOR_REVIEW', 'IN_REVIEW']);
-
-function describeApiErrors(body) {
-  if (!Array.isArray(body?.errors)) return JSON.stringify(body);
-  return body.errors.map((error) => `${error.title}: ${error.detail ?? ''}`.trim()).join('; ');
-}
 
 /**
  * Turns a failed call into a message that names the fix. A 403 is the one that
@@ -1048,7 +1044,7 @@ const LIVE_VERSION_STATES = new Set(['READY_FOR_DISTRIBUTION', 'READY_FOR_SALE']
  *
  * The live version's screenshot count is read before and after as a tripwire.
  * Placements belong to one version, so replacing the new version's must leave
- * the live version's alone, and library images are never deleted. But this is a
+ * the live version's alone, and no image a placement shows is deleted. But this is a
  * new Apple API, the two versions share images, and a listing emptied on the
  * store is the one mistake here that reaches users. So it is checked, not assumed.
  *
@@ -1169,8 +1165,9 @@ export async function syncAppStoreScreenshots({
       frames,
       log,
       sleep,
-      ...(pollAttempts === undefined ? {} : { pollAttempts }),
-      ...(pollIntervalMilliseconds === undefined ? {} : { pollIntervalMilliseconds }),
+      // Left undefined, each falls back to syncScreenshots' own default.
+      pollAttempts,
+      pollIntervalMilliseconds,
     });
     synced.push({ locale: comparison.locale, result });
     log(
@@ -1202,6 +1199,69 @@ export async function syncAppStoreScreenshots({
 }
 
 /**
+ * What else is on one localization's listing: its screenshot placements in
+ * every group, counted by group, and on how many the image details came back.
+ *
+ * @param {AppStoreConnectRequest} request
+ * @param {string} locale
+ * @param {string} localizationId
+ * @param {(line: string) => void} log
+ */
+async function logPlacementsByGroup(request, locale, localizationId, log) {
+  const everyGroup = await readScreenshotPlacements({ request, describeFailure, localizationId });
+  /** @type {Map<string, number>} */
+  const countByGroup = new Map();
+  for (const placement of everyGroup) {
+    const group = placement.group ?? 'unknown';
+    countByGroup.set(group, (countByGroup.get(group) ?? 0) + 1);
+  }
+  const readable = everyGroup.filter(
+    (placement) => placement.image && (placement.image.referenceName !== null || placement.image.fileSize !== null)
+  ).length;
+  const groups = [...countByGroup].map(([group, count]) => `${group} ${count}`).join(', ') || 'none';
+  log(
+    `- ${locale}: screenshot placements by group: ${groups}; image details readable on ${readable} of ` +
+      `${everyGroup.length}.`
+  );
+}
+
+/**
+ * Apple's own MD5 of each file in one localization's deprecated screenshot
+ * sets, beside the committed frames. The read is allowed to fail: the report
+ * says so and carries on.
+ *
+ * @param {AppStoreConnectRequest} request
+ * @param {string} locale
+ * @param {string} localizationId
+ * @param {ScreenshotFrame[]} frames
+ * @param {(line: string) => void} log
+ */
+async function logDeprecatedScreenshotSets(request, locale, localizationId, frames, log) {
+  try {
+    const legacySets = await readLegacyScreenshotSets({ request, describeFailure, localizationId });
+    for (const legacySet of legacySets) {
+      const matching = legacySet.checksums.filter((checksum) => frames.some((frame) => frame.md5 === checksum)).length;
+      const inOrder =
+        legacySet.checksums.length === frames.length &&
+        frames.every((frame, index) => frame.md5 === legacySet.checksums[index]);
+      log(
+        `- ${locale}: deprecated screenshot set ${legacySet.displayType ?? 'of unknown type'}: ` +
+          `${legacySet.checksums.length} screenshot(s), ${matching} with a checksum that is a committed frame` +
+          `${inOrder ? ', in listing order' : ''}.`
+      );
+      if (!inOrder) {
+        log(`  - its checksums, in order: ${legacySet.checksums.map((checksum) => JSON.stringify(checksum)).join(', ')}.`);
+      }
+    }
+  } catch (error) {
+    log(
+      `- ${locale}: the deprecated screenshot sets could not be read ` +
+        `(${error instanceof Error ? error.message : String(error)}).`
+    );
+  }
+}
+
+/**
  * The check mode's screenshot section. It makes every read the `screenshots`
  * mode depends on, so an endpoint Apple changed surfaces in a preflight, and it
  * says by what evidence the listing matches the committed frames.
@@ -1230,14 +1290,15 @@ async function reportListingScreenshots(request, appId, versionId, frames, log) 
   );
   // Whether the committed frames ever reached Apple, wherever they are placed.
   // A hand upload that was never saved to a version still lands in the library.
-  const uploadedByHash = frames.filter((frame) =>
-    libraryImages.some((image) => matchEvidence(frame, image) === 'hash')
-  ).length;
-  const uploadedBySize = frames.filter(
-    (frame) =>
-      !libraryImages.some((image) => matchEvidence(frame, image) === 'hash') &&
-      libraryImages.some((image) => matchEvidence(frame, image) === 'size')
-  ).length;
+  // One answer per frame, the stronger evidence first: a frame the library
+  // holds by hash is not also counted by size.
+  const libraryEvidence = frames.map((frame) => {
+    if (libraryImages.some((image) => matchEvidence(frame, image) === 'hash')) return 'hash';
+    if (libraryImages.some((image) => matchEvidence(frame, image) === 'size')) return 'size';
+    return null;
+  });
+  const uploadedByHash = libraryEvidence.filter((evidence) => evidence === 'hash').length;
+  const uploadedBySize = libraryEvidence.filter((evidence) => evidence === 'size').length;
   log(
     `- Of the ${frames.length} committed frame(s), ${uploadedByHash + uploadedBySize} are in the asset library ` +
       `(${uploadedByHash} by content hash, ${uploadedBySize} by file size).`
@@ -1264,54 +1325,8 @@ async function reportListingScreenshots(request, appId, versionId, frames, log) 
       }
     }
 
-    const everyGroup = await readScreenshotPlacements({
-      request,
-      describeFailure,
-      localizationId: result.localizationId,
-    });
-    /** @type {Map<string, number>} */
-    const countByGroup = new Map();
-    for (const placement of everyGroup) {
-      const group = placement.group ?? 'unknown';
-      countByGroup.set(group, (countByGroup.get(group) ?? 0) + 1);
-    }
-    const readable = everyGroup.filter(
-      (placement) => placement.image && (placement.image.referenceName !== null || placement.image.fileSize !== null)
-    ).length;
-    const groups = [...countByGroup].map(([group, count]) => `${group} ${count}`).join(', ') || 'none';
-    log(
-      `- ${result.locale}: screenshot placements by group: ${groups}; image details readable on ${readable} of ` +
-        `${everyGroup.length}.`
-    );
-
-    try {
-      const legacySets = await readLegacyScreenshotSets({
-        request,
-        describeFailure,
-        localizationId: result.localizationId,
-      });
-      for (const legacySet of legacySets) {
-        const matching = legacySet.checksums.filter((checksum) =>
-          frames.some((frame) => frame.md5 === checksum)
-        ).length;
-        const inOrder =
-          legacySet.checksums.length === frames.length &&
-          frames.every((frame, index) => frame.md5 === legacySet.checksums[index]);
-        log(
-          `- ${result.locale}: deprecated screenshot set ${legacySet.displayType ?? 'of unknown type'}: ` +
-            `${legacySet.checksums.length} screenshot(s), ${matching} with a checksum that is a committed frame` +
-            `${inOrder ? ', in listing order' : ''}.`
-        );
-        if (!inOrder) {
-          log(`  - its checksums, in order: ${legacySet.checksums.map((checksum) => JSON.stringify(checksum)).join(', ')}.`);
-        }
-      }
-    } catch (error) {
-      log(
-        `- ${result.locale}: the deprecated screenshot sets could not be read ` +
-          `(${error instanceof Error ? error.message : String(error)}).`
-      );
-    }
+    await logPlacementsByGroup(request, result.locale, result.localizationId, log);
+    await logDeprecatedScreenshotSets(request, result.locale, result.localizationId, frames, log);
   }
 
   if (results.some((result) => !result.plan.inSync)) {
@@ -1459,23 +1474,14 @@ const MODE_ARGUMENTS = {
 };
 
 /**
- * Flag/value pairs, strictly, like scripts/checkAppStoreBuild.mjs: a bare flag
- * would silently swallow the next flag as its value.
+ * Flag/value pairs, strictly (scripts/lib/cliArguments.mjs), then this
+ * script's own modes and the arguments each one needs.
  *
  * @param {string[]} argv
  * @returns {Record<string, string>}
  */
 export function parseArguments(argv) {
-  /** @type {Record<string, string>} */
-  const parsed = {};
-  for (let index = 0; index < argv.length; index += 2) {
-    const flag = argv[index];
-    const value = argv[index + 1];
-    if (!flag.startsWith('--') || value === undefined) {
-      throw new Error(`Malformed argument near "${flag}".`);
-    }
-    parsed[flag.slice(2)] = value;
-  }
+  const parsed = parseFlagPairs(argv);
   if (!Object.hasOwn(MODE_ARGUMENTS, parsed.mode ?? '')) {
     throw new Error(`--mode must be prepare, submit, screenshots or check, not "${parsed.mode ?? ''}".`);
   }

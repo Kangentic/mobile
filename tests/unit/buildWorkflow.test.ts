@@ -2075,6 +2075,54 @@ describe('listing screenshots are uploaded by the release workflows', () => {
       expect(runsOf(storeListing.jobs['sync-app-store'])).toContain('--mode screenshots');
       expect(runsOf(storeListing.jobs['sync-app-store'])).toContain(`--screenshots-dir ${IOS_SHELF}`);
     });
+
+    // The `${{ }}` wrapper is optional in an `if:`; the parser hands back the
+    // text as written, so compare the expression with the wrapper removed.
+    const expressionOf = (condition: string | undefined) =>
+      (condition ?? '').trim().replace(/^\$\{\{\s*/, '').replace(/\s*\}\}$/, '');
+
+    it('routes each dispatch to the right job: mode picks check or sync, platform picks the store', () => {
+      const checkJob = storeListing.jobs.check;
+      const syncPlay = expressionOf(storeListing.jobs['sync-play'].if);
+      const syncAppStore = expressionOf(storeListing.jobs['sync-app-store'].if);
+      // Each sync job writes to a public listing. A swapped platform clause
+      // would run the Play sync for platform=ios (and the reverse), and a
+      // dropped mode clause would let mode=check reach a writing job.
+      expect(syncPlay).toBe("inputs.mode == 'sync' && inputs.platform != 'ios'");
+      expect(syncAppStore).toBe("inputs.mode == 'sync' && inputs.platform != 'android'");
+      // The read-only job runs for check and only check.
+      expect(expressionOf(checkJob.if)).toBe("inputs.mode == 'check'");
+      // Nothing but the read-only job can run when the mode is check.
+      for (const condition of [syncPlay, syncAppStore]) {
+        expect(condition).toContain("inputs.mode == 'sync'");
+      }
+    });
+
+    it('lets each check step skip the other store, and the App Store step survive a Play failure', () => {
+      const [, playStep, appStoreStep] = storeListing.jobs.check.steps ?? [];
+      expect(expressionOf(playStep.if)).toBe("inputs.platform != 'ios'");
+      // `!cancelled()` so a Play failure does not hide the App Store answer.
+      expect(expressionOf(appStoreStep.if)).toBe("!cancelled() && inputs.platform != 'android'");
+    });
+
+    it('passes the Play force input through env, compared exactly, and never into the script text', () => {
+      const syncStep = (storeListing.jobs['sync-play'].steps ?? []).find((step) => step.run?.includes('syncPlayListingImages'));
+      expect(syncStep).toBeDefined();
+      // Through env, so a value is data and never shell text.
+      expect(syncStep?.env?.FORCE).toBe('${{ inputs.force }}');
+      expect(syncStep?.run).not.toContain('inputs.force');
+      expect(syncStep?.run).not.toContain('${{');
+      // A boolean input reaches env as the string "true". A typo in the
+      // comparison makes force=true silently do nothing.
+      const run = syncStep?.run ?? '';
+      expect(run).toContain('if [ "$FORCE" = "true" ]; then');
+      // --force 1 is passed only inside that branch.
+      const forceBranch = run.slice(run.indexOf('if [ "$FORCE" = "true" ]; then'), run.indexOf('fi', run.indexOf('if [ "$FORCE"')));
+      expect(forceBranch).toContain('force_arguments=(--force 1)');
+      expect(run.split('--force 1')).toHaveLength(2);
+      // And the script call expands those arguments.
+      expect(run).toContain('${force_arguments[@]+"${force_arguments[@]}"}');
+    });
   });
 
   it('never runs a writing mode of either listing script in a job with no approval behind it', () => {
