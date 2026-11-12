@@ -57,6 +57,13 @@ on:
         options:
           - 'false'
           - 'true'
+      listing_images:
+        description: 'submit=appstore only. auto = put the committed store/screenshots/ios frames on the listing in stage 1, and have stage 2 refuse stale ones. skip = leave screenshots to a hand upload.'
+        type: choice
+        default: auto
+        options:
+          - auto
+          - skip
       crash_test:
         description: 'Reveal the crash-reporting test rows in Settings and drive them on the simulator so Sentry receives iOS events. For verifying delivery and what a crash report contains; never for a store submission.'
         type: boolean
@@ -1688,7 +1695,8 @@ jobs:
       # Information field the version lacks from the newest version that has it
       # complete. It reports, without failing on, review notes or screenshots
       # still missing after that: fixing those is what the gap before
-      # submit-app-review's approval is for.
+      # submit-app-review's approval is for. The screenshots themselves are the
+      # next step's job.
       #
       # Deliberately AFTER the tag step, never between it and the wait step.
       # The tag step has no `if: always()`, so a failure here placed before it
@@ -1717,13 +1725,62 @@ jobs:
             --build-number "$BUILD_NUMBER" \
             --mode prepare
 
+      # The listing screenshots, automated since task #149. A version created
+      # through the API INHERITS the previous version's screenshots, so until
+      # this step existed a release that re-captured the frames needed a hand
+      # upload in Media Manager between the two approvals, and nothing could
+      # tell when it had been forgotten (v1.4.0, 2026-11-01). This makes the
+      # version's screenshots be the committed frames, in listing order, through
+      # the App Asset Library, and writes nothing when they already are.
+      #
+      # After prepare, because it needs the version to exist and be editable.
+      #
+      # `continue-on-error`, and stage 2 is the enforcement. A failure here must
+      # not fail the job: submit-app-review `needs` this job, so a red job would
+      # skip stage 2 for the whole run, and a re-run uses this same commit, so
+      # it could never pick up a fix to the script. Instead the job stays green,
+      # the summary below says the sync failed, and submit-app-review refuses to
+      # submit while the listing differs from the committed frames, whoever
+      # approves it. The way out is store-listing.yml (which runs from main, so
+      # it does carry a fix) or a hand upload, then the second approval.
+      #
+      # The summary reads this step's `outcome`, never its `conclusion`: under
+      # continue-on-error a failed step's conclusion is "success".
+      #
+      # Its own timeout, so a hung poll on Apple's processing cannot run into
+      # the job's 60 minutes and take the summary step down with it.
+      - name: Sync the App Store screenshots
+        id: app-store-screenshots
+        if: inputs.submit == 'appstore' && inputs.listing_images != 'skip'
+        continue-on-error: true
+        timeout-minutes: 15
+        env:
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          BUNDLE_ID: ${{ needs.device.outputs.bundle-id }}
+          VERSION_NAME: ${{ needs.device.outputs.version-name }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ASC_API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/asc-api-key.p8"
+          node scripts/prepareAppStoreRelease.mjs \
+            --key "$RUNNER_TEMP/asc-api-key.p8" \
+            --key-id "$ASC_KEY_ID" \
+            --issuer-id "$ASC_ISSUER_ID" \
+            --bundle-id "$BUNDLE_ID" \
+            --version "$VERSION_NAME" \
+            --screenshots-dir store/screenshots/ios/iphone-6.9 \
+            --mode screenshots
+
       - name: Write the submit summary
         if: always()
         env:
           BUNDLE_ID: ${{ needs.device.outputs.bundle-id }}
           BUILD_NUMBER: ${{ needs.device.outputs.build-number }}
           SUBMIT: ${{ inputs.submit }}
+          LISTING_IMAGES: ${{ inputs.listing_images }}
           PREPARE_OUTCOME: ${{ steps.prepare-app-store.outcome }}
+          SCREENSHOTS_OUTCOME: ${{ steps.app-store-screenshots.outcome }}
         run: |
           {
             echo "### App Store Connect upload"
@@ -1735,8 +1792,20 @@ jobs:
             if [ "$SUBMIT" = "appstore" ] && [ "$PREPARE_OUTCOME" = "success" ]; then
               echo ""
               echo "**App Store release:** the version is prepared (see the report above). Submit (App Review) is"
-              echo "waiting for its own approval. Update the listing screenshots in App Store Connect first if"
-              echo "this release needs new ones, then approve it."
+              echo "waiting for its own approval."
+              echo ""
+              if [ "$LISTING_IMAGES" = "skip" ]; then
+                echo "**Listing screenshots:** not touched (\`listing_images=skip\`). If this release needs new ones,"
+                echo "upload them by hand in App Store Connect before approving. They lock once it is submitted."
+              elif [ "$SCREENSHOTS_OUTCOME" = "success" ]; then
+                echo "**Listing screenshots:** the listing shows the committed frames (see the report above)."
+              else
+                echo "**Listing screenshots: NOT synced** (step outcome: \`${SCREENSHOTS_OUTCOME:-not run}\`)."
+                echo "Submit (App Review) refuses to submit while the listing differs from"
+                echo "\`store/screenshots/ios/iphone-6.9/\`. Before approving it, run"
+                echo "\`gh workflow run store-listing.yml -f platform=ios -f mode=sync\`, or upload the frames by hand"
+                echo "in Media Manager (the 6.9-inch slot, in filename order)."
+              fi
             elif [ "$SUBMIT" = "appstore" ]; then
               echo ""
               echo "**App Store release:** the version was NOT prepared (step outcome: \`${PREPARE_OUTCOME:-not run}\`)."
@@ -1747,12 +1816,18 @@ jobs:
   # Stage 2 of an App Store release: submits the version stage 1 prepared for
   # App Review. Its own job so that it waits for its OWN approval of the
   # app-store-connect environment: every job that names a protected
-  # environment pauses separately. That second click is the "submit" button,
-  # and the time before it is where the listing screenshots get updated by
-  # hand when a release needs new ones. The script refuses to submit a version
-  # with empty review notes (they carry the reviewer demo pairing code) or a
-  # localization with no screenshots, and it re-applies the full-release
-  # settings in case they were changed in App Store Connect meanwhile.
+  # environment pauses separately. That second click is the "submit" button.
+  # The script refuses to submit a version with empty review notes (they carry
+  # the reviewer demo pairing code) or a localization with no screenshots, and
+  # it re-applies the full-release settings in case they were changed in App
+  # Store Connect meanwhile.
+  #
+  # It also refuses while the listing screenshots are not the committed frames
+  # (the --screenshots-dir it is passed). Stage 1's sync step is allowed to
+  # fail without failing its job, so this is the gate: the screenshots lock the
+  # moment the version is with App Review, and a version created through the
+  # API arrives carrying the previous release's. `listing_images=skip` drops
+  # the flag, which restores the old count-only check for a hand upload.
   #
   # Approving it means the version goes live to every user the moment App
   # Review approves it. Rejecting it leaves a prepared, unsubmitted version
@@ -1781,9 +1856,14 @@ jobs:
           BUNDLE_ID: ${{ needs.device.outputs.bundle-id }}
           BUILD_NUMBER: ${{ needs.device.outputs.build-number }}
           VERSION_NAME: ${{ needs.device.outputs.version-name }}
+          LISTING_IMAGES: ${{ inputs.listing_images }}
         run: |
           set -euo pipefail
           printf '%s' "$ASC_API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/asc-api-key.p8"
+          screenshot_arguments=()
+          if [ "$LISTING_IMAGES" != "skip" ]; then
+            screenshot_arguments=(--screenshots-dir store/screenshots/ios/iphone-6.9)
+          fi
           node scripts/prepareAppStoreRelease.mjs \
             --key "$RUNNER_TEMP/asc-api-key.p8" \
             --key-id "$ASC_KEY_ID" \
@@ -1791,4 +1871,5 @@ jobs:
             --bundle-id "$BUNDLE_ID" \
             --version "$VERSION_NAME" \
             --build-number "$BUILD_NUMBER" \
-            --mode submit
+            --mode submit \
+            ${screenshot_arguments[@]+"${screenshot_arguments[@]}"}

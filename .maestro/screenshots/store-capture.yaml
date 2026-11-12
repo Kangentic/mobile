@@ -134,7 +134,7 @@ env:
       id: "permission-approve"
     timeout: 45000
 - takeScreenshot:
-    path: ${OUTPUT_DIR}/03-session-chat
+    path: ${OUTPUT_DIR}/04-session-chat
     label: Readable transcript with a permission card
 # The xterm mirror: the most distinctive frame in the listing.
 #
@@ -163,7 +163,7 @@ env:
 - waitForAnimationToEnd:
     timeout: 15000
 - takeScreenshot:
-    path: ${OUTPUT_DIR}/02-session-terminal
+    path: ${OUTPUT_DIR}/03-session-terminal
     label: Live terminal mirror of the desktop PTY
 # PAGING TO CHANGES IS RETRIED, because a tap here has been observed to
 # DISPATCH AND DO NOTHING.
@@ -209,7 +209,7 @@ env:
         id: "changes-file-list"
     commands:
       - takeScreenshot:
-          path: ${OUTPUT_DIR}/04-session-changes
+          path: ${OUTPUT_DIR}/05-session-changes
           label: Changed files in the agent's worktree
       # The unified diff itself. The file LIST alone left most of a phone screen
       # empty and sells the review story weakly; the coloured +/- lines are the
@@ -347,7 +347,7 @@ env:
           timeout: 2500
           optional: true
 - takeScreenshot:
-    path: ${OUTPUT_DIR}/05-board
+    path: ${OUTPUT_DIR}/02-board
     label: Kanban board with live agent sessions
 # A COMMAND TERMINAL (protocol 0.20.0), LAST: it is the one frame that starts
 # something, and the mock lists no terminal until one is started, so nothing

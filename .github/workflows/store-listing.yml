@@ -1,0 +1,179 @@
+name: Store listing
+
+# The committed listing screenshots (store/screenshots/) against the two store
+# listings, on demand: a read-only check, or a sync that makes the listings
+# show the committed frames.
+#
+# A release does this by itself: build-android.yml's listing-images job after a
+# full production release commits, and build-ios.yml's stage 1 before the
+# version is submitted. This workflow is for everything else:
+#
+#   - pushing the committed frames without cutting a release
+#     (`gh workflow run store-listing.yml -f platform=android -f mode=sync`);
+#   - retrying a listing sync that failed inside a release run. A re-run of a
+#     release job uses the release's own commit, so it cannot pick up a fix to
+#     the script; this runs from the branch it is dispatched on;
+#   - finishing a staged Play rollout, which the release run leaves alone;
+#   - asking, without changing anything, whether the listings are current
+#     (`-f mode=check`).
+#
+# The repository is the source of truth for these images. A screenshot changed
+# by hand in a store console is replaced by the next sync.
+#
+# NEVER run this while a Play submission is uploading. The Play check and the
+# Play sync both open a Play edit, and opening one invalidates the service
+# account's other open edit, which would be the release's.
+#
+# iOS can only change on a version that has not been submitted. Between
+# releases there is none, and the sync says so and changes nothing.
+#
+# Gates: `check` reads only and has no environment, like app-store-check.yml.
+# Each `sync` job writes to a public store listing, so each sits behind the
+# same environment, and the same required reviewer, as that store's release
+# job. tests/unit/buildWorkflow.test.ts pins that no writing mode can run in a
+# job without one.
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Which listing.'
+        type: choice
+        default: both
+        options:
+          - both
+          - android
+          - ios
+      mode:
+        description: 'check = read-only report. sync = make the listing show the committed frames (behind an approval).'
+        type: choice
+        default: check
+        options:
+          - check
+          - sync
+      force:
+        description: 'Play sync only: replace every shelf even when it already matches.'
+        type: boolean
+        default: false
+
+concurrency:
+  # One at a time, and never cancelled: two Play edits from one account
+  # invalidate each other, and a sync cut off between two App Store placements
+  # is a listing left half-replaced until the next run.
+  group: store-listing
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check (read-only)
+    if: inputs.mode == 'check'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the Play listing screenshots
+        if: inputs.platform != 'ios'
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PLAY_SERVICE_ACCOUNT_JSON" ]; then
+            echo "::error::Needs PLAY_SERVICE_ACCOUNT_JSON as a repository secret."
+            exit 1
+          fi
+          printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
+          node scripts/syncPlayListingImages.mjs \
+            --key "$RUNNER_TEMP/play-service-account.json" \
+            --package com.kangentic.mobile \
+            --language en-US \
+            --mode check
+
+      # `!cancelled()` so a Play failure above does not hide the App Store
+      # answer: the two listings are independent.
+      - name: Check the App Store listing screenshots
+        if: ${{ !cancelled() && inputs.platform != 'android' }}
+        env:
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ASC_API_KEY_BASE64" ] || [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ]; then
+            echo "::error::Needs ASC_API_KEY_BASE64, ASC_KEY_ID and ASC_ISSUER_ID as repository secrets."
+            exit 1
+          fi
+          printf '%s' "$ASC_API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/asc-api-key.p8"
+          node scripts/prepareAppStoreRelease.mjs \
+            --key "$RUNNER_TEMP/asc-api-key.p8" \
+            --key-id "$ASC_KEY_ID" \
+            --issuer-id "$ASC_ISSUER_ID" \
+            --bundle-id com.kangentic.mobile \
+            --screenshots-dir store/screenshots/ios/iphone-6.9 \
+            --mode check
+
+  sync-play:
+    name: Sync (Google Play)
+    if: inputs.mode == 'sync' && inputs.platform != 'ios'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: google-play
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Sync the Play listing screenshots
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PLAY_SERVICE_ACCOUNT_JSON" ]; then
+            echo "::error::Needs PLAY_SERVICE_ACCOUNT_JSON as a repository secret."
+            exit 1
+          fi
+          printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
+          force_arguments=()
+          if [ "$FORCE" = "true" ]; then
+            force_arguments=(--force 1)
+          fi
+          node scripts/syncPlayListingImages.mjs \
+            --key "$RUNNER_TEMP/play-service-account.json" \
+            --package com.kangentic.mobile \
+            --language en-US \
+            --mode sync \
+            ${force_arguments[@]+"${force_arguments[@]}"}
+
+  sync-app-store:
+    name: Sync (App Store Connect)
+    if: inputs.mode == 'sync' && inputs.platform != 'android'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: app-store-connect
+    steps:
+      - uses: actions/checkout@v7
+
+      # No --version: it updates the one version that has not been submitted,
+      # which between the two stages of a release is the release's. With none,
+      # it says so and changes nothing.
+      - name: Sync the App Store screenshots
+        env:
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ASC_API_KEY_BASE64" ] || [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ]; then
+            echo "::error::Needs ASC_API_KEY_BASE64, ASC_KEY_ID and ASC_ISSUER_ID as repository secrets."
+            exit 1
+          fi
+          printf '%s' "$ASC_API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/asc-api-key.p8"
+          node scripts/prepareAppStoreRelease.mjs \
+            --key "$RUNNER_TEMP/asc-api-key.p8" \
+            --key-id "$ASC_KEY_ID" \
+            --issuer-id "$ASC_ISSUER_ID" \
+            --bundle-id com.kangentic.mobile \
+            --screenshots-dir store/screenshots/ios/iphone-6.9 \
+            --mode screenshots

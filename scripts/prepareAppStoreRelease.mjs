@@ -12,15 +12,27 @@
  *                   AFTER_APPROVAL, cancels any planned phased release, and
  *                   carries the App Review Information over from the newest
  *                   version that has it complete when this one lacks it.
+ *   --mode screenshots  runs right after prepare, and on demand from
+ *                   .github/workflows/store-listing.yml. It makes the version's
+ *                   listing screenshots be the committed frames in
+ *                   --screenshots-dir, in listing order, through the App Asset
+ *                   Library (scripts/lib/appStoreScreenshots.mjs). Idempotent.
  *   --mode submit   runs after the second approval. It re-applies those
  *                   guarantees, refuses if the review notes or screenshots are
- *                   missing, and submits the version for App Review.
- *   --mode check    writes nothing. It reports what the two stages would find,
- *                   as a preflight before a release day, run by
+ *                   missing, and submits the version for App Review. Given
+ *                   --screenshots-dir it also refuses while the listing shows
+ *                   anything but the committed frames.
+ *   --mode check    writes nothing. It reports what the stages would find, as a
+ *                   preflight before a release day, run by
  *                   .github/workflows/app-store-check.yml (see checkAppStoreRelease).
  *
- * The gap between the stages is deliberate. It is where a human updates the
- * listing screenshots, which this script never touches.
+ * The gap between the stages used to be where a human uploaded the listing
+ * screenshots. A version created through the API inherits the previous
+ * version's screenshots, so a count of them cannot tell a stale listing from a
+ * current one, and they lock once the version is with App Review: v1.4.0 came
+ * within one approval of shipping the previous release's frames. The
+ * `screenshots` mode does the upload now, and the submit stage compares the
+ * listing with the committed frames rather than counting.
  *
  * "100% every time" (maintainer decision, 2026-10-15) is two settings, and both
  * are enforced here rather than left to a radio button in App Store Connect:
@@ -44,18 +56,36 @@
  *   node scripts/prepareAppStoreRelease.mjs \
  *     --key <AuthKey.p8> --key-id <kid> --issuer-id <iss> \
  *     --bundle-id <com.example.app> --version <1.2.3> --build-number <n> \
- *     --mode <prepare|submit> [--whatsnew-dir store/whatsnew]
+ *     --mode <prepare|submit> [--whatsnew-dir store/whatsnew] \
+ *     [--screenshots-dir store/screenshots/ios/iphone-6.9]
  *
  *   node scripts/prepareAppStoreRelease.mjs \
  *     --key <AuthKey.p8> --key-id <kid> --issuer-id <iss> \
- *     --bundle-id <com.example.app> --mode check [--version <1.2.3>]
+ *     --bundle-id <com.example.app> --mode screenshots \
+ *     --screenshots-dir store/screenshots/ios/iphone-6.9 [--version <1.2.3>]
+ *
+ *   node scripts/prepareAppStoreRelease.mjs \
+ *     --key <AuthKey.p8> --key-id <kid> --issuer-id <iss> \
+ *     --bundle-id <com.example.app> --mode check [--version <1.2.3>] \
+ *     [--screenshots-dir store/screenshots/ios/iphone-6.9]
  */
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { createAppStoreConnectToken } from './checkAppStoreBuild.mjs';
+import {
+  describeScreenshotPlan,
+  planScreenshotSync,
+  readLegacyScreenshotSets,
+  readLibraryImages,
+  readScreenshotPlacements,
+  readScreenshotTarget,
+  syncScreenshots,
+  uploadPartWithFetch,
+} from './lib/appStoreScreenshots.mjs';
 import { isEntrypoint } from './lib/is-entrypoint.mjs';
+import { readListingFrames } from './lib/listingFrames.mjs';
 
 const ASC_API_BASE = 'https://api.appstoreconnect.apple.com/v1';
 
@@ -76,6 +106,11 @@ const FULL_RELEASE_TYPE = 'AFTER_APPROVAL';
  *   localizations: LocalizationSummary[],
  *   problems: string[],
  * }} ReleaseReport
+ * @typedef {import('./lib/listingFrames.mjs').ListingFrame} ScreenshotFrame
+ * @typedef {import('./lib/appStoreScreenshots.mjs').ScreenshotPlan} ScreenshotPlan
+ * @typedef {import('./lib/appStoreScreenshots.mjs').ScreenshotSyncResult} ScreenshotSyncResult
+ * @typedef {import('./lib/appStoreScreenshots.mjs').UploadPart} UploadPart
+ * @typedef {{ locale: string, placementCount: number, inSync: boolean, evidence: string | null }} ScreenshotComparison
  */
 
 /**
@@ -567,6 +602,47 @@ async function describeLocalizations(request, versionId) {
   );
 }
 
+/**
+ * Each localization's listing screenshots beside the committed frames: what a
+ * count cannot say. Read-only, so the check mode and the submit stage share it.
+ *
+ * @param {AppStoreConnectRequest} request
+ * @param {string} appId
+ * @param {string} versionId
+ * @param {ScreenshotFrame[]} frames
+ */
+async function compareListingScreenshots(request, appId, versionId, frames) {
+  const target = await readScreenshotTarget({ request, describeFailure, appId, frames });
+  const localizations = await readLocalizations(request, versionId);
+  /** @type {{ locale: string, localizationId: string, placementCount: number, plan: ScreenshotPlan }[]} */
+  const results = [];
+  for (const localization of localizations) {
+    const placements = await readScreenshotPlacements({
+      request,
+      describeFailure,
+      localizationId: localization.id,
+      group: target.group,
+    });
+    results.push({
+      locale: localization.locale,
+      localizationId: localization.id,
+      placementCount: placements.length,
+      plan: planScreenshotSync(frames, placements),
+    });
+  }
+  return { target, results };
+}
+
+/** @returns {ScreenshotComparison} */
+function summarizeComparison(result) {
+  return {
+    locale: result.locale,
+    placementCount: result.placementCount,
+    inSync: result.plan.inSync,
+    evidence: result.plan.evidence,
+  };
+}
+
 /** The read-back after a write: proof the settings stuck, not that the calls returned 200. */
 async function verifyFullRelease(request, appId, versionString, buildId) {
   const version = await readVersion(request, appId, versionString);
@@ -824,11 +900,17 @@ async function ensureSubmissionItem(request, submissionId, versionId) {
  * then submits it and waits until App Store Connect reports it as waiting for
  * review. A re-run on a version already submitted with this build is a no-op.
  *
+ * Given `frames`, it also refuses while any localization's listing shows
+ * anything but those frames in listing order. This is the last moment they can
+ * change: they lock once the version is with App Review. Without `frames` the
+ * only screenshot check is the count, as before.
+ *
  * @param {{
  *   request: AppStoreConnectRequest,
  *   bundleId: string,
  *   versionString: string,
  *   buildNumber: string,
+ *   frames?: ScreenshotFrame[],
  *   log?: (line: string) => void,
  *   sleep?: (milliseconds: number) => Promise<unknown>,
  *   pollAttempts?: number,
@@ -841,6 +923,7 @@ export async function submitAppStoreRelease({
   bundleId,
   versionString,
   buildNumber,
+  frames,
   log = noLog,
   sleep = delay,
   pollAttempts = 12,
@@ -875,6 +958,23 @@ export async function submitAppStoreRelease({
         'The version is prepared. Fix these in App Store Connect, then re-run the Submit (App Review) job, ' +
         'or press Add for Review there.'
     );
+  }
+
+  if (frames) {
+    const comparison = await compareListingScreenshots(request, appId, verified.id, frames);
+    for (const result of comparison.results) {
+      log(`- ${result.locale} listing: ${describeScreenshotPlan(result.plan, result.placementCount)}.`);
+    }
+    const differing = comparison.results.filter((result) => !result.plan.inSync).map((result) => result.locale);
+    if (differing.length > 0) {
+      throw new Error(
+        `Not submitting version ${versionString} for review: the listing screenshots for ${differing.join(', ')} ` +
+          'are not the committed frames, and they lock once the version is with App Review.\n' +
+          'The version is prepared. Either run `gh workflow run store-listing.yml -f platform=ios -f mode=sync`, ' +
+          'or upload the committed frames by hand in App Store Connect (Media Manager, the 6.9-inch slot, in ' +
+          'filename order). Then re-run the Submit (App Review) job, or press Add for Review there.'
+      );
+    }
   }
 
   const submissionId = await findOrCreateReviewSubmission(request, appId);
@@ -922,6 +1022,259 @@ export async function submitAppStoreRelease({
   return report;
 }
 
+/** Version states that are on the store now. READY_FOR_SALE is the deprecated spelling. */
+const LIVE_VERSION_STATES = new Set(['READY_FOR_DISTRIBUTION', 'READY_FOR_SALE']);
+
+/**
+ * Makes the listing screenshots of the version being prepared be the committed
+ * frames, in listing order, for every localization. The upload itself is
+ * scripts/lib/appStoreScreenshots.mjs; this finds the version, refuses one whose
+ * screenshots can no longer change, and watches the live version while it works.
+ *
+ * Without `versionString` it takes the one editable version, which is what an
+ * on-demand run from store-listing.yml has to go on. A version already with App
+ * Review, or no editable version at all, is not an error: there is nothing this
+ * can change, and it says so.
+ *
+ * The live version's screenshot count is read before and after as a tripwire.
+ * Placements belong to one version, so replacing the new version's must leave
+ * the live version's alone, and library images are never deleted. But this is a
+ * new Apple API, the two versions share images, and a listing emptied on the
+ * store is the one mistake here that reaches users. So it is checked, not assumed.
+ *
+ * @param {{
+ *   request: AppStoreConnectRequest,
+ *   uploadPart: UploadPart,
+ *   bundleId: string,
+ *   versionString?: string,
+ *   frames: ScreenshotFrame[],
+ *   log?: (line: string) => void,
+ *   sleep?: (milliseconds: number) => Promise<unknown>,
+ *   pollAttempts?: number,
+ *   pollIntervalMilliseconds?: number,
+ * }} options
+ * @returns {Promise<{
+ *   versionString: string | null,
+ *   state: string | null,
+ *   changed: boolean,
+ *   localizations: { locale: string, result: ScreenshotSyncResult }[],
+ * }>}
+ */
+export async function syncAppStoreScreenshots({
+  request,
+  uploadPart,
+  bundleId,
+  versionString,
+  frames,
+  log = noLog,
+  sleep = delay,
+  pollAttempts,
+  pollIntervalMilliseconds,
+}) {
+  const appId = await findAppId(request, bundleId);
+  const response = await callApi(request, 'GET', versionsListPath(appId), undefined, 'list the App Store versions');
+  const included = response.included ?? [];
+  const versions = (response.data ?? []).map((resource) => parseVersionResource(resource, included));
+
+  const editable = versions.filter((candidate) => EDITABLE_VERSION_STATES.has(candidate.state));
+  if (!versionString && editable.length > 1) {
+    throw new Error(
+      `More than one App Store version is editable (${editable.map((candidate) => candidate.versionString).join(', ')}). ` +
+        'Name the one to update with --version.'
+    );
+  }
+  const version = versionString
+    ? versions.find((candidate) => candidate.versionString === versionString)
+    : editable[0];
+  if (!version) {
+    log(
+      versionString
+        ? `There is no App Store version ${versionString}, so there are no screenshots to update. Nothing was changed.`
+        : 'No App Store version is being prepared. Listing screenshots can only change on a version that has ' +
+            'not been submitted, which exists between the two stages of a release. Nothing was changed.'
+    );
+    return { versionString: versionString ?? null, state: null, changed: false, localizations: [] };
+  }
+  if (!EDITABLE_VERSION_STATES.has(version.state)) {
+    log(
+      `Version ${version.versionString} is ${version.state}, so its screenshots are locked. They can change again ` +
+        'on the next version. Nothing was changed.'
+    );
+    return { versionString: version.versionString, state: version.state, changed: false, localizations: [] };
+  }
+
+  const { target, results } = await compareListingScreenshots(request, appId, version.id, frames);
+  log(
+    `App Store version ${version.versionString} (${version.state}): ${frames.length} committed frame(s) at ` +
+      `${frames[0].width}x${frames[0].height}, placement group ${target.group}.`
+  );
+  if (results.length === 0) {
+    throw new Error(`Version ${version.versionString} has no localizations to put screenshots on.`);
+  }
+  if (results.every((result) => result.plan.inSync)) {
+    for (const result of results) {
+      log(`- ${result.locale}: ${describeScreenshotPlan(result.plan, result.placementCount)}. Nothing to upload.`);
+    }
+    return {
+      versionString: version.versionString,
+      state: version.state,
+      changed: false,
+      localizations: results.map((result) => ({
+        locale: result.locale,
+        result: { changed: false, evidence: result.plan.evidence, uploaded: 0, reused: 0, placed: 0, removed: 0 },
+      })),
+    };
+  }
+
+  const liveVersion = versions
+    .filter((candidate) => LIVE_VERSION_STATES.has(candidate.state) && candidate.id !== version.id)
+    .sort((first, second) => second.createdDate.localeCompare(first.createdDate))[0];
+  const countLiveScreenshots = async () => {
+    if (!liveVersion) return null;
+    let total = 0;
+    for (const localization of await readLocalizations(request, liveVersion.id)) {
+      const placements = await readScreenshotPlacements({
+        request,
+        describeFailure,
+        localizationId: localization.id,
+        group: target.group,
+      });
+      total += placements.length;
+    }
+    return total;
+  };
+  const liveBefore = await countLiveScreenshots();
+
+  /** @type {{ locale: string, result: ScreenshotSyncResult }[]} */
+  const synced = [];
+  for (const comparison of results) {
+    const result = await syncScreenshots({
+      request,
+      describeFailure,
+      uploadPart,
+      libraryId: target.libraryId,
+      localizationId: comparison.localizationId,
+      group: target.group,
+      maxCount: target.maxCount,
+      frames,
+      log,
+      sleep,
+      ...(pollAttempts === undefined ? {} : { pollAttempts }),
+      ...(pollIntervalMilliseconds === undefined ? {} : { pollIntervalMilliseconds }),
+    });
+    synced.push({ locale: comparison.locale, result });
+    log(
+      result.changed
+        ? `- ${comparison.locale}: replaced. ${result.uploaded} uploaded, ${result.reused} reused from the asset ` +
+            `library, ${result.placed} placed, ${result.removed} removed. Read back in listing order.`
+        : `- ${comparison.locale}: already in sync. Nothing to upload.`
+    );
+  }
+
+  const liveAfter = await countLiveScreenshots();
+  if (liveVersion) {
+    if (liveAfter !== liveBefore) {
+      throw new Error(
+        `The LIVE version ${liveVersion.versionString} had ${liveBefore} screenshot(s) before this run and has ` +
+          `${liveAfter} now. Updating version ${version.versionString} must not touch it: check the live listing ` +
+          'in App Store Connect before anything else.'
+      );
+    }
+    log(`- The live version ${liveVersion.versionString} still shows its ${liveAfter} screenshot(s).`);
+  }
+
+  return {
+    versionString: version.versionString,
+    state: version.state,
+    changed: synced.some((entry) => entry.result.changed),
+    localizations: synced,
+  };
+}
+
+/**
+ * The check mode's screenshot section. It makes every read the `screenshots`
+ * mode depends on, so an endpoint Apple changed surfaces in a preflight, and it
+ * says by what evidence the listing matches the committed frames.
+ *
+ * The deprecated screenshot sets are read beside the placements because they
+ * still carry Apple's MD5 of each file: when a frame was uploaded by hand, that
+ * is the only statement of what bytes the listing holds. That read is allowed to
+ * fail (Apple has announced no removal date, but it is deprecated), and the
+ * report says so instead of stopping.
+ *
+ * @param {AppStoreConnectRequest} request
+ * @param {string} appId
+ * @param {string} versionId
+ * @param {ScreenshotFrame[]} frames
+ * @param {(line: string) => void} log
+ * @returns {Promise<{ group: string, localizations: ScreenshotComparison[] }>}
+ */
+async function reportListingScreenshots(request, appId, versionId, frames, log) {
+  const { target, results } = await compareListingScreenshots(request, appId, versionId, frames);
+  const libraryImages = await readLibraryImages({ request, describeFailure, libraryId: target.libraryId });
+  log(
+    `Listing screenshots against ${frames.length} committed frame(s) at ${frames[0].width}x${frames[0].height}:`
+  );
+  log(
+    `- Placement group ${target.group}, cap ${target.maxCount}; ${libraryImages.length} image(s) in the asset library.`
+  );
+
+  for (const result of results) {
+    log(`- ${result.locale}: ${describeScreenshotPlan(result.plan, result.placementCount)}.`);
+
+    const everyGroup = await readScreenshotPlacements({
+      request,
+      describeFailure,
+      localizationId: result.localizationId,
+    });
+    /** @type {Map<string, number>} */
+    const countByGroup = new Map();
+    for (const placement of everyGroup) {
+      const group = placement.group ?? 'unknown';
+      countByGroup.set(group, (countByGroup.get(group) ?? 0) + 1);
+    }
+    const readable = everyGroup.filter(
+      (placement) => placement.image && (placement.image.referenceName !== null || placement.image.fileSize !== null)
+    ).length;
+    const groups = [...countByGroup].map(([group, count]) => `${group} ${count}`).join(', ') || 'none';
+    log(
+      `- ${result.locale}: screenshot placements by group: ${groups}; image details readable on ${readable} of ` +
+        `${everyGroup.length}.`
+    );
+
+    try {
+      const legacySets = await readLegacyScreenshotSets({
+        request,
+        describeFailure,
+        localizationId: result.localizationId,
+      });
+      for (const legacySet of legacySets) {
+        const matching = legacySet.checksums.filter((checksum) =>
+          frames.some((frame) => frame.md5 === checksum)
+        ).length;
+        const inOrder =
+          legacySet.checksums.length === frames.length &&
+          frames.every((frame, index) => frame.md5 === legacySet.checksums[index]);
+        log(
+          `- ${result.locale}: deprecated screenshot set ${legacySet.displayType ?? 'of unknown type'}: ` +
+            `${legacySet.checksums.length} screenshot(s), ${matching} with a checksum that is a committed frame` +
+            `${inOrder ? ', in listing order' : ''}.`
+        );
+      }
+    } catch (error) {
+      log(
+        `- ${result.locale}: the deprecated screenshot sets could not be read ` +
+          `(${error instanceof Error ? error.message : String(error)}).`
+      );
+    }
+  }
+
+  if (results.some((result) => !result.plan.inSync)) {
+    log('- Stage 1 replaces a listing that differs, and stage 2 refuses to submit while it still does.');
+  }
+  return { group: target.group, localizations: results.map(summarizeComparison) };
+}
+
 /**
  * Read-only preflight: reports what the two stages would find, and writes
  * nothing. Run through .github/workflows/app-store-check.yml before a release
@@ -942,10 +1295,15 @@ export async function submitAppStoreRelease({
  * What it cannot prove is write access: the reads succeed on any role. The
  * App Manager role was checked by eye in Users and Access instead.
  *
+ * Given `frames`, it also compares the inspected version's listing screenshots
+ * with them (see reportListingScreenshots), and the result gains a
+ * `screenshots` field. Without `frames` neither the reads nor the result change.
+ *
  * @param {{
  *   request: AppStoreConnectRequest,
  *   bundleId: string,
  *   versionString?: string,
+ *   frames?: ScreenshotFrame[],
  *   log?: (line: string) => void,
  * }} options
  * @returns {Promise<{
@@ -957,9 +1315,10 @@ export async function submitAppStoreRelease({
  *   localizations: LocalizationSummary[],
  *   problems: string[],
  *   unreleased: string[],
+ *   screenshots?: { group: string, localizations: ScreenshotComparison[] },
  * }>}
  */
-export async function checkAppStoreRelease({ request, bundleId, versionString, log = noLog }) {
+export async function checkAppStoreRelease({ request, bundleId, versionString, frames, log = noLog }) {
   const appId = await findAppId(request, bundleId);
   log(`App found for ${bundleId}.`);
 
@@ -1028,6 +1387,9 @@ export async function checkAppStoreRelease({ request, bundleId, versionString, l
     log(`- Unreleased version(s): ${listed}. Stage 1 refuses to create a version next to one.`);
   }
   for (const problem of problems) log(`Would block a submission: ${problem}`);
+  const screenshots = frames
+    ? await reportListingScreenshots(request, appId, inspected.id, frames, log)
+    : undefined;
   log('Read-only: nothing was changed.');
 
   return {
@@ -1039,6 +1401,7 @@ export async function checkAppStoreRelease({ request, bundleId, versionString, l
     localizations,
     problems,
     unreleased: unreleased.map((version) => version.versionString),
+    ...(screenshots ? { screenshots } : {}),
   };
 }
 
@@ -1046,6 +1409,7 @@ export async function checkAppStoreRelease({ request, bundleId, versionString, l
 const MODE_ARGUMENTS = {
   prepare: ['version', 'build-number'],
   submit: ['version', 'build-number'],
+  screenshots: ['screenshots-dir'],
   check: [],
 };
 
@@ -1068,7 +1432,7 @@ export function parseArguments(argv) {
     parsed[flag.slice(2)] = value;
   }
   if (!Object.hasOwn(MODE_ARGUMENTS, parsed.mode ?? '')) {
-    throw new Error(`--mode must be prepare, submit or check, not "${parsed.mode ?? ''}".`);
+    throw new Error(`--mode must be prepare, submit, screenshots or check, not "${parsed.mode ?? ''}".`);
   }
   for (const required of ['key', 'key-id', 'issuer-id', 'bundle-id', ...MODE_ARGUMENTS[parsed.mode]]) {
     if (!parsed[required]) {
@@ -1147,6 +1511,8 @@ export function appendStepSummary(summaryPath, mode, lines) {
  *   makeRequest?: typeof createRequest,
  *   summaryPath?: string,
  *   write?: (text: string) => void,
+ *   readFrames?: (directory: string) => ScreenshotFrame[],
+ *   uploadPart?: UploadPart,
  * }} [dependencies]
  */
 export async function main(
@@ -1155,6 +1521,8 @@ export async function main(
     makeRequest = createRequest,
     summaryPath = process.env.GITHUB_STEP_SUMMARY,
     write = (text) => process.stdout.write(text),
+    readFrames = readListingFrames,
+    uploadPart = uploadPartWithFetch,
   } = {}
 ) {
   const options = parseArguments(argv);
@@ -1173,15 +1541,37 @@ export async function main(
   };
 
   try {
+    // Read, and validated, before the first call: a frame the store would
+    // refuse should stop the run while the listing is still untouched. Only
+    // the modes that take the flag read it, so prepare is unaffected by a
+    // stray --screenshots-dir.
+    const frames =
+      options['screenshots-dir'] && options.mode !== 'prepare' ? readFrames(options['screenshots-dir']) : undefined;
+
     if (options.mode === 'prepare') {
       await prepareAppStoreRelease({
         ...shared,
         readWhatsNew: readWhatsNewFrom(options['whatsnew-dir'] ?? 'store/whatsnew'),
       });
     } else if (options.mode === 'submit') {
-      await submitAppStoreRelease(shared);
+      await submitAppStoreRelease({ ...shared, frames });
+    } else if (options.mode === 'screenshots') {
+      await syncAppStoreScreenshots({
+        request,
+        uploadPart,
+        bundleId: options['bundle-id'],
+        versionString: options.version,
+        frames: /** @type {ScreenshotFrame[]} */ (frames),
+        log,
+      });
     } else {
-      await checkAppStoreRelease({ request, bundleId: options['bundle-id'], versionString: options.version, log });
+      await checkAppStoreRelease({
+        request,
+        bundleId: options['bundle-id'],
+        versionString: options.version,
+        frames,
+        log,
+      });
     }
   } finally {
     appendStepSummary(summaryPath, options.mode, lines);

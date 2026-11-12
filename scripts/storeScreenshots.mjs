@@ -77,13 +77,21 @@ export const SHELVES = {
   },
 };
 
-/** Must match the takeScreenshot paths in .maestro/screenshots/store-capture.yaml. */
+/**
+ * Must match the takeScreenshot paths in .maestro/screenshots/store-capture.yaml.
+ *
+ * The order IS the listing order: the Agents feed, the Board, then the detail
+ * views. scripts/lib/listingFrames.mjs uploads in exactly this sequence, and
+ * both stores display screenshots in upload order, so reordering this list
+ * reorders the listings. The numeric prefixes keep a hand upload in filename
+ * order landing the same way.
+ */
 export const SHOT_NAMES = [
   '01-agents',
-  '02-session-terminal',
-  '03-session-chat',
-  '04-session-changes',
-  '05-board',
+  '02-board',
+  '03-session-terminal',
+  '04-session-chat',
+  '05-session-changes',
   '06-file-diff',
   '07-command-terminal',
 ];

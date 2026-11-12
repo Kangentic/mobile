@@ -3165,7 +3165,7 @@ function baseTranscript(): TranscriptEntryWire[] {
  * the sign-in redirect, taken from `git diff --numstat` of the storefront
  * fixture repo it ran against. That is what keeps the Terminal, Chat and
  * Changes lenses describing ONE piece of work: a reviewer comparing
- * 02-session-terminal against 04-session-changes is exactly what a store
+ * 03-session-terminal against 05-session-changes is exactly what a store
  * listing invites, and an earlier authored list disagreed with the terminal
  * about which files were touched and by how much.
  *

@@ -14,19 +14,14 @@
  *
  * Implemented against the Play Developer API v3 with no dependencies: the
  * service-account JWT is signed with node:crypto, so nothing is added to
- * package-lock.json for a CI-only check.
+ * package-lock.json for a CI-only check. The sign-in lives in
+ * scripts/lib/playPublisher.mjs, shared with scripts/syncPlayListingImages.mjs.
  *
  * Usage:
  *   node scripts/checkPlayVersionCode.mjs \
  *     --key <service-account.json> --package <applicationId> --version-code <n>
  */
-import { Buffer } from 'node:buffer';
-import { createSign } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-
-const PLAY_API_BASE = 'https://androidpublisher.googleapis.com/androidpublisher/v3/applications';
-const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
-const PUBLISHER_SCOPE = 'https://www.googleapis.com/auth/androidpublisher';
+import { PLAY_API_BASE, readServiceAccount, requestAccessToken } from './lib/playPublisher.mjs';
 
 function parseArguments(argv) {
   const parsed = {};
@@ -46,42 +41,6 @@ function parseArguments(argv) {
   return parsed;
 }
 
-function base64Url(input) {
-  return Buffer.from(input).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-async function requestAccessToken(serviceAccount) {
-  const issuedAt = Math.floor(Date.now() / 1000);
-  const header = base64Url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
-  const claims = base64Url(
-    JSON.stringify({
-      iss: serviceAccount.client_email,
-      scope: PUBLISHER_SCOPE,
-      aud: TOKEN_ENDPOINT,
-      iat: issuedAt,
-      exp: issuedAt + 3600,
-    })
-  );
-
-  const signer = createSign('RSA-SHA256');
-  signer.update(`${header}.${claims}`);
-  const signature = signer.sign(serviceAccount.private_key, 'base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-
-  const response = await fetch(TOKEN_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-      assertion: `${header}.${claims}.${signature}`,
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Google rejected the service-account assertion (${response.status}): ${await response.text()}`);
-  }
-  return (await response.json()).access_token;
-}
-
 async function callPlayApi(accessToken, path, method = 'GET') {
   const response = await fetch(`${PLAY_API_BASE}${path}`, {
     method,
@@ -97,7 +56,7 @@ async function main() {
     throw new Error(`--version-code must be a positive integer, got "${options['version-code']}".`);
   }
 
-  const serviceAccount = JSON.parse(readFileSync(options.key, 'utf8'));
+  const serviceAccount = readServiceAccount(options.key);
   const accessToken = await requestAccessToken(serviceAccount);
   const applicationId = options.package;
 

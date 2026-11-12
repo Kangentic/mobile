@@ -183,8 +183,8 @@ describe('the e2e changes classifier', () => {
         'a whole re-capture',
         [
           'store/screenshots/android/phone/01-agents.png',
-          'store/screenshots/android/seven-inch/02-session-terminal.png',
-          'store/screenshots/android/ten-inch/05-board.png',
+          'store/screenshots/android/seven-inch/03-session-terminal.png',
+          'store/screenshots/android/ten-inch/02-board.png',
           'store/screenshots/ios/iphone-6.9/06-file-diff.png',
           'store/screenshots/README.md',
         ],

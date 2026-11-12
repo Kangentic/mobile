@@ -1191,6 +1191,7 @@ describe('workflow env-gated steps are defined in their own job', () => {
     'e2e.yml',
     'cache-cleanup.yml',
     'app-store-check.yml',
+    'store-listing.yml',
   ];
 
   it.each(workflowFiles)('%s gates steps only on env its job defines', (workflowFile) => {
@@ -1857,7 +1858,32 @@ describe('app-store-check read-only preflight', () => {
       .join('\n');
     expect(runs).toContain('scripts/prepareAppStoreRelease.mjs');
     expect(runs).toContain('--mode check');
-    expect(runs).not.toMatch(/--mode (prepare|submit)/);
+    // Every mode, not a list of the writing ones: the script grew a
+    // `screenshots` mode in task #149, and a deny-list written before it would
+    // have let that mode into this ungated workflow with the test still green.
+    const modes = [...runs.matchAll(/--mode (\S+)/g)].map((match) => match[1]);
+    expect(modes.length).toBeGreaterThan(0);
+    expect([...new Set(modes)]).toEqual(['check']);
+  });
+
+  it('reports the listing screenshots against the committed frames', () => {
+    const runs = Object.values(checkWorkflow.jobs)
+      .flatMap((job) => job.steps ?? [])
+      .map((step) => step.run ?? '')
+      .join('\n');
+    const directory = runs.match(/--screenshots-dir (\S+)/)?.[1];
+    expect(directory).toBe('store/screenshots/ios/iphone-6.9');
+    // A literal in a workflow: only this keeps it pointing at a shelf that exists.
+    expect(existsSync(`${repositoryRoot}${directory}`)).toBe(true);
+  });
+
+  it('never opens a Play edit', () => {
+    // A Play listing check has to open an edit, and opening one invalidates the
+    // service account's other open edit. This preflight is run while an Android
+    // submission may be uploading, so the Play check lives in store-listing.yml.
+    const source = readFileSync(`${repositoryRoot}.github/workflows/app-store-check.yml`, 'utf8');
+    expect(source).not.toContain('syncPlayListingImages.mjs');
+    expect(source).not.toContain('secrets.PLAY_SERVICE_ACCOUNT_JSON');
   });
 
   it('names the bundle id the app ships under, and takes the version from the dispatched input', () => {
@@ -1883,6 +1909,211 @@ describe('app-store-check read-only preflight', () => {
     for (const job of Object.values(checkWorkflow.jobs)) {
       expect(Object.values(job.permissions ?? {})).not.toContain('write');
     }
+  });
+});
+
+describe('listing screenshots are uploaded by the release workflows', () => {
+  // Task #149. Until it, the committed frames in store/screenshots/ reached the
+  // two listings by hand: three Play shelves dragged into the Console, and the
+  // iPhone shelf through Media Manager between the two App Store approvals. The
+  // scripts are covered by their own tests; these lock WHERE they run, which is
+  // most of what makes them safe.
+  interface ListingStep {
+    id?: string;
+    name?: string;
+    if?: string;
+    run?: string;
+    env?: Record<string, string>;
+    'continue-on-error'?: boolean;
+    'timeout-minutes'?: number;
+  }
+  interface ListingJob {
+    name?: string;
+    needs?: string | string[];
+    if?: string;
+    environment?: string;
+    permissions?: Record<string, string>;
+    steps?: ListingStep[];
+  }
+  interface ListingWorkflow {
+    on: Record<string, { inputs?: Record<string, { default?: unknown; options?: string[] }> } | null>;
+    permissions?: Record<string, string>;
+    concurrency?: { group?: string; 'cancel-in-progress'?: boolean };
+    jobs: Record<string, ListingJob>;
+  }
+  const readWorkflow = (file: string) =>
+    parseYaml(readFileSync(`${repositoryRoot}.github/workflows/${file}`, 'utf8')) as ListingWorkflow;
+
+  const android = readWorkflow('build-android.yml');
+  const ios = readWorkflow('build-ios.yml');
+  const storeListing = readWorkflow('store-listing.yml');
+
+  const IOS_SHELF = 'store/screenshots/ios/iphone-6.9';
+  const runsOf = (job: ListingJob | undefined) => (job?.steps ?? []).map((step) => step.run ?? '').join('\n');
+
+  describe('Google Play', () => {
+    const job = android.jobs['listing-images'];
+
+    it('runs only after the release has committed, and only when it did', () => {
+      expect(job).toBeDefined();
+      // A listing change waiting in Publishing overview fails a release's
+      // commit, so the release goes first. `needs` is what makes that structural.
+      expect(job.needs).toBe('submit-play');
+      // The exact string. With no status function in it GitHub adds success(),
+      // so the job cannot run unless submit-play succeeded. An always() or a
+      // !cancelled() here would run it after a FAILED release.
+      expect(job.if).toBe(
+        "inputs.submit_track == 'production' && inputs.rollout == '' && inputs.listing_images != 'skip'"
+      );
+      expect(job.if).not.toMatch(/always\(\)|cancelled\(\)|failure\(\)/);
+    });
+
+    it('stays out of submit-play, so a failure cannot fail the release or skip its tag', () => {
+      expect(runsOf(android.jobs['submit-play'])).not.toContain('syncPlayListingImages.mjs');
+      const run = runsOf(job);
+      expect(run).toContain('scripts/syncPlayListingImages.mjs');
+      expect(run).toContain('--mode sync');
+      expect(run).toContain('--package com.kangentic.mobile');
+    });
+
+    it('needs no second approval, and no write access to the repository', () => {
+      // It cannot run unless the job behind the google-play gate succeeded, so
+      // a gate here would only add back the click this job removes.
+      expect(job.environment).toBeUndefined();
+      expect(android.jobs['submit-play'].environment).toBe('google-play');
+      expect(job.permissions).toEqual({ contents: 'read' });
+    });
+
+    it('can be switched off for one release, and is on by default', () => {
+      const input = android.on.workflow_dispatch?.inputs?.listing_images;
+      expect(input?.default).toBe('auto');
+      expect(input?.options).toEqual(['auto', 'skip']);
+    });
+  });
+
+  describe('App Store', () => {
+    const steps = ios.jobs['submit-testflight'].steps ?? [];
+    const names = steps.map((step) => step.name);
+    const sync = steps.find((step) => step.name === 'Sync the App Store screenshots');
+    const summary = steps.find((step) => step.name === 'Write the submit summary');
+    const submit = (ios.jobs['submit-app-review'].steps ?? []).find(
+      (step) => step.name === 'Submit the App Store version for review'
+    );
+
+    it('syncs in stage 1, after the version is prepared', () => {
+      expect(sync).toBeDefined();
+      expect(names.indexOf('Sync the App Store screenshots')).toBeGreaterThan(
+        names.indexOf('Prepare the App Store version for a full release')
+      );
+      expect(sync?.if).toBe("inputs.submit == 'appstore' && inputs.listing_images != 'skip'");
+      expect(sync?.run).toContain('scripts/prepareAppStoreRelease.mjs');
+      expect(sync?.run).toContain('--mode screenshots');
+      expect(sync?.run).toContain(`--screenshots-dir ${IOS_SHELF}`);
+      expect(sync?.run).toContain('--version "$VERSION_NAME"');
+      expect(sync?.env?.VERSION_NAME).toBe('${{ needs.device.outputs.version-name }}');
+    });
+
+    it('cannot fail the job, or hang it past the summary', () => {
+      // submit-app-review `needs` this job. A red job would skip stage 2 for
+      // the whole run, and a re-run uses the same commit, so it could never
+      // pick up a fix to the script.
+      expect(sync?.['continue-on-error']).toBe(true);
+      expect(typeof sync?.['timeout-minutes']).toBe('number');
+      expect(sync?.['timeout-minutes']).toBeLessThan(60);
+    });
+
+    it('reports the sync from its outcome, never its conclusion', () => {
+      // Under continue-on-error a failed step's `conclusion` is "success", so a
+      // summary reading it would report every failed sync as a success.
+      expect(typeof sync?.id).toBe('string');
+      expect(summary?.env?.SCREENSHOTS_OUTCOME).toBe(`\${{ steps.${sync?.id}.outcome }}`);
+      expect(summary?.env?.LISTING_IMAGES).toBe('${{ inputs.listing_images }}');
+      expect(summary?.run).toContain('[ "$SCREENSHOTS_OUTCOME" = "success" ]');
+      expect(summary?.run).toContain('NOT synced');
+      // The instruction this step replaced. Left in, it would tell the approver
+      // to do by hand what stage 1 has just done.
+      expect(summary?.run).not.toContain('Update the listing screenshots in App Store Connect first');
+    });
+
+    it('makes stage 2 the gate: it compares the listing with the committed frames unless told to skip', () => {
+      // Stage 1's sync is allowed to fail, so the refusal has to live here.
+      expect(submit?.env?.LISTING_IMAGES).toBe('${{ inputs.listing_images }}');
+      expect(submit?.run).toContain('[ "$LISTING_IMAGES" != "skip" ]');
+      expect(submit?.run).toContain(`--screenshots-dir ${IOS_SHELF}`);
+    });
+
+    it('can be switched off for one release, and is on by default', () => {
+      const input = ios.on.workflow_dispatch?.inputs?.listing_images;
+      expect(input?.default).toBe('auto');
+      expect(input?.options).toEqual(['auto', 'skip']);
+    });
+
+    it('points at a shelf that exists', () => {
+      expect(existsSync(`${repositoryRoot}${IOS_SHELF}`)).toBe(true);
+    });
+  });
+
+  describe('store-listing.yml, the on-demand path', () => {
+    it('runs only when dispatched by hand, read-only by default', () => {
+      expect(Object.keys(storeListing.on)).toEqual(['workflow_dispatch']);
+      // A changed default would turn a bare dispatch into a write to a public listing.
+      expect(storeListing.on.workflow_dispatch?.inputs?.mode?.default).toBe('check');
+      expect(storeListing.permissions).toEqual({ contents: 'read' });
+    });
+
+    it('never cancels a run in flight', () => {
+      // Two Play edits from one account invalidate each other, and a sync cut
+      // off between two App Store placements leaves a listing half-replaced.
+      expect(storeListing.concurrency?.['cancel-in-progress']).toBe(false);
+      expect(storeListing.concurrency?.group).not.toContain('${{');
+    });
+
+    it('puts each store behind the same approval as that store\'s release', () => {
+      expect(storeListing.jobs['sync-play'].environment).toBe('google-play');
+      expect(storeListing.jobs['sync-app-store'].environment).toBe('app-store-connect');
+      expect(runsOf(storeListing.jobs['sync-play'])).toContain('--mode sync');
+      expect(runsOf(storeListing.jobs['sync-app-store'])).toContain('--mode screenshots');
+      expect(runsOf(storeListing.jobs['sync-app-store'])).toContain(`--screenshots-dir ${IOS_SHELF}`);
+    });
+  });
+
+  it('never runs a writing mode of either listing script in a job with no approval behind it', () => {
+    // The one rule under all of the above, checked across every workflow so a
+    // future workflow is covered without anyone remembering this test: a job
+    // that can change a store listing either names a protected environment, or
+    // (build-android's listing-images, the single exception) runs only after a
+    // job that does.
+    const workflowDirectory = `${repositoryRoot}.github/workflows`;
+    const writingJobs: string[] = [];
+    for (const file of readdirSync(workflowDirectory).filter((name) => name.endsWith('.yml'))) {
+      const workflow = readWorkflow(file);
+      for (const [jobName, job] of Object.entries(workflow.jobs)) {
+        const modes = (job.steps ?? [])
+          .map((step) => step.run ?? '')
+          .filter((run) => /syncPlayListingImages\.mjs|prepareAppStoreRelease\.mjs/.test(run))
+          .flatMap((run) => [...run.matchAll(/--mode (\S+)/g)].map((match) => match[1]));
+        if (modes.every((mode) => mode === 'check')) continue;
+
+        writingJobs.push(`${file}:${jobName}`);
+        if (job.environment) continue;
+        const gatedBy = [job.needs].flat().filter((needed): needed is string => typeof needed === 'string');
+        expect(
+          gatedBy.some((needed) => Boolean(workflow.jobs[needed]?.environment)),
+          `${file}: job "${jobName}" runs a writing listing mode with no environment, and needs no job that has one`
+        ).toBe(true);
+        expect(job.if ?? '', `${file}: job "${jobName}" must not run after a failed gate`).not.toMatch(
+          /always\(\)|cancelled\(\)|failure\(\)/
+        );
+      }
+    }
+    // Non-vacuity guard: the scan found the jobs it exists to police.
+    expect(writingJobs.sort()).toEqual([
+      'build-android.yml:listing-images',
+      'build-ios.yml:submit-app-review',
+      'build-ios.yml:submit-testflight',
+      'store-listing.yml:sync-app-store',
+      'store-listing.yml:sync-play',
+    ]);
   });
 });
 

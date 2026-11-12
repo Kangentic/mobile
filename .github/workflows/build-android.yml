@@ -56,6 +56,13 @@ on:
         description: 'Fraction of users for a staged rollout, e.g. 0.1. Empty means release to everyone.'
         type: string
         default: ''
+      listing_images:
+        description: 'After a full production release: auto = put the committed store/screenshots/android frames on the Play listing if it differs. skip = leave the listing alone.'
+        type: choice
+        default: auto
+        options:
+          - auto
+          - skip
       crash_test:
         description: 'Reveal the crash-reporting test rows in Settings. For verifying what a crash report contains; never for a store submission.'
         type: boolean
@@ -750,4 +757,76 @@ jobs:
               echo "If it turns out bad, Halt rollout in the Play Console (Releases -> Manage rollout) still"
               echo "works at 100%: it stops new installs and updates of this version. Then ship a higher versionCode."
             fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Puts the committed listing screenshots (store/screenshots/android/) on the
+  # Play store listing, once the release above has committed. Until task #149
+  # this was three shelves of seven frames dragged into the Console by hand.
+  #
+  # Its own job, not a step of submit-play, for three reasons:
+  #
+  #   - Order. A listing change waiting in Publishing overview makes a release's
+  #     commit fail with "Changes cannot be sent for review automatically", so
+  #     the release has to commit first. `needs` makes that structural: this job
+  #     cannot start until submit-play has uploaded, committed and tagged.
+  #   - Blast radius. A failure here cannot fail the release, cannot skip the
+  #     version-code tag, and leaves the listing untouched (a Play edit is a
+  #     transaction, and scripts/syncPlayListingImages.mjs only commits at the end).
+  #   - Recovery. "Re-run failed jobs" re-runs this job alone. A step inside
+  #     submit-play would re-upload the release to reach it.
+  #
+  # No environment, deliberately. It cannot run unless submit-play succeeded,
+  # and submit-play is behind the google-play approval, so a second gate here
+  # would only add the click this job exists to remove. The secret it reads is
+  # the one the ungated plan job already reads.
+  #
+  # Production and FULL releases only. The listing belongs to the app, not to a
+  # track, so a testing-track release, or a production release at 10%, must not
+  # change what every visitor to the store page sees. After a staged rollout
+  # completes, run store-listing.yml.
+  #
+  # The script decides whether there is anything to do by comparing the listing
+  # with the committed files, so a release that re-captured nothing uploads
+  # nothing and commits nothing.
+  #
+  # The condition is deliberately free of always(), !cancelled() and failure():
+  # with none of them, GitHub runs this job only when submit-play succeeded,
+  # which is the whole safety argument above. tests/unit/buildWorkflow.test.ts
+  # pins the exact string.
+  listing-images:
+    name: Listing images (Google Play)
+    needs: submit-play
+    if: inputs.submit_track == 'production' && inputs.rollout == '' && inputs.listing_images != 'skip'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      # No setup-node-deps: the script has no dependencies, so the runner's own
+      # Node is enough, as in app-store-check.yml.
+      - name: Sync the Play listing screenshots
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/play-service-account.json"
+          node scripts/syncPlayListingImages.mjs \
+            --key "$RUNNER_TEMP/play-service-account.json" \
+            --package com.kangentic.mobile \
+            --language en-US \
+            --mode sync
+
+      - name: Explain a failed listing sync
+        if: failure()
+        run: |
+          {
+            echo "### Play listing screenshots: NOT updated"
+            echo ""
+            echo "**The release is unaffected.** It committed, and was tagged, before this job started."
+            echo "The store listing still shows its previous screenshots."
+            echo ""
+            echo "Fix what the log above names, then re-run this job alone (Re-run failed jobs), or run"
+            echo "\`gh workflow run store-listing.yml -f platform=android -f mode=sync\`."
           } >> "$GITHUB_STEP_SUMMARY"
