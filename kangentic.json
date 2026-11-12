@@ -46,6 +46,7 @@
           {
             "name": "Apply findings",
             "type": "send_message",
+            "condition": "The last line of the agent's final message is anything other than \"Design: waiting on you\" (ignore case, punctuation and markdown). A reply whose last line is \"Design: waiting on you\" is waiting on the user's design review and does not count.",
             "message": "Check your last message for findings, recommendations or follow-up changes you have not applied yet, and apply them here in this task, not as follow-up tasks. Where one needs a decision, take your recommended option and name the alternative, unless it is a design choice you laid out for the user, which stays theirs. If there are none, say so. Then end your turn with a short summary and one final line, alone.\n\nWrite \"Design: waiting on you\" when the user should see this before it ships: a visible change to a screen, layout, styling, motion, haptics, user-facing copy or store frames, a design choice you laid out for the user, or a task where the user has given design feedback. Keep ending every turn on that line until the user says the design is ready, for example \"ship it\". Once they have, write \"Findings: applied\", on this visit and any later one.\n\nOtherwise write \"Findings: applied\"."
           }
         ]
@@ -153,7 +154,6 @@
       "color": "#10b981"
     }
   ],
-  "_modifiedBy": "7ef4fd0cb484",
   "profiles": [
     {
       "id": "484e938e-fea1-406c-9630-080c22ffaa01",
@@ -166,5 +166,6 @@
         }
       }
     }
-  ]
+  ],
+  "_modifiedBy": "7ef4fd0cb484"
 }

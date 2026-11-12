@@ -687,9 +687,10 @@ in a gitignored `CLAUDE.local.md` at the project root.
   match: the whole line, ignoring case, punctuation and markdown, checked in code at no cost).
   **Executing** moves on to Code Review on `Findings: applied`, holds on
   `Design: waiting on you` until the user approves a visible change ("ship it"), and at the
-  first turn end of a visit that does not move on, asks the agent once to apply its own findings
-  and end on one of the two. That includes a turn ending on the design line, since a
-  notification does not stop the rows below it, so that turn both notifies and asks. **Code
+  first turn end of a visit that ends on neither line, asks the agent once to apply its own
+  findings and end on one of the two. A turn that ends on the design line only notifies: Apply
+  findings carries an Automation agent Condition that skips it, because a Text match cannot say
+  "unless" and a notification does not stop the rows below it. **Code
   Review** moves to Testing on `Verdict: Ready` and back to Executing on `Verdict: Blocked`,
   except that a `Needs owner:` line below the verdict (a step only a person can do) matches
   neither row, so the card stops in Code Review for the user.
