@@ -2,7 +2,9 @@
 
 Raw device captures for the Google Play and App Store listings. Product imagery, not test
 output: every file here is a claim about what the app does, so look at each one before
-uploading it.
+committing it. **Committing is what publishes them:** the next release uploads whatever is here
+to both listings (see "How they reach the listings" below), and nobody looks at them again on
+the way.
 
 **Run `/store-screenshots`** to regenerate. It sequences all four shelves in the
 order that avoids waste (dispatch iOS first, capture Android while it builds),
@@ -43,26 +45,58 @@ ios/iphone-6.9/       1320x2868   App Store 6.9-inch iPhone shelf
 
 All four shelves carry the same seven shots, so the two listings tell one story.
 
-Filenames are numbered because both stores display screenshots in upload order and the upload
-tools (fastlane `supply` / `deliver`) sort by filename. The numbering is the display order, not
-the order the capture flow visits the screens.
+Both stores display screenshots in upload order, and the numbering IS that order: the Agents
+feed, the Board, then the detail views. It is not the order the capture flow visits the screens.
+The upload scripts do not sort filenames, they walk `SHOT_NAMES` in `scripts/storeScreenshots.mjs`,
+and the numbers are kept in step with that list so a hand upload sorted by filename lands the same
+way. (Until 2026-11-12 the Board was `05`, behind the three session views, and on v1.4.0 the Play
+shelves were reordered by hand in the Console to fix it.)
 
 | File | Shows |
 |---|---|
 | `01-agents` | The Agents feed with a session waiting on approval |
-| `02-session-terminal` | The live terminal mirror of the desktop PTY |
-| `03-session-chat` | The readable transcript with a permission card |
-| `04-session-changes` | The changed files in the agent's worktree |
-| `05-board` | The board's Executing column, with live sessions |
+| `02-board` | The board's Executing column, with live sessions |
+| `03-session-terminal` | The live terminal mirror of the desktop PTY |
+| `04-session-chat` | The readable transcript with a permission card |
+| `05-session-changes` | The changed files in the agent's worktree |
 | `06-file-diff` | A unified diff for one changed file |
 | `07-command-terminal` | A Command Terminal, started from the Board, answering a question about the project |
 
-The directory names map onto fastlane's metadata layout
-(`fastlane/metadata/android/en-US/images/phoneScreenshots` and its `sevenInch` / `tenInch`
-siblings), so adopting `supply` later is a copy step rather than a re-organisation. Fastlane
-itself is NOT used to capture: `screengrab` needs an Espresso instrumentation APK and `snapshot`
-needs an XCUITest target, and both would have to live inside `android/` or `ios/`, which this
-project generates and throws away (see `.claude/rules/expo-cng.md`).
+Each Android directory maps onto one Play image type: `phone` is `phoneScreenshots`, `seven-inch`
+is `sevenInchScreenshots`, `ten-inch` is `tenInchScreenshots`.
+
+Fastlane is NOT used, to capture or to upload. `screengrab` needs an Espresso instrumentation APK
+and `snapshot` needs an XCUITest target, and both would have to live inside `android/` or `ios/`,
+which this project generates and throws away (see `.claude/rules/expo-cng.md`). `supply` and
+`deliver` would add a Ruby toolchain for one step that plain Node covers.
+
+## How they reach the listings
+
+No console step (task #149). A release uploads them:
+
+- **Google Play:** after a full production release has committed, the `Listing images (Google
+  Play)` job of `build-android.yml` replaces any shelf whose listed images are not these files
+  (`scripts/syncPlayListingImages.mjs`).
+- **App Store:** stage 1 of `build-ios.yml -f submit=appstore` makes the version's screenshots be
+  the `ios/iphone-6.9/` files, and stage 2 refuses to submit a listing that shows anything else
+  (`scripts/prepareAppStoreRelease.mjs --mode screenshots`).
+
+Between releases, `gh workflow run store-listing.yml -f mode=check` says whether each listing
+shows these files, and `-f mode=sync` makes it so, behind each store's approval. A shelf that
+already matches is left alone, so re-running costs nothing.
+
+Three properties of these files that the upload depends on, each enforced by
+`scripts/lib/listingFrames.mjs` before anything is sent, and by
+`tests/unit/listingFrames.test.ts` on the committed files:
+
+- **Exactly the seven shots, nothing else.** A renamed shot that leaves its old file behind stops
+  the upload.
+- **No alpha channel.** Both stores reject one. Do not run these through an optimiser that adds it.
+- **No two iPhone frames the same length.** A frame uploaded to App Store Connect by hand is
+  recognised by its exact size, because Apple's asset library has no checksum to compare.
+
+The full account is "Getting the frames onto the listings" in
+[docs/developer-guide.md](../../docs/developer-guide.md).
 
 ## What the capture guarantees
 
@@ -100,8 +134,13 @@ and smaller entries read "Using 6.9" Display" with their controls greyed out. Tw
 worth knowing before you go hunting:
 
 - The **version page lists the derived 6.5" slot first**, which reads as though 6.5" is what it
-  wants. It is not. Upload through **Media Manager** and target 6.9" explicitly.
+  wants. It is not. A hand upload (the fallback when a release's sync fails) goes through **Media
+  Manager** and targets 6.9" explicitly.
 - One set covers the whole iPhone listing. There is no second size to produce.
+
+Through the API the same slot is the placement group `IPHONE_DYNAMIC_ISLAND_LARGE_PROFILE`, and
+the deprecated screenshot-set API calls it `APP_IPHONE_67`. The upload never hard-codes either:
+it resolves the group from Apple's reference data by the frames' pixel size.
 
 **Apple's minimum is ONE, not three.** Its upload help says "you're only required to provide a
 single screenshot (6.5" or 6.9") for iPhone", and Media Manager says "only the first 3 will be

@@ -9,15 +9,24 @@ ready to paste.
 (maintainer, 2026-10-07), so the listing and its declarations went through review; the "entered,
 not submitted" notes further down describe the state on 2026-07-29 and are kept for their lessons.
 
-**The images in both consoles are behind `store/screenshots/` until the v1.1.0 upload.** All four
-shelves were re-captured on 2026-10-12 (task #115) for v1.1.0, now seven frames each: the
+**The listing screenshots upload from `store/screenshots/` by themselves** (task #149,
+2026-11-12): the three Play shelves after a full production release commits, the iPhone shelf in
+stage 1 of an App Store release, and either one on demand with `store-listing.yml`. "Getting the
+frames onto the listings" in [developer-guide.md](developer-guide.md) has the detail. This
+repository is the source of truth for them, so do not change a screenshot in either console: the
+next sync replaces it.
+
+**Where the listings stood on 2026-11-12, before any sync had run.** Read from the store, not
+remembered: the App Store listing (version 1.5.0, waiting for review, so locked) was showing the
+seven frames committed for v1.1.0 on 2026-10-12, byte for byte, and none of the frames
+re-captured for v1.4.0 or v1.5.0. The Play listing had not been read: its check
+(`gh workflow run store-listing.yml -f platform=android -f mode=check`) only exists once that
+workflow is on `main`. Replace this paragraph with the date each listing was first synced.
+
+All four shelves have carried seven frames since the 2026-10-12 capture (task #115): the
 redesigned headers and sheets, the Board header's Terminals button, and a seventh frame of a
 Command Terminal, which replays one RECORDED Claude Code turn (src/devsupport/commandTerminalCapture.ts),
-never authored output. The 2026-10-08 set (task #103) was never uploaded; this set replaces it.
-Upload from `store/screenshots/`: the three Play shelves under the store listing, AFTER the Play
-release has committed (an unsent listing edit blocks the release's API commit), and the iPhone set
-through App Store Connect's Media Manager on the 6.9" slot (see Screenshots below). Once both are
-up, say so here.
+never authored output. The 2026-10-08 set (task #103) was never uploaded.
 
 The two Play Console image uploads are produced by `@kangentic/branding` and are not bundled
 into the app - upload them by hand from `node_modules/@kangentic/branding/resources/mobile/`
@@ -48,10 +57,17 @@ provide a single screenshot"), the cap is 10, and only the first 3 appear on ins
 the "minimum three" an earlier version of this file claimed was the number Apple DISPLAYS, not the
 number it requires. Seven are tracked.
 
-Upload the iPhone set through **Media Manager**, targeting **6.9"**. That is the source slot, and
-App Store Connect derives 6.5", 6.3" and smaller from it - their controls are greyed out. The
-version page happens to list the derived 6.5" slot first, which misleadingly reads as though 6.5"
-is what it wants.
+Every shelf holds the frames in listing order, which is also filename order: the Agents feed, the
+Board, then the session terminal, chat, changes, a file diff and a Command Terminal. The upload
+scripts follow `SHOT_NAMES` in `scripts/storeScreenshots.mjs`, the one list that order lives in.
+
+Nothing here is uploaded by hand any more. The hand route is kept as the fallback for a release
+whose sync failed: the iPhone set goes through **Media Manager**, targeting **6.9"**, the seven
+files in filename order. That is the source slot, and App Store Connect derives 6.5", 6.3" and
+smaller from it - their controls are greyed out. The version page happens to list the derived
+6.5" slot first, which misleadingly reads as though 6.5" is what it wants. Upload the committed
+files themselves: the App Store stage that submits for review recognises them by their exact size
+and refuses anything else.
 
 The Android shelves are captured locally against an emulator. The iOS shelf cannot be captured
 from Windows and runs on a free macOS runner instead, at roughly 45 minutes per attempt.
