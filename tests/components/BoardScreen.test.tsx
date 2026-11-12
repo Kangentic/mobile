@@ -611,7 +611,7 @@ describe('BoardScreen', () => {
    * for a queued session. The desktop card draws no icon and "Queued..." in
    * its footer.
    */
-  it('draws a queued task that still has a live session entry with "Queued..." and no icon', async () => {
+  it('draws a queued task that still has a live session entry with "Queued..." beside a still clock and no icon', async () => {
     useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
     useActivityStore
       .getState()
@@ -629,6 +629,7 @@ describe('BoardScreen', () => {
     );
 
     expect(screen.getByTestId('board-card-task-1-status-bar-label')).toHaveTextContent('Queued...');
+    expect(screen.getByTestId('board-card-task-1-status-bar-queued')).toBeTruthy();
     expect(screen.queryByTestId('board-card-task-1-status')).toBeNull();
   });
 
@@ -665,7 +666,7 @@ describe('BoardScreen', () => {
     expect(screen.getByTestId('board-card-task-1-status-bar')).toBeTruthy();
     expect(screen.getByTestId('board-card-task-1-status-bar-label')).toHaveTextContent('Paused');
     expect(screen.getByTestId('board-card-task-1-status-bar-paused')).toBeTruthy();
-    // A still glyph: the spinner is for queued and starting, not for a pause.
+    // A still glyph: the spinner is for starting and a respawn's step, not for a pause or a queue.
     expect(screen.queryByTestId('board-card-task-1-status-bar-spinner')).toBeNull();
   });
 

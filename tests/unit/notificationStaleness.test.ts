@@ -70,6 +70,7 @@ function entry(overrides: Partial<SessionActivityEntry> = {}): SessionActivityEn
     sessionStatus: 'running',
     resuming: false,
     resumable: false,
+    statusPushed: true,
     ...overrides,
   };
 }

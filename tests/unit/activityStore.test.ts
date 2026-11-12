@@ -492,8 +492,12 @@ describe('activityStore', () => {
     });
 
     /**
-     * The QUEUED retirement, which is deliberately WIDER than the 'suspended'
-     * one above and must stay that way.
+     * The QUEUED retirement on a PRE-0.16.0 desktop, which is deliberately
+     * WIDER than the 'suspended' one above and must stay that way there.
+     * `streamSnapshotFixture` sends neither `resuming` nor `resumable`, which is
+     * exactly the snapshot such a desktop serves; the 0.16.0+ rule, where only
+     * the `status` push or visible work retires 'queued', is pinned in the
+     * protocol 0.16.0 block below.
      *
      * A queued placeholder has `pty: null` (the desktop's shouldQueue branch),
      * so it can emit nothing at all - which makes ANY payload but a
@@ -1334,6 +1338,149 @@ describe('activityStore - protocol 0.16.0', () => {
 
     applyActivityEvent(activityEvent('sess-1', { type: 'status', status: 'suspended', resuming: true, resumable: true }));
     expect(entry('sess-1')).toMatchObject({ sessionStatus: 'suspended', resumable: true });
+  });
+
+  /**
+   * The queued retirement on a desktop that pushes `status` (task #141). Since
+   * desktop d0aff06d4 a running agent moved into a full column queues a RESUME
+   * of the same conversation, and the subscribe pushes that conversation's
+   * `message-preview` right behind the snapshot. The pre-0.16 rule read the
+   * preview as proof of promotion and drew the queued card "Resuming
+   * agent..." in Idle. Here only the push, or the agent visibly working, moves
+   * it on.
+   *
+   * Seen failing against the unfixed rule (any payload but `session-ended` or
+   * `status` retires 'queued'): every "stays queued" case below read
+   * "expected 'running' to be 'queued'".
+   */
+  describe('a queued session on a desktop that pushes status', () => {
+    const queuedResumeSnapshot = streamSnapshotFixture({
+      activity: { state: 'idle', reason: { kind: 'idle' } },
+      usage: null,
+      sessionStatus: 'queued',
+      resuming: true,
+      resumable: false,
+    });
+
+    function subscribeQueuedResume(): void {
+      const { registerSession, applySnapshot } = useActivityStore.getState();
+      registerSession('sess-1', 'task-1', 'project-1');
+      applySnapshot('sess-1', 'task-1', 'project-1', queuedResumeSnapshot);
+      expect(entry('sess-1')).toMatchObject({ sessionStatus: 'queued', statusPushed: true });
+    }
+
+    it.each([
+      { label: 'the subscribe\'s message preview', payload: { type: 'message-preview' as const, text: 'PR #782 is green and flake-free.' } },
+      { label: 'a usage report', payload: { type: 'usage' as const, usage: usageFixture() } },
+      { label: 'a session event', payload: { type: 'event' as const, event: { ts: 1, type: 'tool_start' as const } } },
+      { label: 'an idle activity', payload: { type: 'activity' as const, state: 'idle' as const, reason: { kind: 'idle' as const } } },
+      { label: 'a resolved permission', payload: { type: 'permission' as const, promptId: 'prompt-1', pending: false } },
+    ])('stays queued through $label', ({ payload }) => {
+      subscribeQueuedResume();
+
+      useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', payload));
+
+      expect(entry('sess-1').sessionStatus).toBe('queued');
+    });
+
+    it('is promoted by the desktop\'s status push', () => {
+      subscribeQueuedResume();
+      useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'message-preview', text: 'PR #782 is green.' }));
+
+      useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'status', status: 'running', resuming: true, resumable: false }));
+
+      expect(entry('sess-1')).toMatchObject({ sessionStatus: 'running', resuming: true });
+    });
+
+    /**
+     * The fallback for a push applied BEFORE its snapshot (an event dispatches
+     * at once while a response resolves a promise), which the older 'queued'
+     * snapshot then overwrites. A placeholder with no PTY can neither think nor
+     * ask, so either is proof the queue let it go.
+     */
+    it.each([
+      { label: 'a thinking activity', payload: { type: 'activity' as const, state: 'thinking' as const, reason: { kind: 'turn-active' as const } } },
+      { label: 'a permission activity', payload: { type: 'activity' as const, state: 'permission' as const, reason: { kind: 'permission' as const } } },
+      { label: 'a pending permission prompt', payload: { type: 'permission' as const, promptId: 'prompt-1', pending: true } },
+    ])('is promoted by $label, the agent visibly working', ({ payload }) => {
+      subscribeQueuedResume();
+
+      useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', payload));
+
+      expect(entry('sess-1').sessionStatus).toBe('running');
+    });
+
+    it('learns the desktop pushes status from the push itself, with no marker on the snapshot', () => {
+      const { registerSession, applySnapshot, applyActivityEvent } = useActivityStore.getState();
+      registerSession('sess-1', 'task-1', 'project-1');
+      applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'running' }));
+      expect(entry('sess-1').statusPushed).toBe(false);
+
+      applyActivityEvent(activityEvent('sess-1', { type: 'status', status: 'queued', resuming: true, resumable: false }));
+      applyActivityEvent(activityEvent('sess-1', { type: 'message-preview', text: 'PR #782 is green.' }));
+
+      expect(entry('sess-1')).toMatchObject({ sessionStatus: 'queued', statusPushed: true });
+    });
+
+    it('keeps the marker through a later snapshot', () => {
+      subscribeQueuedResume();
+
+      useActivityStore.getState().applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'queued' }));
+
+      expect(entry('sess-1').statusPushed).toBe(true);
+    });
+
+    /**
+     * The marker is a PRESENCE check, not truthiness: a 0.16.0+ desktop sends
+     * both fields on every snapshot, so `false`/`false` still means it pushes
+     * status. The fixture only sets the keys a row names, so "alone" means the
+     * other key is absent from the object, as the pre-0.16 wire leaves it.
+     *
+     * Mutation seen failing: statusPushed read as
+     * `snapshot.resuming === true || snapshot.resumable === true`, so the
+     * false/false row read "expected false to be true".
+     */
+    it.each([
+      { label: 'resuming false and resumable false', fields: { resuming: false, resumable: false }, expected: true },
+      { label: 'resuming true alone', fields: { resuming: true }, expected: true },
+      { label: 'resumable true alone', fields: { resumable: true }, expected: true },
+      { label: 'neither field', fields: {}, expected: false },
+    ])('marks statusPushed $expected for a queued snapshot with $label', ({ fields, expected }) => {
+      const { registerSession, applySnapshot } = useActivityStore.getState();
+      registerSession('sess-1', 'task-1', 'project-1');
+
+      applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'queued', ...fields }));
+
+      expect(entry('sess-1').statusPushed).toBe(expected);
+    });
+
+    it('keeps a false/false snapshot queued through the subscribe\'s message preview', () => {
+      const { registerSession, applySnapshot, applyActivityEvent } = useActivityStore.getState();
+      registerSession('sess-1', 'task-1', 'project-1');
+      applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ sessionStatus: 'queued', resuming: false, resumable: false }));
+
+      applyActivityEvent(activityEvent('sess-1', { type: 'message-preview', text: 'PR #782 is green.' }));
+
+      expect(entry('sess-1').sessionStatus).toBe('queued');
+    });
+
+    /**
+     * A session ending never proves the queue let a placeholder go. The feed
+     * ends, the status stays. With statusPushed true two lines of retiresQueued
+     * each cover it (the explicit session-ended exclusion and the trailing
+     * `return false`), so neither mutation alone can fail this.
+     *
+     * Mutation seen failing: BOTH `payload.type === 'session-ended' ||` dropped
+     * and the trailing `return false` made `return true`; this read
+     * "expected 'running' to be 'queued'" (feedStatus still 'ended').
+     */
+    it('stays queued through a session ending, while the feed ends', () => {
+      subscribeQueuedResume();
+
+      useActivityStore.getState().applyActivityEvent(activityEvent('sess-1', { type: 'session-ended', intentional: false }));
+
+      expect(entry('sess-1')).toMatchObject({ sessionStatus: 'queued', feedStatus: 'ended' });
+    });
   });
 
   it('records a pushed exited as the status only, never as the session ending', () => {

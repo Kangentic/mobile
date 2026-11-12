@@ -6,6 +6,7 @@ import * as Reanimated from 'react-native-reanimated';
 import {
   Ban,
   CirclePause,
+  Clock,
   GitMerge,
   GitMergeConflict,
   GitPullRequest,
@@ -132,6 +133,8 @@ describe('TaskCard', () => {
     });
 
     const STATUS_BAR = `${BASE_TEST_ID}-status-bar`;
+    /** A footer that spins: a respawn's step. The spinner tests below drive it, since a queued card no longer spins. */
+    const SPINNING_STEP = { kind: 'preparing' as const, label: 'Creating worktree...' };
     const unknownWindowUsage = usageFixture({
       contextWindow: { usedPercentage: 0, usedTokens: 0, cacheTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, contextWindowSize: 0 },
     });
@@ -187,12 +190,66 @@ describe('TaskCard', () => {
       expect(screen.queryByTestId(STATUS_BAR)).toBeNull();
     });
 
-    it('shows "Queued..." with a spinner for a queued session, and no usage bar even when usage is known', async () => {
+    /**
+     * The desktop's queued footer (task-card-view.tsx `QueuedFooter`): a still
+     * lucide Clock at 12, never a spinner, because waiting is not loading and a
+     * queue can last minutes (task #141).
+     *
+     * Mutation seen failing: the queued arm drawing `glyph="spinner"` again
+     * (the footer before #141): "Unable to find an element with testID:
+     * task-card-status-bar-queued".
+     */
+    it('shows "Queued..." with a still clock for a queued session, and no usage bar even when usage is known', async () => {
       await renderTaskCard({ sessionDisplay: { kind: 'queued' }, usage: usageFixture() });
       expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Queued...');
-      expect(screen.getByTestId(`${STATUS_BAR}-spinner`)).toBeTruthy();
+      expect(getLucideGlyph(screen.getByTestId(`${STATUS_BAR}-queued`), Clock)).toBeTruthy();
+      expect(screen.queryByTestId(`${STATUS_BAR}-spinner`)).toBeNull();
       expect(screen.queryByTestId(`${BASE_TEST_ID}-usage`)).toBeNull();
     });
+
+    /**
+     * The mechanism under the still clock: nothing animates, so a queued card
+     * registers no mapper beyond the card's own press feedback, exactly as a
+     * paused card does. A spinner would add one.
+     */
+    it('registers no animated mapper for the queued footer beyond a paused card\'s', async () => {
+      const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
+      await renderTaskCard({ sessionDisplay: { kind: 'suspended' } });
+      const pausedCardCalls = animatedStyleSpy.mock.calls.length;
+      await renderTaskCard({ sessionDisplay: { kind: 'queued' } });
+      expect(animatedStyleSpy.mock.calls.length - pausedCardCalls).toBe(pausedCardCalls);
+    });
+
+    /**
+     * No status line draws a track under it (task #141, decision A1): the
+     * desktop's `CardStatusBar` dropped its empty context track in d0aff06d4.
+     * The usage bar keeps its own, which is the only track a card draws.
+     *
+     * Mutation seen failing: the 4 dp track View restored under StatusBar's
+     * label row: each case found one track where none was expected.
+     */
+    it.each([
+      ['starting', { kind: 'running' as const, resuming: false }],
+      ['resuming', { kind: 'running' as const, resuming: true }],
+      ['preparing', { kind: 'preparing' as const, label: 'Switching model...' }],
+      ['queued', { kind: 'queued' as const }],
+      ['suspended', { kind: 'suspended' as const }],
+    ])('draws no track under the %s status line', async (_name, sessionDisplay) => {
+      await renderTaskCard({ sessionDisplay, usage: null });
+      expect(statusBarTrackCount()).toBe(0);
+    });
+
+    it('draws no track under a workflow task\'s wait', async () => {
+      await renderTaskCard({ sessionDisplay: { kind: 'none' }, waiting: { label: 'Blocked by #14...', paused: false } });
+      expect(statusBarTrackCount()).toBe(0);
+    });
+
+    /** The host views 4 dp tall (the track's height) inside the rendered status bar. */
+    function statusBarTrackCount(): number {
+      return screen
+        .getByTestId(STATUS_BAR)
+        .queryAll((node) => typeof node.type === 'string' && StyleSheet.flatten(node.props.style as StyleProp<ViewStyle>)?.height === 4).length;
+    }
 
     it('shows "Paused" with a still pause circle for a suspended session', async () => {
       await renderTaskCard({ sessionDisplay: { kind: 'suspended' }, usage: usageFixture() });
@@ -300,7 +357,7 @@ describe('TaskCard', () => {
     it('spins with the desktop\'s 1s linear turn, looping forever', async () => {
       const withTimingSpy = jest.spyOn(Reanimated, 'withTiming');
       const withRepeatSpy = jest.spyOn(Reanimated, 'withRepeat');
-      await renderTaskCard({ sessionDisplay: { kind: 'queued' } });
+      await renderTaskCard({ sessionDisplay: SPINNING_STEP });
       expect(withTimingSpy).toHaveBeenCalledWith(1, expect.objectContaining({ duration: darkTerminalTheme.motion.statusSpinner.turnMs }));
       expect(withRepeatSpy).toHaveBeenCalledWith(expect.anything(), -1, false);
     });
@@ -316,7 +373,7 @@ describe('TaskCard', () => {
       const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
       await renderTaskCard({ sessionDisplay: { kind: 'suspended' } });
       const pausedCardCalls = animatedStyleSpy.mock.calls.length;
-      await renderTaskCard({ sessionDisplay: { kind: 'queued' } });
+      await renderTaskCard({ sessionDisplay: SPINNING_STEP });
       expect(animatedStyleSpy.mock.calls.length - pausedCardCalls).toBe(pausedCardCalls + 1);
     });
 
@@ -325,7 +382,7 @@ describe('TaskCard', () => {
       const animatedStyleSpy = jest.spyOn(Reanimated, 'useAnimatedStyle');
       await renderTaskCard({ sessionDisplay: { kind: 'suspended' } });
       const pausedCardCalls = animatedStyleSpy.mock.calls.length;
-      await renderTaskCard({ sessionDisplay: { kind: 'queued' } });
+      await renderTaskCard({ sessionDisplay: SPINNING_STEP });
       expect(getLucideGlyph(screen.getByTestId(`${STATUS_BAR}-spinner`), LoaderCircle)).toBeTruthy();
       expect(animatedStyleSpy.mock.calls.length - pausedCardCalls).toBe(pausedCardCalls);
     });
@@ -340,7 +397,7 @@ describe('TaskCard', () => {
               task={boardTaskFixture()}
               statusKind={null}
               showTicketNumbers={false}
-              sessionDisplay={{ kind: 'queued' }}
+              sessionDisplay={SPINNING_STEP}
               usage={null}
               bodyText="A task worth doing."
               onPress={jest.fn()}
@@ -353,10 +410,11 @@ describe('TaskCard', () => {
     });
 
     /**
-     * The spin is BOUNDED by `statusSpinner.holdAfterMs`: a queued session can
-     * wait for minutes, and a spin that never ends keeps the app drawing frames
-     * for as long as the row is mounted (motion-conventions.md). Past the bound
-     * the glyph takes the same still branch as reduced motion.
+     * The spin is BOUNDED by `statusSpinner.holdAfterMs`: an agent that never
+     * reports a model reads "Starting agent..." for as long as it runs, and a
+     * spin that never ends keeps the app drawing frames for as long as the row
+     * is mounted (motion-conventions.md). Past the bound the glyph takes the
+     * same still branch as reduced motion.
      *
      * A still glyph renders correctly either way, so these assert the
      * mechanism: the animated wrapper carries a `style` (the rotate) and the
@@ -368,7 +426,7 @@ describe('TaskCard', () => {
       const holdAfterMs = darkTerminalTheme.motion.statusSpinner.holdAfterMs;
       const onPress = jest.fn();
 
-      function queuedCard(testID: string): React.JSX.Element {
+      function stepCard(testID: string): React.JSX.Element {
         return (
           <ThemeProvider>
             <TaskCard
@@ -376,7 +434,7 @@ describe('TaskCard', () => {
               task={boardTaskFixture()}
               statusKind={null}
               showTicketNumbers={false}
-              sessionDisplay={{ kind: 'queued' }}
+              sessionDisplay={SPINNING_STEP}
               usage={null}
               bodyText="A task worth doing."
               onPress={onPress}
@@ -395,7 +453,7 @@ describe('TaskCard', () => {
       });
 
       it('holds the glyph still once the bound passes, under the same testID, registering no animated mapper', async () => {
-        await render(queuedCard(BASE_TEST_ID));
+        await render(stepCard(BASE_TEST_ID));
         const spinnerTestID = `${STATUS_BAR}-spinner`;
         // Control: it IS spinning to begin with, so the still assertions below
         // cannot pass merely because it never spun.
@@ -428,14 +486,14 @@ describe('TaskCard', () => {
        * tree with fresh state and could not tell the two designs apart.
        */
       it('spins again, for a full window of its own, when the instance is recycled into another row', async () => {
-        const { rerender } = await render(queuedCard('card-first'));
+        const { rerender } = await render(stepCard('card-first'));
         await act(() => {
           jest.advanceTimersByTime(holdAfterMs + 1);
         });
         expect(screen.getByTestId('card-first-status-bar-spinner').props.style).toBeUndefined();
 
         const withRepeatSpy = jest.spyOn(Reanimated, 'withRepeat');
-        await rerender(queuedCard('card-second'));
+        await rerender(stepCard('card-second'));
         const recycledTestID = 'card-second-status-bar-spinner';
         expect(screen.getByTestId(recycledTestID).props.style).toBeDefined();
         expect(withRepeatSpy).toHaveBeenCalledWith(expect.anything(), -1, false);
@@ -452,17 +510,18 @@ describe('TaskCard', () => {
 
       /**
        * The OTHER way one instance is reused: the SAME card (same testID) moves
-       * from one footer step to the next. "Queued..." can outlast the whole
-       * window, and the "Starting agent..." that follows is a new step the user
-       * is waiting on, so it spins for a window of its own. The footer keys the
-       * spinner on its label to get that; without the key the card's one
-       * StatusBar and StatusSpinner survive the step change and the new step
-       * inherits the window the queue already used up, drawing a still glyph
-       * from its first frame. The testID does not change between the two, so
-       * the testID-keyed expiry cannot help here, and `rerender` keeps the
-       * instance so only the key can tell them apart.
+       * from one footer step to the next. A respawn's step can outlast the
+       * whole window, and the "Starting agent..." that follows is a new step
+       * the user is waiting on, so it spins for a window of its own. The footer
+       * keys the spinner on its label to get that; without the key the card's
+       * one StatusBar and StatusSpinner survive the step change and the new
+       * step inherits the window the last one already used up, drawing a still
+       * glyph from its first frame. The testID does not change between the two,
+       * so the testID-keyed expiry cannot help here, and `rerender` keeps the
+       * instance so only the key can tell them apart. (This once ran from
+       * "Queued...", which is a still clock since task #141.)
        */
-      it('spins again, for a full window of its own, when the same card moves from "Queued..." to "Starting agent..."', async () => {
+      it('spins again, for a full window of its own, when the same card moves from a step to "Starting agent..."', async () => {
         const footerCard = (sessionDisplay: TaskCardProps['sessionDisplay']): React.JSX.Element => (
           <ThemeProvider>
             <TaskCard
@@ -479,12 +538,12 @@ describe('TaskCard', () => {
         );
         const spinnerTestID = `${STATUS_BAR}-spinner`;
 
-        const { rerender } = await render(footerCard({ kind: 'queued' }));
-        expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Queued...');
+        const { rerender } = await render(footerCard(SPINNING_STEP));
+        expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent(SPINNING_STEP.label);
         await act(() => {
           jest.advanceTimersByTime(holdAfterMs + 1);
         });
-        // Control: the queue's spin really is spent, so what follows cannot be
+        // Control: the step's spin really is spent, so what follows cannot be
         // a window that was simply never used up.
         expect(screen.getByTestId(spinnerTestID).props.style).toBeUndefined();
 
