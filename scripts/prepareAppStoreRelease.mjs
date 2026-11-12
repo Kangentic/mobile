@@ -76,6 +76,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createAppStoreConnectToken } from './checkAppStoreBuild.mjs';
 import {
   describeScreenshotPlan,
+  matchEvidence,
   planScreenshotSync,
   readLegacyScreenshotSets,
   readLibraryImages,
@@ -1226,6 +1227,20 @@ async function reportListingScreenshots(request, appId, versionId, frames, log) 
   );
   log(
     `- Placement group ${target.group}, cap ${target.maxCount}; ${libraryImages.length} image(s) in the asset library.`
+  );
+  // Whether the committed frames ever reached Apple, wherever they are placed.
+  // A hand upload that was never saved to a version still lands in the library.
+  const uploadedByHash = frames.filter((frame) =>
+    libraryImages.some((image) => matchEvidence(frame, image) === 'hash')
+  ).length;
+  const uploadedBySize = frames.filter(
+    (frame) =>
+      !libraryImages.some((image) => matchEvidence(frame, image) === 'hash') &&
+      libraryImages.some((image) => matchEvidence(frame, image) === 'size')
+  ).length;
+  log(
+    `- Of the ${frames.length} committed frame(s), ${uploadedByHash + uploadedBySize} are in the asset library ` +
+      `(${uploadedByHash} by content hash, ${uploadedBySize} by file size).`
   );
 
   for (const result of results) {

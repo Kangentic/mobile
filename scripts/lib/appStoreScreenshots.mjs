@@ -190,11 +190,16 @@ export function referenceHash(referenceName) {
  * falls through to the size comparison: two captures of one screen can be the
  * same length by accident, and the hash is the stronger statement.
  *
+ * Verified against the live listing on 2026-11-12: for seven frames uploaded in
+ * Media Manager, Apple's `fileSize` was the original file's exact byte length
+ * (and the deprecated `sourceFileChecksum` its MD5), and their reference names
+ * were the file names, with " (n)" appended to a repeated one.
+ *
  * @param {ScreenshotFrame} frame
  * @param {LibraryImage | null} image
  * @returns {MatchEvidence | null}
  */
-function matchEvidence(frame, image) {
+export function matchEvidence(frame, image) {
   if (!image) return null;
   const hash = referenceHash(image.referenceName);
   if (hash) return hash === frameHash(frame) ? 'hash' : null;
