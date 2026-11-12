@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
   owner: 'kangentic',
-  version: '1.4.0',
+  version: '1.5.0',
   orientation: 'portrait',
   scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
@@ -253,7 +253,24 @@ const config: ExpoConfig = {
     // wait for the next desktop. No native dependency moved since 1.3.0 (only
     // the protocol and branding pins), but there is no OTA path, so it is a new
     // build.
-    buildNumber: '22',
+    //
+    // 23 never reached a store listing: task #140 spent it on a TestFlight-only
+    // 1.4.1 build from a throwaway ref (d6e474c), to prove the Notification
+    // Service Extension on SDK 58 hardware. It is tagged ios-b23, so it is gone.
+    //
+    // 24 is the v1.5.0 release cut 2026-11-12, for an App Store submission. 22
+    // is spent, tagged ios-b22, and 1.4.0 is live. It is the first App Store
+    // build on Expo SDK 58, React Native 0.88 and AGP 9, so every native
+    // dependency moved. Nothing in it is iOS-only; it is all cross-platform:
+    // tapped https links in the terminal mirror open in the OS handler, the PR
+    // chip says "checks failing" (desktop v0.56.0's split of that verdict out of
+    // blocked), a stopped workflow card moves to any column but To Do (desktop
+    // v0.55.0), a queued resume stays queued under the desktop's queued footer,
+    // a chat opened on a pending prompt lands on its buttons (useFeedEndAnchor),
+    // and protocol 0.28.0: resume on open, queue place, the stopped mark,
+    // priority, task links and a blocked start. Desktop v0.57.0 speaks 0.27.0,
+    // so the 0.28.0 set waits for the next desktop.
+    buildNumber: '24',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
@@ -511,13 +528,20 @@ const config: ExpoConfig = {
     // Android-only; it is the cross-platform list on ios.buildNumber's 22
     // above.
     //
+    // 21 is the v1.5.0 release cut 2026-11-12, going to the PRODUCTION track as
+    // a full release. 20 is spent, tagged android-vc20. It is the first
+    // production build on Expo SDK 58, React Native 0.88 and AGP 9, with
+    // withAndroidR8ImplicitConstructors keeping the constructors AGP 9's strict
+    // R8 would strip. Nothing in it is Android-only; it is the cross-platform
+    // list on ios.buildNumber's 24 above.
+    //
     // Keep this list current on the way OUT of a release, not the way in. The
     // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
     // into 2026-07-28 and cost a failed release run, because build 3 had in
     // fact already been uploaded. scripts/checkPlayVersionCode.mjs catches a
     // duplicate, but only in the submit job, which is after the ~25 minute
     // build AND after the approval gate.
-    versionCode: 20,
+    versionCode: 21,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',

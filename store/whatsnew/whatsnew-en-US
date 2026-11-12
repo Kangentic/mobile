@@ -1,6 +1,8 @@
-- A waiting agent now shows a speech bubble and a finished turn keeps its envelope, on the Agents feed, board cards and session header.
+- Tap a web link in the terminal to open it.
+- A pull request with failing checks says "checks failing" on its card.
+- A stopped workflow card can move to any column but To Do, as on the desktop.
 
 With the next desktop update:
-- Approvals get a shield, and push titles say whether an agent has a question or needs your approval.
-- Notify me automations reach your phone as pushes.
-- You can chat on a paused task, and your message waits for the next agent.
+- Opening a paused task resumes it.
+- Cards show priority, place in the queue, and a mark when the board stopped the agent.
+- A task's links open from its long-press menu.
