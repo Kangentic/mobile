@@ -8,7 +8,7 @@
  *
  * Why it exists: without a shared pack every finder in the fan-out re-runs the git gather
  * and re-reads the same changed files. The desktop repo's code-review fan-out audit
- * (docs/code-review-fanout-audit.md there) measured that at 50-78k tokens of re-derivation per
+ * (docs/audits/code-review-fanout-audit.md there) measured that at 50-78k tokens of re-derivation per
  * finder with 38% of all Read bytes duplicated across finders; the pack pays it once.
  *
  * A syncer of this file needs nothing but this comment. Everything below the imports is the
@@ -23,8 +23,10 @@
  * this copy and CLAUDE.md's follow it, one line each:
  *   1. No HMR vitest: the skill's Step 2 is a placeholder, and scripts/review-verdict.mjs
  *      checks only typecheck and scopedTests.
- *   2. No E2E in the pass: a Maestro coverage hole goes to the grouped follow-up task for /e2e
- *      or CI, never written, never run, never `blocked`.
+ *   2. A Maestro coverage hole is written in the pass, under .maestro/paired/ or in
+ *      .maestro/smoke.yaml, and run locally only on a dev rig already up for this worktree.
+ *      Otherwise it is committed unrun for CI's E2E jobs, as a `fixed` decision. Never a
+ *      follow-up task, never `blocked` for want of an emulator, never `.skip`.
  *   3. The gated auditors are crypto-pairing-auditor and expo-rn-reviewer.
  *   4. The "try first" packaged-build example is a release build:
  *      `npx expo run:android --variant release --no-bundler`.
@@ -91,7 +93,7 @@ const SINGLE_FILE_CAP_BYTES = 1024 * 1024;
 // admission comment below records. Half the body cap: a single file whose changed lines alone
 // would take half the pack's body budget is a lockfile, a generated bundle, or a snapshot dump,
 // which no finder reads linearly. The pack is therefore bounded by the review's own changed
-// lines plus the body cap, not by a constant; docs/code-review-fanout-audit.md section 14
+// lines plus the body cap, not by a constant; docs/audits/code-review-fanout-audit.md section 14
 // records how often the corpus hits this ceiling.
 const PACK_HUNK_SECTION_CAP_BYTES = 100 * 1024;
 
@@ -100,7 +102,7 @@ const PACK_HUNK_SECTION_CAP_BYTES = 100 * 1024;
 // criteria reach, and every pack byte is re-read by up to 11 finders while a file left out is
 // read only by the finders that actually want it - so bytes spent on untouched code are the
 // pack's worst-value bytes. Measured across eight merged PRs: identical file coverage, packs
-// 2% to 71% smaller (docs/code-review-fanout-audit.md, the windowed-bodies section).
+// 2% to 71% smaller (docs/audits/code-review-fanout-audit.md, the windowed-bodies section).
 const WINDOW_CONTEXT_LINES = 20; // body tier: a file admitted under the body cap
 const HUNK_CONTEXT_LINES = 3; // hunk tier: every other readable file, what the union diff used to carry
 const WINDOW_MERGE_GAP_LINES = 5; // two windows closer than this merge; an elision marker costs a line
@@ -257,7 +259,12 @@ function readFileSafe(relPath) {
   if (fileContentCache.has(relPath)) return fileContentCache.get(relPath);
   let body = null; // stays null for missing, oversized, or binary files
   const absolute = join(repoRoot, relPath);
-  if (existsSync(absolute) && statSync(absolute).size <= SINGLE_FILE_CAP_BYTES) {
+  // Only a regular file has a body. Where git sees a directory symlink as a link (a POSIX
+  // symlink, such as a worktree's `node_modules` linked into the main checkout), it lists it as
+  // one untracked path that the `node_modules/` ignore pattern does not match, and reading it
+  // throws EISDIR. Git for Windows with core.symlinks off walks a junction as a directory instead.
+  const stats = existsSync(absolute) ? statSync(absolute) : null;
+  if (stats !== null && stats.isFile() && stats.size <= SINGLE_FILE_CAP_BYTES) {
     const content = readFileSync(absolute);
     if (!content.includes(0)) {
       body = content.toString('utf8').replace(/\r\n/g, '\n');

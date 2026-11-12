@@ -171,8 +171,15 @@ background refresh timer.
    merge). If not empty, skip the realign and report; never discard uncommitted work.
 2. `git fetch origin <sourceBranch>`.
 3. Realign by `<mergeMethod>`:
-   - **rebase merge:** `git rebase origin/<sourceBranch>` (drops the now-merged commits by
-     patch-id).
+   - **rebase merge:** `git rebase --no-keep-empty --force-rebase origin/<sourceBranch>` (drops
+     the now-merged commits by patch-id). `--no-keep-empty` also drops a commit that started
+     empty, such as the `chore(review)` ledger commit `/code-review` makes, which git otherwise
+     keeps. GitHub's rebase merge already left that commit off `<sourceBranch>`, and it has no
+     files, so dropping it cannot strand work. `--force-rebase` makes git replay a branch that
+     already sits on the merged base, where a plain rebase reports it is up to date and keeps the
+     empty commit. If `git log --oneline origin/<sourceBranch>..HEAD` still lists commits and
+     every one is an empty `chore(review)` ledger commit (`git show --stat <sha>` lists no files),
+     the realign ran without those two flags: run it again as written, without asking the user.
    - **squash merge:** `git reset --hard origin/<sourceBranch>` (safe only because Step 1
      confirmed the worktree is clean).
 4. On a rebase conflict, abort cleanly (`git rebase --abort`) and report. Never leave a

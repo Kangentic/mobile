@@ -690,7 +690,9 @@ in a gitignored `CLAUDE.local.md` at the project root.
   first turn end of a visit that does not move on, asks the agent once to apply its own findings
   and end on one of the two. That includes a turn ending on the design line, since a
   notification does not stop the rows below it, so that turn both notifies and asks. **Code
-  Review** moves to Testing on `Verdict: Ready` and back to Executing on `Verdict: Blocked`.
+  Review** moves to Testing on `Verdict: Ready` and back to Executing on `Verdict: Blocked`,
+  except that a `Needs owner:` line below the verdict (a step only a person can do) matches
+  neither row, so the card stops in Code Review for the user.
   **Testing** moves to Merge on `PR: ready to merge`. **Merge** moves to Done on `PR: merged`.
   Each final line is a contract with what prints it (`scripts/review-verdict.mjs` for
   `/code-review`, then `/pull-request` and `/merge-pull-request`), so change the row and the
@@ -717,8 +719,10 @@ in a gitignored `CLAUDE.local.md` at the project root.
   printed as the message's last line after any numbered steps, and the column's turn-end rows
   route on exactly that line: `Verdict: Ready` moves the card to Testing, and `Verdict: Blocked`
   moves it back to Executing (at most three times) with the review's reply, to do the named steps.
-  There is no "skipped" status, and the commit body carries a `Refuted:`/`Decisions:` ledger the
-  next pass reads. Never give a commit that is not a review pass the `review` scope: the next pass
+  A step only a person can do (`needsOwner`) prints `Needs owner:` below the verdict instead, which
+  stops the card in Code Review rather than looping it. A pass never files a follow-up task: what
+  it cannot finish is a numbered step. There is no "skipped" status, and the commit body carries a
+  `Refuted:`/`Decisions:` ledger the next pass reads. Never give a commit that is not a review pass the `review` scope: the next pass
   reads `<type>(review):` subjects as its own.
 - **A dirty tree at Testing is normal: do not stop and ask whether to include it.** A finished
   review pass normally leaves the tree clean, so a dirty one means the pass is still in flight, a
@@ -732,8 +736,10 @@ in a gitignored `CLAUDE.local.md` at the project root.
   `scripts/build-review-pack.mjs` follow it, so change all three together:
   1. No HMR vitest: Step 2 is a placeholder, and the verdict checks only `typecheck` and
      `scopedTests`.
-  2. No E2E in the pass: a Maestro coverage hole goes to the grouped follow-up task for `/e2e` or
-     CI, never written, never run, never `blocked`.
+  2. A Maestro coverage hole is written in the pass (under `.maestro/paired/`, or in
+     `.maestro/smoke.yaml`) and run locally only on a dev rig already up for this worktree;
+     otherwise it is committed unrun for CI, as a `fixed` decision. Never a follow-up task, never
+     `blocked` for want of an emulator, never `.skip`.
   3. The gated auditors are `crypto-pairing-auditor` and `expo-rn-reviewer`.
   4. The "try first" packaged-build example is
      `npx expo run:android --variant release --no-bundler`.

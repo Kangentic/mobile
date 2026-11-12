@@ -12,6 +12,10 @@
  *    END on exactly the Back for revisions and On to Testing lines, for both verdicts. Exact
  *    equality is stricter than the desktop matcher (which ignores case and punctuation) on
  *    purpose: the script is deterministic, so the matcher's leniency is never what makes this pass.
+ *    A pass with nothing to review (`--no-changes`) ends on Back for revisions too. A pass with a
+ *    step only a person can do ends on `Needs owner:` below the verdict instead, and that line must
+ *    match NEITHER row. A miss is the lenient direction, so it is checked through the same
+ *    normalizing the desktop matcher applies, not exact inequality.
  * 2. Back for revisions carries the review's reply, which is where its numbered steps are.
  * 3. Testing: /pull-request prints the On to Merge line and names the row that reads it.
  * 4. Executing: the Apply findings message asks for exactly the lines the other two rows match.
@@ -26,7 +30,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { renderClosingBlock, renderSummary } from '../../scripts/review-verdict.mjs';
+import { renderClosingBlock, renderNoChanges, renderSummary } from '../../scripts/review-verdict.mjs';
 
 const REPOSITORY_ROOT = path.resolve(__dirname, '../..');
 
@@ -102,6 +106,13 @@ function lastLineOf(text: string): string {
   return lines[lines.length - 1];
 }
 
+// What the desktop's Text match forgives (case, punctuation, symbols and invisible characters,
+// runs of spaces), so a line that must MISS a row is held to the lenient comparison the app runs,
+// not to exact inequality, which a stray colon or capital would satisfy.
+function normalizedLine(line: string): string {
+  return line.toLowerCase().replace(/[\s\p{P}\p{S}\p{C}\p{Me}]+/gu, ' ').trim();
+}
+
 const READY_REPORT = { checks: { typecheck: 'pass', scopedTests: 'none' }, findings: [] };
 
 const BLOCKED_REPORT = {
@@ -111,12 +122,32 @@ const BLOCKED_REPORT = {
       id: 1,
       severity: 'high',
       category: 'Correctness',
-      location: 'src/channel/relay.ts:30',
-      file: 'src/channel/relay.ts',
-      mechanism: 'reply parsed before the handshake settles',
+      location: 'src/channel/subscriptionManager.ts:30',
+      file: 'src/channel/subscriptionManager.ts',
+      mechanism: 'cold-start fan-out ignores the concurrency bound',
       status: 'blocked',
-      reason: 'needs a real reply',
-      step: 'capture a real reply into a fixture under src/devsupport/',
+      reason: 'outside the diff and spans every subscribe caller',
+      step: 'route the screen-driven re-subscribes through the bounded queue in this task',
+    },
+  ],
+};
+
+const OWNER_STEP = 'run the NSE probe on a physical iPhone and report what it shows';
+
+const NEEDS_OWNER_REPORT = {
+  checks: { typecheck: 'pass', scopedTests: 'pass' },
+  findings: [
+    {
+      id: 1,
+      severity: 'medium',
+      category: 'Coverage',
+      location: 'targets/nse/NotificationPruning.swift:40',
+      file: 'targets/nse/NotificationPruning.swift',
+      mechanism: 'pruning unproven on hardware',
+      status: 'blocked',
+      reason: 'a simulator cannot run the extension, and this machine has no iPhone',
+      step: OWNER_STEP,
+      needsOwner: true,
     },
   ],
 };
@@ -135,6 +166,24 @@ describe('board turn-end contracts: Code Review', () => {
     expect(closingLines.slice(0, -1).every((line) => /^\d+\. /.test(line))).toBe(true);
     expect(closingLines.length).toBeGreaterThan(1);
     expect(lastLineOf(renderSummary(BLOCKED_REPORT))).toBe(backForRevisions);
+  });
+
+  it('sends a pass with nothing to review back to Executing, on exactly the Back for revisions line', () => {
+    const backForRevisions = finalLineOf('Code Review', 'Back for revisions');
+    expect(lastLineOf(renderNoChanges('main'))).toBe(backForRevisions);
+    expect(lastLineOf(renderNoChanges(''))).toBe(backForRevisions);
+  });
+
+  it('leaves a pass with a step only a person can do where it is: a Needs owner line no row matches', () => {
+    const rowLines = [finalLineOf('Code Review', 'Back for revisions'), finalLineOf('Code Review', 'On to Testing')];
+    for (const message of [renderClosingBlock(NEEDS_OWNER_REPORT), renderSummary(NEEDS_OWNER_REPORT)]) {
+      const lines = message.trimEnd().split('\n');
+      expect(lines[lines.length - 1]).toBe(`Needs owner: ${OWNER_STEP}`);
+      expect(lines[lines.length - 2], 'the verdict sits directly above it').toBe('Verdict: Blocked');
+      for (const rowLine of rowLines) {
+        expect(normalizedLine(lines[lines.length - 1]), `the last line matches "${rowLine}"`).not.toBe(normalizedLine(rowLine));
+      }
+    }
   });
 
   it('sends the review reply back to Executing, since the steps live in it', () => {

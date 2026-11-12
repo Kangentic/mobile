@@ -102,8 +102,9 @@ the conversation, not the filesystem). That pass fixes what it verifies, adds te
 its own work, so a `fix(review):` / `refactor(review):` / `test(review):` commit on the branch is
 expected, not a mistake. So is an EMPTY `chore(review): record refuted findings and decisions`
 commit: its body is the review ledger the next review pass reads back, and it lands empty when
-every fix went into a file that was already dirty. Leave them alone: do not squash, reword, or
-fold them into your own message - their separate authorship is the point.
+every fix went into a file that was already dirty. A rebase merge does not carry that empty commit
+to `main`, and that is expected. Leave them alone: do not squash, reword, or fold them into your
+own message - their separate authorship is the point.
 
 **And if the tree is dirty with changes you did not write**, that means one of exactly three
 things, because a finished review pass normally leaves the tree clean:
@@ -180,9 +181,10 @@ ledger read keeps the bare form on purpose (it is desktop's, and it then keeps o
 `Refuted:` and `Decisions:` lines), but here every file of every matched commit would count.
 
 Then re-run each, scoped to the file itself: `npx vitest run tests/unit/<file>.test.ts` or
-`npx jest tests/components/<file>.test.tsx`. The pass never writes Maestro flows (it files those
-holes as a follow-up task instead), and an empty `chore(review):` ledger commit lists no files,
-so neither adds anything here. **Keep it scoped**: a scoped run of an added test file is allowed,
+`npx jest tests/components/<file>.test.tsx`. A Maestro flow the pass wrote lives under
+`.maestro/`, not `tests/`, so this step never runs it: CI's E2E jobs do, on the PR, and CLAUDE.md
+keeps the suite out of local pre-PR runs. An empty `chore(review):` ledger commit lists no files,
+so it adds nothing here either. **Keep it scoped**: a scoped run of an added test file is allowed,
 but `npm run test:unit` or a bare `npx vitest run` is a full-tier run this skill must not do. Fix
 a failure here rather than spending a CI round on it.
 

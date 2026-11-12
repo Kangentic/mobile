@@ -6,7 +6,7 @@
  * Why a script: across 42 recent desktop passes the old prose rule ("Needs revision" whenever
  * anything was skipped) gave the same state different labels (one Low skip said Needs revision,
  * eight and twelve skips said Clean), and every Needs revision sent the card back to Executing on
- * skips alone. See section 15 of docs/code-review-fanout-audit.md in the desktop repo.
+ * skips alone. See section 15 of docs/audits/code-review-fanout-audit.md in the desktop repo.
  *
  * Synced from the desktop repo's copy. Two divergences, both deliberate: this header comment, and
  * the check set. This repo has no HMR vitest, so `checks` carries only `typecheck` and
@@ -15,19 +15,32 @@
  * .claude/skills/code-review/SKILL.md ("Mobile differences").
  *
  * Usage: node scripts/review-verdict.mjs <findings.json> [--ledger]
+ *        node scripts/review-verdict.mjs --no-changes [base-ref]
  *   default   prints the Summary block, the Decisions made list, and the closing verdict block.
  *             The skill pastes that output verbatim and makes the closing block the LAST thing in
  *             the pass's final message, so a person and an agent read the same signal: the line
  *             `Verdict: Ready`, or one numbered step per blocker followed by `Verdict: Blocked`.
- *             The verdict is the block's LAST line either way, so the board's Code Review rows
- *             route on it with a Text match (an exact final line, checked in code) rather than
- *             asking an agent to find it.
+ *             The verdict is the block's LAST line, bar the exception below, so the board's Code
+ *             Review rows route on it with a Text match (an exact final line, checked in code)
+ *             rather than asking an agent to find it.
+ *             The one exception: a pass with a step only a person can do (`needsOwner`) adds a
+ *             `Needs owner: <step>` line below the verdict. Still no third verdict, only a last line
+ *             that matches neither row. The card stops where it is on the first report instead of
+ *             taking an Executing turn that can do nothing about it, and the app's Needs owner
+ *             read stops the card on any board, a workflow's included. A Text match sees only the
+ *             last line, so a mark above the verdict could not have changed the routing.
  *             The old prose verdicts above included a "Clean"; the new one is "Ready" so it
  *             cannot be read as the report's "no uncommitted files" line.
  *   --ledger  prints only the `Refuted:` and `Decisions:` lines for the review commit body. A later
  *             pass reads them back with `git log --grep="(review)" --format=%B <base>..HEAD`. Keyed
  *             by file, symbol and mechanism, never by line number, because line numbers drift
  *             between passes.
+ *   --no-changes  prints the whole final message of a pass that found nothing to review (the diff
+ *             from the base through the working tree is empty): "No changes to review.", then a
+ *             closing block with one step and `Verdict: Blocked`. Blocked, not a third verdict: on
+ *             the board an empty diff is a task whose Executing step committed nothing, and the bare
+ *             line used to match neither Code Review row, so a desktop workflow moved a task on to
+ *             Testing unreviewed. The step sends it back to do its work.
  *
  * Exit 0 for both verdicts (each is a valid outcome). Exit 2 for a usage error or an invalid
  * findings file, with every problem listed on stderr.
@@ -40,14 +53,17 @@
  *       "location": "src/a.ts:42", "file": "src/a.ts", "symbol": "parseFoo" (optional),
  *       "mechanism": "short phrase naming the defect", "status": "fixed|refuted|blocked",
  *       "reason": "required for refuted and blocked",
- *       "step": "required for a blocked finding: what a person or the task agent must do",
+ *       "step": "required for a blocked finding: what the task agent must do in this task",
+ *       "needsOwner": true (optional, blocked and not quick only: only a person can do the step),
  *       "decision": { "chosen": "...", "alternative": "..." } (optional, fixed and not quick only),
  *       "quick": true (optional; a quick fix never affects the verdict and carries no decision),
  *       "reRaise": { "of": "the ledger line", "newEvidence": "..." } (optional)
- *     }],
- *     "followUps": [{ "title": "...", "location": "...", "why": "..." }],
- *     "followUpTask": "the board id of the one grouped follow-up task; required with followUps"
+ *     }]
  *   }
+ *
+ * There is no followUps or followUpTask key, and the script refuses both. An item outside the diff
+ * is fixed in the pass or recorded as a blocked finding whose step reaches the task agent, because
+ * a pass files no board task (section 17 of the desktop repo's audit doc).
  */
 import fs from 'node:fs';
 import { isEntrypoint } from './lib/is-entrypoint.mjs';
@@ -120,7 +136,13 @@ export function validateFindings(report) {
         problems.push(`${label}.reason is required for a ${finding.status} finding`);
       }
       if (finding.status === 'blocked' && finding.quick !== true && !isNonEmptyString(finding.step)) {
-        problems.push(`${label}.step is required for a blocked finding: name what a person or the task agent must do`);
+        problems.push(`${label}.step is required for a blocked finding: name what the task agent must do in this task`);
+      }
+      if (finding.needsOwner !== undefined) {
+        if (finding.needsOwner !== true) problems.push(`${label}.needsOwner must be true, or left out`);
+        if (finding.status !== 'blocked') problems.push(`${label}.needsOwner is only valid on a blocked finding`);
+        // A quick finding never decides the verdict, so it could not stop the card either.
+        if (finding.quick === true) problems.push(`${label}.needsOwner is not valid on a quick finding: a person-only step is not mechanical`);
       }
       if (finding.decision !== undefined) {
         const decision = finding.decision;
@@ -140,20 +162,13 @@ export function validateFindings(report) {
       }
     });
   }
-  const followUps = report.followUps === undefined ? [] : report.followUps;
-  if (!Array.isArray(followUps)) {
-    problems.push('followUps must be an array when present');
-  } else {
-    followUps.forEach((followUp, followUpIndex) => {
-      for (const field of ['title', 'location', 'why']) {
-        if (followUp === null || typeof followUp !== 'object' || !isNonEmptyString(followUp[field])) {
-          problems.push(`followUps[${followUpIndex}].${field} is required`);
-        }
-      }
-    });
-    if (followUps.length > 0 && !isNonEmptyString(report.followUpTask)) {
-      problems.push('followUpTask is required with followUps: file the one grouped follow-up task first, then record its board id');
-    }
+  // Refused even when empty, so a driver on stale instructions fails here instead of filing a task.
+  // Each message says where the items go, so the fix is to convert them, never to delete the key.
+  if (report.followUps !== undefined) {
+    problems.push('followUps is retired: fix each out-of-diff item in this pass, or record it as a blocked finding with a step for the task agent');
+  }
+  if (report.followUpTask !== undefined) {
+    problems.push('followUpTask is retired: a review pass files no board task; record the item as a blocked finding with a step for the task agent');
   }
   return problems;
 }
@@ -163,24 +178,30 @@ function ledgerKey(finding) {
   return `${oneLine(finding.file)}${symbol}: ${oneLine(finding.mechanism)}`;
 }
 
-/** Ready unless a non-quick finding is blocked or a check failed. Assumes a validated report. */
+/**
+ * Ready unless a non-quick finding is blocked or a check failed. `ownerSteps` are the blockers only
+ * a person can do: a pass with any stops the card, so it takes no Executing turn that could do
+ * nothing about them, and the person's answer in that session settles the rest. Assumes a validated
+ * report.
+ */
 export function computeVerdict(report) {
   const blockers = [];
+  const ownerSteps = [];
   for (const finding of report.findings) {
     if (finding.status === 'blocked' && finding.quick !== true) {
       blockers.push({ location: oneLine(finding.location), step: oneLine(finding.step) });
+      if (finding.needsOwner === true) ownerSteps.push(oneLine(finding.step));
     }
   }
   for (const check of CHECKS) {
     if (report.checks[check.key] === 'fail') blockers.push({ location: check.label, step: check.step });
   }
-  return { verdict: blockers.length === 0 ? 'Ready' : 'Blocked', blockers };
+  return { verdict: blockers.length === 0 ? 'Ready' : 'Blocked', blockers, ownerSteps };
 }
 
 /** The Summary block, the Decisions made list, then the closing verdict block. */
 export function renderSummary(report) {
   const findings = report.findings;
-  const followUps = report.followUps === undefined ? [] : report.followUps;
   const countBySeverity = (severity) =>
     findings.filter((finding) => String(finding.severity).toLowerCase() === severity).length;
   const countByStatus = (status) => findings.filter((finding) => finding.status === status && finding.quick !== true).length;
@@ -198,11 +219,6 @@ export function renderSummary(report) {
   lines.push(`- Re-raised with new evidence: ${reRaises.length}`);
   lines.push(
     `- Checks: ${CHECKS.map((check) => `${check.label.toLowerCase()} ${report.checks[check.key]}`).join(', ')}`,
-  );
-  lines.push(
-    followUps.length === 0
-      ? '- Follow-up task: none'
-      : `- Follow-up task: ${oneLine(report.followUpTask)} (${followUps.length} item${followUps.length === 1 ? '' : 's'})`,
   );
   lines.push('');
   lines.push(`### Decisions made (${decisions.length})`);
@@ -223,14 +239,29 @@ export function renderSummary(report) {
 }
 
 /**
- * The last block of the pass's final message: any blocking steps, then the verdict. The verdict
- * comes last so it is the message's final line, which is what the board's Text match rows read.
+ * The last block of the pass's final message: any blocking steps, then the verdict, as the
+ * message's final line, which is what the board's Text match rows read. The one exception is a
+ * step only a person can do, which adds the `Needs owner:` line below it, so neither row matches
+ * and the card stops where it is.
  */
 export function renderClosingBlock(report) {
-  const { verdict, blockers } = computeVerdict(report);
+  const { verdict, blockers, ownerSteps } = computeVerdict(report);
   const lines = blockers.map((blocker, blockerIndex) => `${blockerIndex + 1}. ${blocker.location}: ${blocker.step}`);
   lines.push(`Verdict: ${verdict}`);
+  if (ownerSteps.length > 0) lines.push(`Needs owner: ${ownerSteps.join('; ')}`);
   return lines.join('\n');
+}
+
+/**
+ * The final message of a pass with nothing to review (`--no-changes`): the closing block in its
+ * usual shape, one step above `Verdict: Blocked`. With no base, as when none resolved, the step
+ * names the working tree alone.
+ */
+export function renderNoChanges(base) {
+  const step = isNonEmptyString(base)
+    ? `${oneLine(base)}: the branch and its working tree match ${oneLine(base)}, so there was nothing to review. Do this task's work, then commit it.`
+    : 'Working tree: there are no changes to review. Do this task\'s work, then commit it.';
+  return ['No changes to review.', '', `1. ${step}`, 'Verdict: Blocked'].join('\n');
 }
 
 /** `Refuted:` and `Decisions:` lines for the review commit body, one per item. */
@@ -249,11 +280,23 @@ export function renderLedger(report) {
   return lines.join('\n');
 }
 
+const USAGE = 'usage: node scripts/review-verdict.mjs <findings.json> [--ledger] | --no-changes [base-ref]';
+
 function main(argv) {
+  if (argv.includes('--no-changes')) {
+    const rest = argv.filter((argument) => argument !== '--no-changes');
+    // No ref starts with `-`, so one that does is a flag this mode does not take.
+    if (rest.length > 1 || rest.some((argument) => argument.startsWith('-'))) {
+      console.error(USAGE);
+      return 2;
+    }
+    console.log(renderNoChanges(rest[0] ?? ''));
+    return 0;
+  }
   const ledgerOnly = argv.includes('--ledger');
   const positional = argv.filter((argument) => argument !== '--ledger');
   if (positional.length !== 1) {
-    console.error('usage: node scripts/review-verdict.mjs <findings.json> [--ledger]');
+    console.error(USAGE);
     return 2;
   }
   let report;

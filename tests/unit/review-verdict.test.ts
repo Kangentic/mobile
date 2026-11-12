@@ -11,11 +11,12 @@
  * 2. A failed check is Blocked on its own, with a step that names the command to run.
  * 3. A quick fix never changes the verdict, even when it could not be applied.
  * 4. Validation refuses `skipped`, a refuted or blocked finding with no reason, a blocked finding
- *    with no step, a decision with no alternative, and follow-ups with no filed task.
- * 5. The closing block's LAST line is exactly `Verdict: Ready` or `Verdict: Blocked`, a Blocked
+ *    with no step, a decision with no alternative, and the retired followUps and followUpTask keys,
+ *    even an empty followUps, so a driver on stale instructions fails instead of filing a task.
+ * 5. The closing block's verdict line is exactly `Verdict: Ready` or `Verdict: Blocked`, a Blocked
  *    verdict lists one numbered step per blocker above it, no `Next:` line follows, and the
  *    default output ends with the block, so the message's final line is the verdict the board's
- *    Text match rows read.
+ *    Text match rows read. A step only a person can do adds `Needs owner:` below the verdict.
  * 6. Ledger lines are keyed by file, symbol and mechanism and carry no line number.
  * 7. The Summary counts leave quick findings out of the status counts, count re-raises, list
  *    severities in critical, high, medium, low order, and name each check's value.
@@ -25,11 +26,14 @@
  *    starts with `Verdict:` or `<digits>.` and a Decisions made entry is one line.
  * 10. The command line exits 2 with a usage line for a wrong argument count and with
  *     `could not read` for text that is not JSON.
+ * 11. `--no-changes` ends an empty review Blocked, with one step above the verdict, so a branch
+ *     with nothing to review goes back to Executing instead of matching no Code Review row.
  *
  * Synced from the desktop repo's copy. Two divergences: the check set (this repo has no HMR
  * vitest, so every `checks` object here carries only `typecheck` and `scopedTests`; see the
- * script's header), and `followUps` typed as `T[]` rather than `Array<T>`, which this repo's
- * ESLint config forbids.
+ * script's header), and the `--no-changes` cases, which compare the last line exactly where
+ * desktop runs its app's Text match (`src/shared/final-line-match`, which this repo does not have).
+ * The script prints a fixed line, so exact equality is the stricter check.
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -42,6 +46,7 @@ import {
   renderSummary,
   renderClosingBlock,
   renderLedger,
+  renderNoChanges,
 } from '../../scripts/review-verdict.mjs';
 
 const SCRIPT_PATH = path.resolve(__dirname, '../../scripts/review-verdict.mjs');
@@ -57,6 +62,7 @@ interface Finding {
   status: string;
   reason?: string;
   step?: string;
+  needsOwner?: unknown;
   decision?: { chosen: string; alternative: string };
   quick?: boolean;
   reRaise?: { of: string; newEvidence: string };
@@ -65,11 +71,13 @@ interface Finding {
 interface Report {
   checks: { typecheck: string; scopedTests: string };
   findings: Finding[];
-  followUps?: { title: string; location: string; why: string }[];
-  followUpTask?: string;
 }
 
 const PASSING_CHECKS = { typecheck: 'pass', scopedTests: 'pass' };
+const FOLLOW_UPS_RETIRED =
+  'followUps is retired: fix each out-of-diff item in this pass, or record it as a blocked finding with a step for the task agent';
+const FOLLOW_UP_TASK_RETIRED =
+  'followUpTask is retired: a review pass files no board task; record the item as a blocked finding with a step for the task agent';
 
 function findingOf(id: number, overrides: Partial<Finding> = {}): Finding {
   return {
@@ -221,14 +229,85 @@ describe('review-verdict.mjs: verdict rules', () => {
     expect(renderSummary(report)).toContain('- Quick fixes: 1');
   });
 
-  it('renders follow-ups and never blocks on them', () => {
-    const report = reportOf([findingOf(1)], {
-      followUps: [{ title: 'Split the reap scheduler', location: 'src/main/pty/reap.ts', why: 'needs its own design' }],
-      followUpTask: 'task 812',
-    });
+  it('turns an out-of-diff item the pass did not finish into a numbered step above Verdict: Blocked', () => {
+    const report = reportOf([
+      findingOf(1),
+      findingOf(2, {
+        severity: 'medium',
+        location: 'src/channel/subscriptionManager.ts:40',
+        file: 'src/channel/subscriptionManager.ts',
+        status: 'blocked',
+        reason: 'outside the diff and spans every subscribe caller',
+        step: 'split the cold-start fan-out in this task',
+      }),
+    ]);
     expect(validateFindings(report)).toEqual([]);
-    expect(computeVerdict(report).verdict).toBe('Ready');
-    expect(renderSummary(report)).toContain('- Follow-up task: task 812 (1 item)');
+    expect(closingBlockLines(report)).toEqual([
+      '1. src/channel/subscriptionManager.ts:40: split the cold-start fan-out in this task',
+      'Verdict: Blocked',
+    ]);
+    expect(renderSummary(report)).not.toContain('Follow-up');
+  });
+
+  describe('a step only a person can do', () => {
+    const ownerStep = {
+      status: 'blocked',
+      reason: 'no iPhone on this machine',
+      step: 'run the NSE probe on a physical iPhone and report what it shows',
+      needsOwner: true,
+    };
+
+    it('stays Blocked, with no third verdict, and ends on the Needs owner line below it', () => {
+      const report = reportOf([findingOf(1, ownerStep)]);
+      expect(validateFindings(report)).toEqual([]);
+      expect(computeVerdict(report).verdict).toBe('Blocked');
+      expect(closingBlockLines(report)).toEqual([
+        '1. src/main/example-1.ts:11: run the NSE probe on a physical iPhone and report what it shows',
+        'Verdict: Blocked',
+        'Needs owner: run the NSE probe on a physical iPhone and report what it shows',
+      ]);
+    });
+
+    it('stops the card on the first report even with agent steps beside it, and names only the person\'s', () => {
+      const report = reportOf([
+        findingOf(1, { status: 'blocked', reason: 'too large for this pass', step: 'split the reader' }),
+        findingOf(2, ownerStep),
+      ]);
+      const lines = closingBlockLines(report);
+      expect(lines.slice(0, 2)).toEqual([
+        '1. src/main/example-1.ts:11: split the reader',
+        '2. src/main/example-2.ts:12: run the NSE probe on a physical iPhone and report what it shows',
+      ]);
+      expect(lines.slice(-2)).toEqual([
+        'Verdict: Blocked',
+        'Needs owner: run the NSE probe on a physical iPhone and report what it shows',
+      ]);
+    });
+
+    it('keeps two such steps on the one line the app reads', () => {
+      const report = reportOf([findingOf(1, ownerStep), findingOf(2, { ...ownerStep, step: 'approve the\nstore listing copy' })]);
+      expect(closingBlockLines(report).at(-1)).toBe(
+        'Needs owner: run the NSE probe on a physical iPhone and report what it shows; approve the store listing copy',
+      );
+    });
+
+    it('leaves a pass with no such step on Verdict: Blocked, the line that sends it back', () => {
+      const report = reportOf([findingOf(1, { status: 'blocked', reason: 'too large', step: 'split the reader' })]);
+      expect(closingBlockLines(report).at(-1)).toBe('Verdict: Blocked');
+    });
+
+    it('is refused anywhere but a non-quick blocked finding', () => {
+      const report = reportOf([
+        findingOf(1, { needsOwner: true }),
+        findingOf(2, { ...ownerStep, quick: true }),
+        findingOf(3, { ...ownerStep, needsOwner: 'yes' }),
+      ]);
+      expect(validateFindings(report)).toEqual([
+        'findings[0].needsOwner is only valid on a blocked finding',
+        'findings[1].needsOwner is not valid on a quick finding: a person-only step is not mechanical',
+        'findings[2].needsOwner must be true, or left out',
+      ]);
+    });
   });
 
   it('is Ready with no findings at all', () => {
@@ -270,12 +349,19 @@ describe('review-verdict.mjs: validation', () => {
     expect(problems).toContain('findings[1].decision is only valid on a fixed finding');
   });
 
-  it('requires the filed task when there are follow-ups', () => {
-    const problems = validateFindings(
-      reportOf([], { followUps: [{ title: 'Split it', location: 'src/a.ts', why: 'own design' }] }),
-    );
-    expect(problems).toEqual([
-      'followUpTask is required with followUps: file the one grouped follow-up task first, then record its board id',
+  it('refuses the retired followUps key by name, even when it is empty', () => {
+    const emptyFollowUps = { ...reportOf([findingOf(1)]), followUps: [] };
+    const filledFollowUps = { ...reportOf([findingOf(1)]), followUps: [{ title: 'Split it', location: 'src/a.ts', why: 'own design' }] };
+    for (const report of [emptyFollowUps, filledFollowUps]) {
+      expect(validateFindings(report)).toEqual([FOLLOW_UPS_RETIRED]);
+    }
+  });
+
+  it('refuses the retired followUpTask key by name, alone and beside followUps', () => {
+    expect(validateFindings({ ...reportOf([]), followUpTask: 'task 812' })).toEqual([FOLLOW_UP_TASK_RETIRED]);
+    expect(validateFindings({ ...reportOf([]), followUps: [], followUpTask: 'task 812' })).toEqual([
+      FOLLOW_UPS_RETIRED,
+      FOLLOW_UP_TASK_RETIRED,
     ]);
   });
 
@@ -319,11 +405,6 @@ function reportWithRawFinding(finding: unknown): unknown {
 const CHECKS_PROBLEM = 'checks must be an object with typecheck and scopedTests';
 const FINDINGS_PROBLEM = 'findings must be an array (empty when nothing was raised)';
 const SEVERITY_PROBLEM = 'findings[0].severity must be one of critical, high, medium, low';
-const VALID_FOLLOW_UP = { title: 'Split it', location: 'src/a.ts', why: 'own design' };
-
-function reportWithRawFollowUp(followUp: unknown): unknown {
-  return { checks: { ...PASSING_CHECKS }, findings: [], followUps: [followUp], followUpTask: 'task 812' };
-}
 
 const VALIDATION_CASES: ValidationCase[] = [
   { name: 'a null report', report: null, expectedProblem: 'the findings file must hold a JSON object' },
@@ -348,22 +429,12 @@ const VALIDATION_CASES: ValidationCase[] = [
   {
     name: 'followUps that is a string',
     report: { checks: { ...PASSING_CHECKS }, findings: [], followUps: 'later' },
-    expectedProblem: 'followUps must be an array when present',
+    expectedProblem: FOLLOW_UPS_RETIRED,
   },
   {
-    name: 'a follow-up with no title',
-    report: reportWithRawFollowUp({ location: VALID_FOLLOW_UP.location, why: VALID_FOLLOW_UP.why }),
-    expectedProblem: 'followUps[0].title is required',
-  },
-  {
-    name: 'a follow-up with no location',
-    report: reportWithRawFollowUp({ title: VALID_FOLLOW_UP.title, why: VALID_FOLLOW_UP.why }),
-    expectedProblem: 'followUps[0].location is required',
-  },
-  {
-    name: 'a follow-up with no why',
-    report: reportWithRawFollowUp({ title: VALID_FOLLOW_UP.title, location: VALID_FOLLOW_UP.location }),
-    expectedProblem: 'followUps[0].why is required',
+    name: 'followUps that is null',
+    report: { checks: { ...PASSING_CHECKS }, findings: [], followUps: null },
+    expectedProblem: FOLLOW_UPS_RETIRED,
   },
 ];
 
@@ -374,19 +445,10 @@ describe('review-verdict.mjs: validation of malformed input', () => {
 
   it('accepts the control report the table rows are mutated from', () => {
     expect(validateFindings(reportWithRawFinding(findingOf(1)))).toEqual([]);
-    expect(validateFindings(reportWithRawFollowUp(VALID_FOLLOW_UP))).toEqual([]);
   });
 
   it('accepts a severity in any letter case, the way the Summary counts it', () => {
     expect(validateFindings(reportWithRawFinding({ ...findingOf(1), severity: 'HIGH' }))).toEqual([]);
-  });
-
-  it('names title, location and why for a follow-up that is not an object', () => {
-    expect(validateFindings(reportWithRawFollowUp(null))).toEqual([
-      'followUps[0].title is required',
-      'followUps[0].location is required',
-      'followUps[0].why is required',
-    ]);
   });
 });
 
@@ -438,16 +500,6 @@ describe('review-verdict.mjs: summary counts', () => {
     expect(renderSummary(report).split('\n')).toContain(
       '- Checks: typecheck fail, scoped runs of added tests none',
     );
-  });
-
-  it('renders the follow-up item count, plural for two and absent for none', () => {
-    const twoFollowUps = reportOf([findingOf(1)], {
-      followUps: [VALID_FOLLOW_UP, { title: 'Rename the helper', location: 'src/b.ts', why: 'touches every caller' }],
-      followUpTask: 'task 812',
-    });
-    expect(validateFindings(twoFollowUps)).toEqual([]);
-    expect(renderSummary(twoFollowUps).split('\n')).toContain('- Follow-up task: task 812 (2 items)');
-    expect(renderSummary(reportOf([findingOf(1)])).split('\n')).toContain('- Follow-up task: none');
   });
 });
 
@@ -578,5 +630,54 @@ describe('review-verdict.mjs: command line', () => {
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('invalid findings file (1 problem):');
     expect(result.stderr).toContain('(got "skipped")');
+  });
+
+  it('exits 2 for a findings file a stale driver wrote with an empty followUps', () => {
+    const result = runScript({ ...reportOf([findingOf(1)]), followUps: [] });
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('invalid findings file (1 problem):');
+    expect(result.stderr).toContain(FOLLOW_UPS_RETIRED);
+  });
+});
+
+// A desktop review of a branch identical to main ended "No changes to review." with no verdict
+// line. Neither Code Review row (kangentic.json: "Verdict: Blocked" back to Executing,
+// "Verdict: Ready" on to Testing) matched it, and a workflow's step check moved the task on.
+describe('review-verdict.mjs: --no-changes', () => {
+  it('ends Blocked, with one step above the verdict, so the send-back row matches it', () => {
+    const lines = renderNoChanges('main').split('\n');
+    expect(lines).toEqual([
+      'No changes to review.',
+      '',
+      '1. main: the branch and its working tree match main, so there was nothing to review. Do this task\'s work, then commit it.',
+      'Verdict: Blocked',
+    ]);
+    expect(lines.at(-1)).not.toBe('Verdict: Ready');
+  });
+
+  it('names the working tree alone when no base resolved', () => {
+    expect(renderNoChanges('').split('\n').slice(-2)).toEqual([
+      '1. Working tree: there are no changes to review. Do this task\'s work, then commit it.',
+      'Verdict: Blocked',
+    ]);
+  });
+
+  it('prints the message and exits 0 from the command line, with or without a base', () => {
+    const withBase = runScriptWithArguments(['--no-changes', 'origin/main']);
+    expect(withBase.exitCode).toBe(0);
+    expect(withBase.stdout.trimEnd()).toBe(renderNoChanges('origin/main'));
+    const withoutBase = runScriptWithArguments(['--no-changes']);
+    expect(withoutBase.exitCode).toBe(0);
+    expect(withoutBase.stdout.trimEnd().split('\n').pop()).toBe('Verdict: Blocked');
+  });
+
+  it('exits 2 with a usage line for a second base or another flag', () => {
+    for (const scriptArguments of [['--no-changes', 'main', 'develop'], ['--no-changes', '--ledger'], ['--no-changes', '-x']]) {
+      const result = runScriptWithArguments(scriptArguments);
+      expect(result.exitCode).toBe(2);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('usage:');
+    }
   });
 });

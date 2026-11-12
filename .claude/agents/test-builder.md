@@ -34,7 +34,10 @@ test you write should pass first try and stay passing across hundreds of runs wi
 
 The harness is live: vitest, Jest + RNTL, the Maestro flows under `.maestro/`, and
 `.github/workflows/ci.yml` running typecheck, lint, unit, and component tests on every pull
-request and every push to `main`. Maestro E2E is not wired into CI; it runs locally.
+request and every push to `main`. `.github/workflows/e2e.yml` runs Maestro on every PR too:
+`.maestro/smoke.yaml` is the required `E2E Tests (Maestro)` check, and every flow under
+`.maestro/paired/` runs in the advisory `E2E Tests (Paired)` check. A flow anywhere else under
+`.maestro/` runs nowhere in CI.
 
 ## Invocation Modes
 
