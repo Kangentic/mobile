@@ -16,12 +16,15 @@ frames onto the listings" in [developer-guide.md](developer-guide.md) has the de
 repository is the source of truth for them, so do not change a screenshot in either console: the
 next sync replaces it.
 
-**Where the listings stood on 2026-11-12, before any sync had run.** Read from the store, not
-remembered: the App Store listing (version 1.5.0, waiting for review, so locked) was showing the
-seven frames committed for v1.1.0 on 2026-10-12, byte for byte, and none of the frames
-re-captured for v1.4.0 or v1.5.0. The Play listing had not been read: its check
-(`gh workflow run store-listing.yml -f platform=android -f mode=check`) only exists once that
-workflow is on `main`. Replace this paragraph with the date each listing was first synced.
+**Both listings were first synced on 2026-11-12**, and each result was read back from the store
+by a separate run, not remembered. Until that day the App Store listing for version 1.5.0 was
+showing the seven frames committed for v1.1.0 on 2026-10-12, byte for byte, and none of the
+frames re-captured for v1.4.0 or v1.5.0; the three Play shelves also differed from the committed
+frames. The sync replaced the three Play shelves (run 43296915425) and the iPhone shelf of 1.5.0
+(run 43299583161; the version was removed from review for it and submitted again afterwards).
+Both now hold the seven v1.5.0 frames in listing order: Agents, Board, then the detail views.
+Play shows a listing change once Google has reviewed it, and the App Store shows these when
+1.5.0 is approved.
 
 All four shelves have carried seven frames since the 2026-10-12 capture (task #115): the
 redesigned headers and sheets, the Board header's Terminals button, and a seventh frame of a
