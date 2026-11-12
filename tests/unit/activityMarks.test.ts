@@ -99,7 +99,7 @@ const MARK_NAMES = Object.keys(activityMarks) as ActivityMarkName[];
 const KNOWN_REST_RENDERINGS = new Set(['static', 'keep-dash', 'drop-dash']);
 
 /**
- * The eight marks the app draws, and no others. The package ships twelve; the
+ * The nine marks the app draws, and no others. The package ships twelve; the
  * rest are left out on purpose, each for a reason that is a design decision and
  * not an oversight (scripts/syncBranding.mjs, ACTIVITY_MARKS):
  *
@@ -108,13 +108,15 @@ const KNOWN_REST_RENDERINGS = new Set(['static', 'keep-dash', 'drop-dash']);
  *   animation that never stops (motion-conventions.md).
  * - `control-pause-*` is not drawn: the phone's Pause is a sheet row, not the
  *   desktop's ring control.
- * - `agent-stopped` is not adopted yet, and until it is `agent-idle` covers its
- *   state, as the package's README says.
+ *
+ * `agent-stopped` is drawn since protocol 0.28.0's `stopped` idle reason gave it
+ * a state to wear (AgentStatusIcon's `stopped` kind).
  */
 const EXPECTED_MARK_NAMES = [
   'agent-approval',
   'agent-idle',
   'agent-question',
+  'agent-stopped',
   'agent-working',
   'control-stop-idle',
   'control-stop-working',
@@ -203,7 +205,7 @@ describe('activityMarks', () => {
     expect(Object.keys(manifest.marks).length).toBe(12);
   });
 
-  it('generates exactly the eight marks the app draws, and deliberately not terminal-working or the pause controls', () => {
+  it('generates exactly the nine marks the app draws, and deliberately not terminal-working or the pause controls', () => {
     expect([...MARK_NAMES].sort()).toEqual(EXPECTED_MARK_NAMES);
     // The omissions are decisions, so they are pinned by name: a package bump
     // or a generator edit that quietly started shipping a blinking terminal
@@ -213,7 +215,7 @@ describe('activityMarks', () => {
       // ...while still existing upstream, so "unsynced" is a choice and not a missing file.
       expect(Object.keys(manifest.marks), `${omittedMarkName} exists in the package`).toContain(omittedMarkName);
     }
-    // And every one of the eight is a real manifest entry, not a name the
+    // And every one of the nine is a real manifest entry, not a name the
     // generator invented.
     for (const markName of EXPECTED_MARK_NAMES) expect(Object.keys(manifest.marks)).toContain(markName);
   });
@@ -557,6 +559,25 @@ function endpointExtents(pathData: string): { minX: number; maxX: number; minY: 
     maxY: Math.max(...points.map((point) => point.y)),
   };
 }
+
+describe('the stopped mark (agent-stopped)', () => {
+  it('is the upstream pennant: one stroked path, verbatim', () => {
+    const upstream = upstreamElements('agent-stopped');
+    expect(upstream.map((element) => element.tagName)).toEqual(['path']);
+    expect(activityMarks['agent-stopped'].shapes).toEqual(upstream.map((element) => ({ kind: 'path', d: element.attributes.d })));
+  });
+
+  it('is static, in the attention tone, at the indicator floor', () => {
+    const mark = activityMarks['agent-stopped'];
+    expect(mark.spin).toBeUndefined();
+    expect(mark.march).toBeUndefined();
+    expect(mark.restRendering).toBe('static');
+    expect(movingShapes('agent-stopped')).toEqual([]);
+    expect(manifest.marks['agent-stopped'].motion).toBeNull();
+    expect(manifest.marks['agent-stopped'].tone).toBe('attention');
+    expect(mark.minPx).toBe(manifest.floors.indicator);
+  });
+});
 
 describe('the wait marks (agent-question, agent-approval)', () => {
   const waitMarkNames = ['agent-question', 'agent-approval'] as const;
