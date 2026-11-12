@@ -13,9 +13,9 @@ export interface WorkflowMoveCheck {
    * the desktop's old `taskHeld`. Read only for a desktop before v0.55.0
    * (see `movesStoppedCards`): a current one has no hold in its lock, refuses
    * to set one on a running or paused workflow's task, and cleared the old
-   * ones. Not gated on `automations_pausable`: a desktop older than that field
-   * clears the switch when a task joins a workflow and refuses to set it on
-   * one, so it never sends a held workflow row.
+   * ones outside Done. Not gated on `automations_pausable`: a desktop older
+   * than that field clears the switch when a task joins a workflow and
+   * refuses to set it on one, so it never sends a held workflow row.
    */
   held: boolean;
 }
