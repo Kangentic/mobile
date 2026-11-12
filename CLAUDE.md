@@ -313,9 +313,23 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   pretypecheck stale-node_modules guard), the store preflights
                   #   checkPlayVersionCode.mjs / checkAppStoreBuild.mjs,
                   #   prepareAppStoreRelease.mjs (the two App Store stages of
-                  #   `build-ios.yml -f submit=appstore`: prepare, then submit; plus the
-                  #   read-only `check` mode that app-store-check.yml runs), storeScreenshots.mjs
-                  #   (listing captures, driven by /store-screenshots),
+                  #   `build-ios.yml -f submit=appstore`: prepare, then submit; the
+                  #   `screenshots` mode that puts the committed iPhone frames on the
+                  #   version between them; plus the read-only `check` mode that
+                  #   app-store-check.yml runs), storeScreenshots.mjs
+                  #   (listing captures, driven by /store-screenshots; its SHOT_NAMES
+                  #   is the LISTING ORDER both uploads follow),
+                  #   syncPlayListingImages.mjs (puts the committed Play shelves on the
+                  #   Play listing, or with `--mode check` only reports; run after a
+                  #   full production release commits, and by store-listing.yml),
+                  #   lib/listingFrames.mjs (the one reader of the committed frames:
+                  #   listing order, and refusal before upload of a stray file, a wrong
+                  #   size or an alpha channel), lib/playPublisher.mjs (the Play
+                  #   service-account sign-in and transport, shared with
+                  #   checkPlayVersionCode.mjs), lib/appStoreScreenshots.mjs (App Store
+                  #   screenshots through the App Asset Library; Apple deprecated
+                  #   appScreenshotSets in API 4.5.x. WRITE PATH UNPROVEN until the
+                  #   first App Store release after 2026-11-12),
                   #   waitForReleaseGate.mjs (read-only: polls a release run until a gate
                   #   waits or the run ends, so /release is woken once per gate),
                   #   build-review-pack.mjs (gathers the /code-review diff once into a
@@ -331,7 +345,10 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   upgrade-researcher-guard.js (the read-only hook on the
                   #   upgrade-researcher agent), both ported from the desktop repo
                   #   + repo scripts
-store/screenshots/            # Committed Play + App Store listing images, one set per shelf
+store/screenshots/            # Committed Play + App Store listing images, one set per shelf.
+                              #   COMMITTING PUBLISHES THEM: the next release uploads these
+                              #   to both listings with no console step, and the repository
+                              #   is the source of truth (a console edit is overwritten)
 store/whatsnew/               # Release notes (whatsnew-<locale>, 500-char cap) that
                               #   build-android.yml sends with every Play upload; the same
                               #   file fills the App Store version's What's New (stage 1 of
@@ -366,6 +383,14 @@ store/whatsnew/               # Release notes (whatsnew-<locale>, 500-char cap) 
   outage cannot block it. `gh workflow run app-store-check.yml` is the read-only preflight for the
   `appstore` path: it writes nothing and reports what both stages would find. See the CI builds section of
   [docs/developer-guide.md](docs/developer-guide.md).
+- `gh workflow run store-listing.yml -f mode=check` - reports whether each store listing shows
+  the committed `store/screenshots/` frames, and changes nothing. A release uploads them by
+  itself (Play after a full production release commits, the App Store in stage 1), so this
+  workflow is for between releases and for retries. **`-f mode=sync` writes to a public store
+  listing**, behind the `google-play` / `app-store-connect` approval: never dispatch it without
+  an explicit request, and **never dispatch either mode for Android while a Play submission is
+  uploading**, because opening a Play edit invalidates the release's own. See "Getting the frames
+  onto the listings" in [docs/developer-guide.md](docs/developer-guide.md).
 - The `eas build` wrappers below are **cloud** builds that each spend one of the 15 free monthly
   builds per platform and enter a low-priority queue that can take hours. Prefer the workflows above;
   use these only when a runner will not do:
@@ -768,7 +793,8 @@ in a gitignored `CLAUDE.local.md` at the project root.
 - `/store-screenshots` re-captures the Play and App Store listing images across all four shelves.
   Run it whenever the captured screens, the mock content, or the tab bar change - the copy is IN
   the frames, so all four shelves drift together. It sequences the platforms deliberately: iOS
-  costs ~45 minutes on a macOS runner per attempt, Android ~6 minutes each locally.
+  costs ~45 minutes on a macOS runner per attempt, Android ~6 minutes each locally. It ends at
+  the commit: the next release uploads the frames to both listings, so there is no upload step.
 - `/sentry` retrieves and diagnoses issues from the `mobile` Sentry project. A triage sweep ends
   by filing the actionable issues as grouped, parallel-safe board tasks (grouped by the files the
   fix touches) and assigning them as the triage marker; a single-issue investigation files a

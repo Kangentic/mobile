@@ -36,7 +36,7 @@ Only these change a frame. Everything else is churn:
 - **The mock content** (`src/connection/mockDesktop.ts`). Mock copy is IN the
   frames, so a rename or a new line means all four shelves drift.
 - **The tab bar** (`app/(tabs)/_layout.tsx`). It appears in `01-agents` and
-  `05-board` on every shelf.
+  `02-board` on every shelf.
 
 **Re-capture every shelf, not the one you looked at.** Half a set is worse than
 a stale set: the two stores then show visibly different copy for the same app,
@@ -154,7 +154,7 @@ right PICTURE, and this is where every real defect has been found:
 - a horizontal scrollbar along the bottom of the phone's file-diff frame, caught
   before Android faded it out (the diff is wider than a phone). Twice in a row on
   2026-10-08, and the 7-inch board flashed its vertical thumb the same day, so
-  the flow now waits out the fade before `06-file-diff` and `05-board`; if a
+  the flow now waits out the fade before `06-file-diff` and `02-board`; if a
   strip ever comes back, raise that wait rather than hiding the app's indicator
 - status badges floating 12pt above the row they label
 - **a completely BLANK terminal**, on one run out of two
@@ -172,16 +172,49 @@ File size is the cheap tell, and worth checking before you even open the
 frames. A full 6.9-inch terminal frame is ~380KB (the 210x48 fixture,
 2026-10; it was ~317KB with the old 44x38 one); the blank one was 104KB,
 while every other frame in the same run was within noise. If
-`02-session-terminal` comes back dramatically smaller than its neighbours,
+`03-session-terminal` comes back dramatically smaller than its neighbours,
 look at it before doing anything else, and just re-run - it is a WebGL context
 loss on the simulator, which is why the terminal page carries retry logic
 (scripts/xterm-page/webglRenderer.js).
 
 ## Step 6 - Commit all four shelves together
 
-Then run `npm run typecheck`, `npm run lint`, and any test you touched.
+Then run `npm run typecheck`, `npm run lint`, and any test you touched, plus
+`npx vitest run tests/unit/listingFrames.test.ts`: it reads the committed
+frames the way the upload will, and fails on a stray file, a wrong size, an
+alpha channel, or two iPhone frames of the same length.
 
 Do not open a PR unless asked; the board's Testing column owns that.
+
+## Step 7 - There is no upload step
+
+**Committing is what publishes these.** Nobody uploads a frame by hand, and
+nobody looks at them again on the way to the store, which is the reason for
+Step 5:
+
+- **Play:** the next full production release replaces any shelf that differs
+  from `store/screenshots/android/`, after the release has committed
+  (`Listing images (Google Play)` in `build-android.yml`).
+- **App Store:** stage 1 of the next `submit=appstore` release puts
+  `store/screenshots/ios/iphone-6.9/` on the version, and stage 2 refuses to
+  submit a listing that shows anything else.
+
+To put them on the Play listing without waiting for a release, the user can
+run `gh workflow run store-listing.yml -f platform=android -f mode=sync` and
+approve its `google-play` gate. Do not dispatch that yourself unless asked: it
+writes to a public listing. `-f mode=check` only reads, and says whether each
+listing shows the committed frames. iOS has no between-release sync: App Store
+Connect lets screenshots change only on a version that has not been submitted.
+
+**Never change a listing screenshot in a store console.** The repository is the
+source of truth, so the next sync replaces it, and on Play an unsent listing
+change blocks the next release's commit.
+
+**The numbering is the listing order** (Agents, Board, then the detail views),
+and it lives in `SHOT_NAMES` in `scripts/storeScreenshots.mjs`. Adding,
+removing or reordering a shot means changing that list, the `takeScreenshot`
+paths in the flow, and the file names together;
+`tests/unit/storeScreenshots.test.ts` pins the order as a literal.
 
 ## Traps worth knowing before they cost you a run
 
@@ -224,5 +257,5 @@ Do not open a PR unless asked; the board's Testing column owns that.
 ## What this does NOT produce
 
 The app icon and Play feature graphic ship from `@kangentic/branding` and are
-uploaded by hand - see `docs/store-listing.md`. App preview videos are optional
-and not produced here.
+still uploaded by hand - see `docs/store-listing.md`. The listing sync covers
+the screenshots only. App preview videos are optional and not produced here.

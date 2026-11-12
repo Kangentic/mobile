@@ -39,15 +39,13 @@ but `/release` never does it.
 release's GitHub environment gates to be approved by you (Step 5). Otherwise ask once, now, with
 `AskUserQuestion`: "May I approve the store gates for this release?" with three answers:
 **Approve all gates** / **Uploads only, I'll approve App Review** / **I'll approve them myself**.
-The answer covers **this invocation only** and never carries over to a later `/release`. When the
-release changes `store/screenshots/ios/`, say in the question that stage 2 waits for the user's
-upload whichever answer they pick (Step 5 has the reason).
+The answer covers **this invocation only** and never carries over to a later `/release`.
 
 Then check the resolved release against the table below and **stop with an explanation if it is
 blocked.**
 
 **Every row is a claim about external state, so treat it as evidence with an age, not as fact.**
-The table was last revised **2026-10-19**, and each row carries its own date. This matters
+The table was last revised **2026-11-12**, and each row carries its own date. This matters
 because it has already been wrong three times in ways that cost real time: it asserted the Play
 API path was proven when nothing had ever exercised it, it listed data safety as unfilled after
 it had been submitted, and it still called both production paths blocked weeks after both apps
@@ -63,10 +61,10 @@ wastes a 20 minute build and can leave a dangling Play edit.
 | android + internal | **Works** | - |
 | android + closed (alpha) | **Not exercised** (2026-10-07) | Production access means the closed-test gate was passed, but this workflow has never submitted to `alpha`. The `plan` job requires `-f rollout=...` for it. Treat a first dispatch here the way the production row below treats its first one. |
 | android + open (beta) | **Not exercised** (2026-10-07) | Same as closed. |
-| android + production | **Works** (2026-10-07; full release proven 2026-10-19) | The app is live in production and production access is granted (maintainer, 2026-10-07). Dispatch `-f submit_track=production` with **no rollout**: a full `completed` release to every user, by maintainer decision (2026-10-15). **v1.0.0 (vc15) is the first release this workflow submitted to production itself**; it and v1.1.0 went out as staged rollouts under the old rule and were widened to 100% by hand (v1.1.0 was at 100% by 2026-10-15). **v1.2.0 (vc17) is the first full `completed` release it submitted** (2026-10-19, run 39182659113, `Submit (Google Play)` in 1m25s, tagged `android-vc17`). Three Console preconditions, all invisible to the Play API: the service account needs **Release to production** under Users and permissions (its July grant was testing tracks only); Publishing overview must hold **no unsent changes**, or the commit fails with "Changes cannot be sent for review automatically"; and **Managed publishing must be off** (it was, checked 2026-10-15), or a committed release waits for a manual Publish. So upload new listing images AFTER the release commits, not before. Either commit failure: fix it, then re-run `submit-play` alone. |
+| android + production | **Works** (2026-10-07; full release proven 2026-10-19) | The app is live in production and production access is granted (maintainer, 2026-10-07). Dispatch `-f submit_track=production` with **no rollout**: a full `completed` release to every user, by maintainer decision (2026-10-15). **v1.0.0 (vc15) is the first release this workflow submitted to production itself**; it and v1.1.0 went out as staged rollouts under the old rule and were widened to 100% by hand (v1.1.0 was at 100% by 2026-10-15). **v1.2.0 (vc17) is the first full `completed` release it submitted** (2026-10-19, run 39182659113, `Submit (Google Play)` in 1m25s, tagged `android-vc17`). Three Console preconditions, all invisible to the Play API: the service account needs **Release to production** under Users and permissions (its July grant was testing tracks only); Publishing overview must hold **no unsent changes**, or the commit fails with "Changes cannot be sent for review automatically"; and **Managed publishing must be off** (it was, checked 2026-10-15), or a committed release waits for a manual Publish. Either commit failure: fix it, then re-run `submit-play` alone. **The listing screenshots upload themselves** (task #149, 2026-11-12; **not yet run against Play**, so treat its first run the way this row treats a first dispatch). After `Submit (Google Play)` commits and tags, the `Listing images (Google Play)` job compares the listing with `store/screenshots/android/` and replaces any shelf that differs, in an edit of its own. It needs a fourth grant, **Manage store presence**, which the release permissions do not include. It runs for a full production release only (never a testing track or a staged rollout, because the listing belongs to the app, not a track), and `-f listing_images=skip` turns it off. Never change listing images in the Console around a release: an unsent change there blocks the commit, and the next sync overwrites it anyway. Step 6 says how to read that job. |
 | ios + TestFlight internal | **Works** | Needs `ASC_API_KEY_BASE64` + `ASC_KEY_ID` + `ASC_ISSUER_ID`, or `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD`, as GitHub secrets. Check with `gh secret list` before promising it. |
 | ios + TestFlight external | **Unverified since 2026-07-28** | Then: needs a Beta App Review plus a beta description, feedback email, and test information. Not revisited since; check App Store Connect. |
-| ios + App Store | **Works end to end** (2026-10-19: v1.2.0 build 19 reached WAITING_FOR_REVIEW through both stages, run 39182661900) | The app is live on the App Store (maintainer, 2026-10-07). Dispatch `-f target=device -f submit=appstore`. Two stages, each behind its own approval of `app-store-connect`. **Stage 1**, at the end of `Submit (TestFlight)`, creates or updates the App Store version, attaches the build, fills What's New from `store/whatsnew/whatsnew-<locale>`, sets **release automatically after approval** and cancels any planned **7-day phased release**, then reports the review notes, contact details and screenshot counts. **Stage 2**, `Submit (App Review)`, re-applies those settings, refuses without review notes or screenshots, and submits. Rejecting the second gate leaves a draft version, which can still be submitted by hand with Add for Review. **Needs the ASC API key on the App Manager role**; stage 1 answers a 403 with exactly that. Both active team keys were App Manager when checked (2026-10-15), so this should hold unless the key is replaced. A version created through the API **inherits** the previous version's screenshots and App Review Information (the notes carry the reviewer demo pairing code): 1.2.0 arrived with 7 screenshots, contact details and notes, and stage 1's carry-over (since 2026-10-18) found nothing to copy. The carry-over stays as a safety net; when it does copy, the report names the fields (`Changed: App Review Information carried over from version ...`). **Screenshots stay manual:** when a release needs new ones, upload them between the two approvals. Seven 6.9-inch frames at 1320x2868 are tracked in `store/screenshots/ios/iphone-6.9/`, against an Apple minimum of **one** (10 is the cap, and only the first 3 reach install sheets). Upload via Media Manager targeting 6.9", the source slot every smaller iPhone size is derived from. `ITSAppUsesNonExemptEncryption` is `false` as a reasoned default, not a verified legal conclusion; see the comment in `app.config.ts`. |
+| ios + App Store | **Works end to end** (2026-10-19: v1.2.0 build 19 reached WAITING_FOR_REVIEW through both stages, run 39182661900) | The app is live on the App Store (maintainer, 2026-10-07). Dispatch `-f target=device -f submit=appstore`. Two stages, each behind its own approval of `app-store-connect`. **Stage 1**, at the end of `Submit (TestFlight)`, creates or updates the App Store version, attaches the build, fills What's New from `store/whatsnew/whatsnew-<locale>`, sets **release automatically after approval** and cancels any planned **7-day phased release**, then reports the review notes, contact details and screenshot counts. **Stage 2**, `Submit (App Review)`, re-applies those settings, refuses without review notes or screenshots, refuses while the listing screenshots are not the committed frames, and submits. Rejecting the second gate leaves a draft version, which can still be submitted by hand with Add for Review. **Needs the ASC API key on the App Manager role**; stage 1 answers a 403 with exactly that. Both active team keys were App Manager when checked (2026-10-15), so this should hold unless the key is replaced. A version created through the API **inherits** the previous version's screenshots and App Review Information (the notes carry the reviewer demo pairing code): 1.2.0 arrived with 7 screenshots, contact details and notes, and stage 1's carry-over (since 2026-10-18) found nothing to copy. The carry-over stays as a safety net; when it does copy, the report names the fields (`Changed: App Review Information carried over from version ...`). **The listing screenshots upload themselves** (task #149, 2026-11-12). A step after stage 1's prepare makes the version's screenshots be the seven frames in `store/screenshots/ios/iphone-6.9/` (1320x2868, in filename order) through the App Asset Library, and writes nothing when they already are. **Its read path is proven live; its write path has not run yet**, because App Store Connect only lets screenshots change on a version that has not been submitted, and none existed when it was built: the first App Store release after 2026-11-12 is its first run, so read its report closely (Step 5) and remove this sentence once it has. Whether or not that step succeeds, stage 2 will not submit a listing that differs from the committed frames, which is what makes the inheritance above safe: a count of 7 used to pass with every one of them left over from an earlier release. `-f listing_images=skip` restores the hand upload and the count-only check (Media Manager, the 6.9-inch slot, the source every smaller iPhone size is derived from; Apple's minimum is **one**, 10 is the cap, and only the first 3 reach install sheets). `ITSAppUsesNonExemptEncryption` is `false` as a reasoned default, not a verified legal conclusion; see the comment in `app.config.ts`. |
 
 If the user insists on a blocked path after being told, say plainly that it cannot be done and stop.
 Do not attempt a workaround.
@@ -113,8 +111,12 @@ All of these, and stop on any failure:
   reports the newest version's App Review notes, contact details and screenshot counts, plus any
   other unreleased version (a draft, or one in review or waiting to release) that would make stage
   1 refuse. Stop and tell the user if it fails, or if it reports an unreleased version. Missing
-  review notes or screenshots are the user's to fix in App Store Connect, before stage 2 at the
-  latest. It cannot prove write access; the App Manager role can.
+  review notes are the user's to fix in App Store Connect, before stage 2 at the latest. It also
+  compares the listing screenshots with the committed frames and makes every App Asset Library
+  read the upload depends on. **A listing that DIFFERS there is not a stop:** the check inspects
+  the newest existing version, which shows the previous release's frames whenever they were
+  re-captured since, and stage 1 replaces them. A failed library read is a stop. It cannot prove
+  write access; the App Manager role can.
 - The approval environment for the chosen platform still has a required reviewer:
   `gh api repos/Kangentic/mobile/environments --jq '.environments[] | {name, rules: [.protection_rules[].type]}'`
   must show `required_reviewers` on `google-play` (Android) or `app-store-connect` (iOS). **A missing
@@ -359,19 +361,31 @@ finished job's log through the API instead: take the job id from
 `gh run view <run id> --json jobs --jq "[.jobs[] | {name, databaseId}]"`, then
 `gh api repos/Kangentic/mobile/actions/jobs/<job id>/logs`, and look for the lines after
 `--mode prepare`. The report covers the review notes, the contact details, and the screenshot
-count per localization. Remind the user that listing screenshots can be changed in App Store
-Connect now, before stage 2. **Do not dispatch another `build-ios.yml -f target=device` run on
+count per localization. After it comes the `--mode screenshots` step's own report, one line per
+localization: `replaced. N uploaded, ...`, `in sync ... Nothing to upload.`, or an error. **Read
+that step's result, do not infer it from the job being green:** it is `continue-on-error`, so the
+job passes when it fails, and the job summary then reads `Listing screenshots: NOT synced`. **Do
+not dispatch another `build-ios.yml -f target=device` run on
 `main` while the second gate waits**, and tell the user the same: the workflow's concurrency
 group cancels an in-progress run, so a second dispatch cancels the one parked at
 `Submit (App Review)`. Its prepared version survives, but stage 2 then has to be re-run or
 submitted by hand with Add for Review.
-- **"Approve all gates":** approve stage 2 once stage 1 is green and its report shows nothing
-  missing. If something is missing, stop and tell the user instead; stage 2 would refuse anyway.
-  **A release that changed `store/screenshots/ios/` also waits for the user's word that the new
-  frames are uploaded.** Stage 1 cannot tell: a version created through the API inherits the
-  previous version's screenshots, so the report counts 7 present while the listing still shows the
-  old frames, and they lock once the version reads `WAITING_FOR_REVIEW` (found on v1.4.0,
-  2026-11-01). Ask with `AskUserQuestion`, naming the folder and the 6.9-inch slot.
+- **"Approve all gates":** approve stage 2 once stage 1 is green, its report shows nothing
+  missing, and the screenshot step reports the listing replaced or in sync. If review notes are
+  missing, stop and tell the user instead; stage 2 would refuse anyway.
+  **If the screenshot sync failed, do not approve yet.** Stage 2 refuses a listing that is not the
+  committed frames, and each refusal spends an approval. Run
+  `gh workflow run store-listing.yml --ref main -f platform=ios -f mode=sync` (it runs from
+  `main`, so it carries a fix a re-run of the release job cannot; its `app-store-connect` gate is
+  the user's to approve, and no `autoMode.allow` entry covers it), wait for it to report the
+  listing in sync, then approve stage 2. If that fails too, tell the user: the fallback is a hand
+  upload in Media Manager of the seven committed frames in filename order, which stage 2
+  recognises by file size.
+  **No question is needed when the sync succeeded.** Until task #149 this step asked the user to
+  confirm a hand upload, because stage 1 could not tell: a version created through the API
+  inherits the previous version's screenshots, so the report counted 7 present while the listing
+  still showed the old frames, and they lock once the version reads `WAITING_FOR_REVIEW` (found
+  on v1.4.0, 2026-11-01). Stage 2 checks that itself now.
 - **"Uploads only":** approve `google-play` and the first `app-store-connect` gate, then tell the
   user that `Submit (App Review)` is theirs.
 
@@ -388,6 +402,20 @@ With the Play key on hand, `node scripts/checkPlayVersionCode.mjs ... --version-
 released>` must now **fail** with "already released on the <track> track"; if it still reports the
 code as free, the upload did not land.
 
+**Android, the listing:** for a full production release the run is not finished when
+`Submit (Google Play)` is green. `Listing images (Google Play)` runs after it, and nothing in
+Step 5 waits for it, so start one more `node scripts/waitForReleaseGate.mjs <run id>` after the
+approval: with no gate left it exits on `RUN-COMPLETED` with every job's result. Then read that
+job. `Every shelf already shows the committed frames. Nothing was uploaded.` or
+`Committed: N shelf(s) replaced` is the listing done. **A red listing job is a listing that was
+not updated, not a failed release:** the release committed and was tagged before that job
+started, so report the release as landed and the listing as pending. Fix what the job names (a
+403 is the missing **Manage store presence** grant, which can take a day to apply; an
+unsent-changes refusal is cleared in Publishing overview), then re-run that job alone, or run
+`gh workflow run store-listing.yml --ref main -f platform=android -f mode=sync`, whose
+`google-play` gate is the user's to approve. **Never dispatch `store-listing.yml` while a Play
+submission is uploading:** opening a Play edit invalidates the release's own.
+
 **iOS:** usually nothing to do by hand. `build-ios.yml`'s submit job already runs
 `checkAppStoreBuild.mjs --await-processing`, which blocks until Apple reaches a terminal state and
 fails the job if the build was rejected, and it skips its "verdict was not checked" warning only
@@ -403,9 +431,10 @@ upload failed.
 
 **iOS App Store:** a green `Submit (App Review)` means the review submission read
 `WAITING_FOR_REVIEW` or `IN_REVIEW`, or that a re-run found the version already submitted or
-approved with this build. The job fails on anything else, so its green is the evidence. Once Apple
-approves the version, it goes live to every user on its own. There is nothing left to press, and
-no phased release to finish.
+approved with this build. The job fails on anything else, so its green is the evidence. Its log
+also carries the line that settles the screenshots, `en-US listing: 7 screenshot(s), in sync with
+the committed frames`, written just before it submitted. Once Apple approves the version, it goes
+live to every user on its own. There is nothing left to press, and no phased release to finish.
 
 Then report the artifact name, version, build counter, and track to the user.
 
@@ -495,3 +524,12 @@ Kept because each cost real time:
 - **A missing GitHub Environment is silently created with no protection rules.** Deleting
   `google-play` or `app-store-connect` does not break a dispatch, it removes the approval gate
   without a single error. Check before releasing.
+- **A screenshot count says nothing about which screenshots.** On 2026-11-12 the first read-only
+  listing check (`app-store-check.yml`, run 43280259631) found the 1.5.0 App Store version,
+  already `WAITING_FOR_REVIEW` and so locked, still showing the seven frames committed for v1.1.0
+  on 2026-10-12: Apple's `fileSize` and MD5 for each matched that commit's files exactly. None of
+  the seven v1.5.0 frames was in the app's asset library at all, so they had never been uploaded,
+  on a release where a hand upload between the gates was believed done. Every stage-1 report in
+  between had read "7 screenshot(s)", which was true. That is why stage 2 compares the listing
+  with the committed frames instead of counting, and why the check prints both lists when they
+  differ.
