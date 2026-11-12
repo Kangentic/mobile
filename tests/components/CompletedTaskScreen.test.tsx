@@ -17,9 +17,10 @@ jest.mock('react-native-safe-area-context', () =>
 );
 
 let mockParams: { taskId?: string; projectId?: string } = { taskId: 'task-1', projectId: 'project-1' };
+const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
   useLocalSearchParams: () => mockParams,
-  useRouter: () => ({ replace: jest.fn(), back: jest.fn(), push: jest.fn() }),
+  useRouter: () => ({ replace: jest.fn(), back: jest.fn(), push: (route: unknown) => mockPush(route) }),
 }));
 
 const mockLoadTranscriptTail = jest.fn().mockResolvedValue(undefined);
@@ -353,6 +354,57 @@ describe('CompletedTaskScreen', () => {
       await fireEvent.press(chip);
       expect(mockOpenURL).toHaveBeenCalledTimes(1);
       expect(mockOpenURL).toHaveBeenCalledWith('https://github.com/Kangentic/kangentic/pull/656');
+    });
+
+    /**
+     * The task's links (protocol 0.28.0) beside the PR chip: one link is a chip
+     * naming it that opens it, several are "N artifacts" that open the sheet.
+     */
+    describe('the artifacts chip', () => {
+      const FIGMA = { url: 'https://www.figma.com/file/abc', name: 'Checkout design' };
+      const PLAN = { url: 'https://claude.ai/chat/xyz', name: 'Plan' };
+      const REPORT = { url: 'https://example.com/report', name: 'Report' };
+
+      /** Mutation seen failing: onPress for a single link no longer calling openArtifactLink. */
+      it('names a single link and opens it in the OS handler', async () => {
+        seedArchived('project-1', taskFixture({ artifacts: [FIGMA] }), summaryFixture());
+        await openSegment('summary');
+
+        const chip = screen.getByTestId('completed-strip-artifacts');
+        expect(within(chip).getByText('Checkout design')).toBeTruthy();
+        expect(chip.props.accessibilityRole).toBe('link');
+        await fireEvent.press(chip);
+
+        expect(mockOpenURL).toHaveBeenCalledWith('https://www.figma.com/file/abc');
+        expect(mockPush).not.toHaveBeenCalled();
+      });
+
+      /** Mutation seen failing: the push dropping its taskId param (params: {}). */
+      it('reads "N artifacts" for several and pushes the Artifacts sheet for the task', async () => {
+        seedArchived('project-1', taskFixture({ artifacts: [FIGMA, PLAN, REPORT] }), summaryFixture());
+        await openSegment('summary');
+
+        const chip = screen.getByTestId('completed-strip-artifacts');
+        expect(within(chip).getByText('3 artifacts')).toBeTruthy();
+        expect(chip.props.accessibilityRole).toBe('button');
+        await fireEvent.press(chip);
+
+        expect(mockPush).toHaveBeenCalledWith({ pathname: '/task-artifacts', params: { taskId: 'task-1' } });
+        expect(mockOpenURL).not.toHaveBeenCalled();
+      });
+
+      /** Mutation seen failing: the chip drawn unconditionally (the `length > 0` guard removed). */
+      it.each([
+        ['no links', []],
+        ['an older desktop (null)', null],
+        ['only a link that is not https', [{ url: 'http://example.com/page', name: 'Insecure' }]],
+      ])('draws no chip for %s', async (_description, artifacts) => {
+        seedArchived('project-1', taskFixture({ artifacts }), summaryFixture());
+        await openSegment('summary');
+
+        expect(screen.getByTestId('completed-strip')).toBeTruthy();
+        expect(screen.queryByTestId('completed-strip-artifacts')).toBeNull();
+      });
     });
 
     it.each([

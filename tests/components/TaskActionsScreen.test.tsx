@@ -732,6 +732,107 @@ describe('TaskActionsScreen', () => {
   });
 
   /**
+   * A task's links (protocol 0.28.0). One https link opens in place, as View pull
+   * request does; several open the Artifacts sheet by replacing this one.
+   * Non-https links are left out, since the phone hands only https to the OS.
+   */
+  describe('Task links', () => {
+    const FIGMA = { url: 'https://www.figma.com/file/abc', name: 'Checkout design' };
+    const DOCS = { url: 'https://claude.ai/chat/xyz', name: 'Plan' };
+
+    /**
+     * Mutation seen failing: the single-link branch rendering nothing (the
+     * `artifactLinks.length === 1` arm removed).
+     */
+    it('shows one row, named for the link with its host, for a single https artifact', async () => {
+      seedBoard({ withDoneColumn: true, task: { artifacts: [FIGMA] } });
+      await renderTaskActions();
+
+      const row = screen.getByTestId('task-action-artifact');
+      expect(within(row).getByText('Checkout design')).toBeTruthy();
+      expect(within(row).getByText('figma.com')).toBeTruthy();
+      expect(screen.queryByTestId('task-action-artifacts')).toBeNull();
+    });
+
+    /** Mutation seen failing: onOpenOnlyArtifact opening nothing (mockOpenURL never called). */
+    it('opens the link in the OS handler when pressed', async () => {
+      seedBoard({ withDoneColumn: true, task: { artifacts: [FIGMA] } });
+      await renderTaskActions();
+
+      await act(async () => {
+        await fireEvent.press(screen.getByTestId('task-action-artifact'));
+      });
+
+      expect(mockOpenURL).toHaveBeenCalledWith('https://www.figma.com/file/abc');
+      expect(screen.queryByTestId('task-action-error')).toBeNull();
+    });
+
+    /** Mutation seen failing: the catch removed from onOpenOnlyArtifact (no error line). */
+    it('says "Could not open the link" and stays open when the OS refuses it', async () => {
+      seedBoard({ withDoneColumn: true, task: { artifacts: [FIGMA] } });
+      mockOpenURL.mockRejectedValueOnce(new Error('No app can handle this link'));
+      await renderTaskActions();
+
+      await act(async () => {
+        await fireEvent.press(screen.getByTestId('task-action-artifact'));
+      });
+
+      expect(screen.getByTestId('task-action-error')).toHaveTextContent('Could not open the link');
+      expect(mockBack).not.toHaveBeenCalled();
+    });
+
+    /** Mutation seen failing: the several-links arm replaced by the single-link arm (testID task-action-artifact where -artifacts was expected). */
+    it('shows one Artifacts row captioned with every name for several links', async () => {
+      seedBoard({ withDoneColumn: true, task: { artifacts: [FIGMA, DOCS] } });
+      await renderTaskActions();
+
+      const row = screen.getByTestId('task-action-artifacts');
+      expect(within(row).getByText('Artifacts')).toBeTruthy();
+      expect(within(row).getByText('Checkout design, Plan')).toBeTruthy();
+      expect(screen.queryByTestId('task-action-artifact')).toBeNull();
+    });
+
+    /** Mutation seen failing: router.replace swapped for router.push in onOpenArtifacts. */
+    it('replaces the hub with the Artifacts sheet for several links, opening nothing itself', async () => {
+      seedBoard({ withDoneColumn: true, task: { artifacts: [FIGMA, DOCS] } });
+      await renderTaskActions();
+
+      await fireEvent.press(screen.getByTestId('task-action-artifacts'));
+
+      expect(mockReplace).toHaveBeenCalledWith({ pathname: '/task-artifacts', params: { taskId: 'task-1' } });
+      expect(mockOpenURL).not.toHaveBeenCalled();
+    });
+
+    /** Mutation seen failing: openableArtifacts passing every link through (the http row appeared). */
+    it('leaves out a link that is not https, so a task whose only link is http shows neither row', async () => {
+      seedBoard({ withDoneColumn: true, task: { artifacts: [{ url: 'http://example.com/page', name: 'Insecure' }] } });
+      await renderTaskActions();
+
+      expect(screen.queryByTestId('task-action-artifact')).toBeNull();
+      expect(screen.queryByTestId('task-action-artifacts')).toBeNull();
+    });
+
+    it('counts only the https links: an http link beside one https link leaves the single-link row', async () => {
+      seedBoard({ withDoneColumn: true, task: { artifacts: [FIGMA, { url: 'http://example.com/page', name: 'Insecure' }] } });
+      await renderTaskActions();
+
+      expect(screen.getByTestId('task-action-artifact')).toBeTruthy();
+      expect(screen.queryByTestId('task-action-artifacts')).toBeNull();
+    });
+
+    it.each([
+      ['an empty list', []],
+      ['null (a desktop older than 0.28.0)', null],
+    ])('shows neither row for %s', async (_description, artifacts) => {
+      seedBoard({ withDoneColumn: true, task: { artifacts } });
+      await renderTaskActions();
+
+      expect(screen.queryByTestId('task-action-artifact')).toBeNull();
+      expect(screen.queryByTestId('task-action-artifacts')).toBeNull();
+    });
+  });
+
+  /**
    * A workflow task (protocol 0.21.0, design screens 3 to 5). The workflow's
    * HOME project is deliberately not the board's here ('project-home' against
    * the route's 'project-1'), because a workflow can span boards and the view

@@ -34,8 +34,10 @@ app/                           # expo-router route wrappers (thin - render the s
   completed-task.tsx            # a finished task: Conversation, Summary (the desktop's header
                                 #   strip + report cards) and Description segments
   create-task.tsx, edit-task.tsx, move-task.tsx, task-actions.tsx, project-picker.tsx,
-  section-filter.tsx            #   native form-sheet routes (they replaced the custom board sheets;
-                                #   section-filter is the Agents feed's Show sections sheet)
+  section-filter.tsx, task-artifacts.tsx
+                                #   native form-sheet routes (they replaced the custom board sheets;
+                                #   section-filter is the Agents feed's Show sections sheet;
+                                #   task-artifacts lists a task's links, protocol 0.28.0)
   command-terminal.tsx          # an open Command Terminal (protocol 0.20.0): its own screen, not a
                                 #   mode of the task session view (no task, swap, Resume or archive)
   command-terminals.tsx, command-terminal-actions.tsx
@@ -199,7 +201,9 @@ src/
                   #   performs a navigation published from outside React. expo-router's
                   #   imperative router throws until the navigation container commits, and
                   #   only enqueues after that - see
-                  #   .claude/rules/imperative-router-inside-react.md
+                  #   .claude/rules/imperative-router-inside-react.md. Also taskOpenIntent: the
+                  #   one-slot note of a person's OPEN of a task, claimed once by the session
+                  #   screen for the protocol 0.28.0 resume on open (useResumeOnOpen)
   conversation/   # Pure transcript-cell flattener, prompt keystrokes, pending-prompt summary
   demo/           # The permanent reviewer/demo pairing: fixed non-expiring code, in-process
                   #   IKpsk0 ceremony against StubPairingResponder, the isDemoAnchor
@@ -271,9 +275,11 @@ src/
   lib/            # Shared pure utilities (crypto polyfills, haptics, the bounded task queue that
                   #   caps the Home feed's cold-start snippet pre-warm, runWhenFirstActive:
                   #   the root layout's guard against hydrating settings in an iOS background
-                  #   launch, where the phone may be locked and WHEN_UNLOCKED reads throw, and
+                  #   launch, where the phone may be locked and WHEN_UNLOCKED reads throw,
                   #   agentWait: the desktop's wait-kind rule (protocol 0.26.0) that picks the
-                  #   bubble, shield or envelope and the Command Terminal activity line)
+                  #   bubble, shield or envelope and the Command Terminal activity line, and the
+                  #   protocol 0.28.0 card rules ported from the desktop: queuePlace, priority,
+                  #   startBlocked and taskArtifacts)
 tests/
   unit/           # vitest (pure TS, no RN runtime) - includes the loopback-transport + stub-desktop-peer helpers
   components/     # Jest + React Native Testing Library
@@ -482,7 +488,8 @@ Full detail lives in [docs/architecture.md](docs/architecture.md) and
   `send-user-message`, `move-task`, `answer-permission-prompt`, `interactive-terminal`,
   `board-tool-read`, `board-tool-write`, `register-push`, since protocol 0.15.0
   `start-session`, which the phone sends only for Resume, gated on a desktop flag that arrives
-  with protocol 0.16.0, since 0.18.0 `pause-session`, which the phone sends only for Pause,
+  with protocol 0.16.0, and since 0.28.0 for the resume on open (`trigger: 'open'`, gated on the
+  snapshot's `resumeOnOpenOffered`), since 0.18.0 `pause-session`, which the phone sends only for Pause,
   gated on the board row's `pausable`, and since 0.20.0 `command-terminal`, which starts or stops
   a Command Terminal, gated on the snapshot's `commandTerminalsOffered`; a terminal is the
   project's agent CLI, never a shell, and the phone holds its input until the agent is classified);

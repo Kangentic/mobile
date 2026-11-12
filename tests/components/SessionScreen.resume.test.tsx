@@ -8,7 +8,9 @@ import { useBoardStore } from '@/state/boardStore';
 import { useResumeStore } from '@/state/resumeStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { boardColumnFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
-import { closeSessionScreen, openSessionScreen, resumeTaskSession } from '@/connection/actions';
+import { closeSessionScreen, openSessionScreen, resumeTaskOnOpen, resumeTaskSession } from '@/connection/actions';
+import { useChannelStore } from '@/state/channelStore';
+import { noteTaskOpened, resetTaskOpenIntentForTests } from '@/navigation/taskOpenIntent';
 import {
   getOpenNotificationSurfaces,
   subscribeToOpenedNotificationSurfaces,
@@ -65,6 +67,7 @@ jest.mock('@/connection/actions', () => ({
   loadArchivedTasks: jest.fn().mockResolvedValue(undefined),
   setDiffWatch: jest.fn(),
   resumeTaskSession: jest.fn().mockResolvedValue({ phase: 'resuming', startedAt: 0, origin: 'button' }),
+  resumeTaskOnOpen: jest.fn().mockResolvedValue(undefined),
 }));
 
 // The panes are heavy and beside the point: this suite is about what the
@@ -135,6 +138,7 @@ jest.mock('@/screens/task/SessionInputBar', () => {
 });
 
 const resumeTaskSessionMock = resumeTaskSession as jest.Mock;
+const resumeTaskOnOpenMock = resumeTaskOnOpen as jest.Mock;
 const openSessionScreenMock = openSessionScreen as jest.Mock;
 const closeSessionScreenMock = closeSessionScreen as jest.Mock;
 
@@ -153,6 +157,9 @@ function seedBoard({
   pausedSessionId = null,
   spawnProgress = null,
   workflow = null,
+  snapshotAt = 0,
+  resumeOnOpenOffered = false,
+  queuePlace = null,
 }: {
   sessionId?: string | null;
   resumable?: boolean;
@@ -160,6 +167,9 @@ function seedBoard({
   pausedSessionId?: string | null;
   spawnProgress?: string | null;
   workflow?: BoardTaskWire['workflow'];
+  snapshotAt?: number;
+  resumeOnOpenOffered?: boolean;
+  queuePlace?: BoardTaskWire['queue_place'];
 } = {}): void {
   useBoardStore.setState({
     projects: [{ id: 'project-1', name: 'Alpha' }],
@@ -176,15 +186,16 @@ function seedBoard({
             paused_session_id: pausedSessionId,
             spawn_progress: spawnProgress,
             workflow,
+            queue_place: queuePlace,
           }),
         },
-        snapshotAt: 0,
+        snapshotAt,
         showTicketNumbers: true,
         view: 'full',
         taskCountsByColumnId: {},
         commandTerminals: [],
         commandTerminalsOffered: false,
-        resumeOnOpenOffered: false,
+        resumeOnOpenOffered,
         priorities: null,
       },
     },
@@ -1290,5 +1301,270 @@ describe('SessionScreen notification surface', () => {
     } finally {
       stopListening();
     }
+  });
+});
+
+/**
+ * The resume on open (protocol 0.28.0). Opening an idle-paused task's session
+ * screen (a push tap, an Agents card, a Board or workflow card) asks the desktop
+ * to resume it, ONCE per open gesture. The open is a note made where the
+ * navigation is performed (taskOpenIntent), so a plain mount (a restored route)
+ * is not an open. `resumeTaskOnOpen` is mocked: what is pinned here is WHEN the
+ * screen sends it, not what the action does.
+ *
+ * Mutations seen failing, each with the named assertion going red:
+ * - dropping the mount-time `claim()` in useResumeOnOpen: (a), (h).
+ * - dropping `&& resumeOnOpenOffered`: (b).
+ * - dropping `boardCurrent` from `decidable`: (d), it sent on the stale board.
+ * - dropping `offered &&`: (e), it sent for a running task.
+ * - dropping the `claimed.current = false` that spends the claim: (e), the pause
+ *   that landed afterwards sent.
+ * - dropping `subscribeTaskOpens(claim)`: (f), the push tap onto the open screen.
+ * - claimTaskOpen ignoring the task id: (g).
+ */
+describe('SessionScreen resume on open', () => {
+  const ESTABLISHED_AT = 1000;
+  const CURRENT_SNAPSHOT_AT = 2000;
+
+  /** An idle-paused, resumable task whose desktop advertises the resume on open. */
+  function seedPausedTask({
+    resumeOnOpenOffered = true,
+    snapshotAt = CURRENT_SNAPSHOT_AT,
+  }: { resumeOnOpenOffered?: boolean; snapshotAt?: number } = {}): void {
+    seedBoard({ sessionId: null, resumable: true, paused: true, resumeOnOpenOffered, snapshotAt });
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsFocused = true;
+    mockFocusListeners.clear();
+    useBoardStore.getState().reset();
+    useActivityStore.getState().reset();
+    useResumeStore.setState({ byTaskId: {} });
+    useSettingsStore.setState({ preferredSessionLensByTaskId: {} });
+    useChannelStore.setState({ establishedAt: ESTABLISHED_AT });
+    resetTaskOpenIntentForTests();
+  });
+
+  afterEach(() => {
+    resetTaskOpenIntentForTests();
+  });
+
+  it('sends the resume once for an open of an idle-paused task the desktop offers it for', async () => {
+    seedPausedTask();
+    noteTaskOpened('task-1');
+    await renderSessionScreen();
+
+    expect(resumeTaskOnOpenMock).toHaveBeenCalledTimes(1);
+    expect(resumeTaskOnOpenMock).toHaveBeenCalledWith('task-1', 'project-1');
+    expect(resumeTaskSessionMock).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing, and keeps the Resume button, on a desktop that does not offer the resume on open', async () => {
+    seedPausedTask({ resumeOnOpenOffered: false });
+    noteTaskOpened('task-1');
+    await renderSessionScreen();
+
+    expect(resumeTaskOnOpenMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId('session-resume-button')).toBeTruthy();
+    expect(screen.getByText('Resume session')).toBeTruthy();
+  });
+
+  it('sends nothing for a mount that is not an open (no note, as on a restored route)', async () => {
+    seedPausedTask();
+    await renderSessionScreen();
+
+    expect(resumeTaskOnOpenMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId('session-resume-button')).toBeTruthy();
+  });
+
+  it('waits for a board read on this connection, then sends once when a fresh snapshot lands', async () => {
+    // Cached from before the connection was established: the row may predate the pause.
+    seedPausedTask({ snapshotAt: ESTABLISHED_AT - 500 });
+    noteTaskOpened('task-1');
+    await renderSessionScreen();
+    expect(resumeTaskOnOpenMock).not.toHaveBeenCalled();
+
+    await act(() => {
+      seedPausedTask({ snapshotAt: CURRENT_SNAPSHOT_AT });
+    });
+    expect(resumeTaskOnOpenMock).toHaveBeenCalledTimes(1);
+    expect(resumeTaskOnOpenMock).toHaveBeenCalledWith('task-1', 'project-1');
+
+    await act(() => {
+      seedPausedTask({ snapshotAt: CURRENT_SNAPSHOT_AT + 1 });
+    });
+    expect(resumeTaskOnOpenMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits while the connection has not been established at all', async () => {
+    useChannelStore.setState({ establishedAt: null });
+    seedPausedTask();
+    noteTaskOpened('task-1');
+    await renderSessionScreen();
+    expect(resumeTaskOnOpenMock).not.toHaveBeenCalled();
+
+    await act(() => {
+      useChannelStore.setState({ establishedAt: ESTABLISHED_AT });
+    });
+    expect(resumeTaskOnOpenMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('spends the open on a running task, so a pause that lands afterwards on the open screen sends nothing', async () => {
+    seedBoard({ sessionId: 'sess-1', resumeOnOpenOffered: true, snapshotAt: CURRENT_SNAPSHOT_AT });
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore
+      .getState()
+      .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'running' }));
+    noteTaskOpened('task-1');
+    await renderSessionScreen();
+    expect(resumeTaskOnOpenMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('session-resume-panel')).toBeNull();
+
+    // The idle timeout pauses it while the person is looking at it.
+    await act(() => {
+      useActivityStore.getState().applyActivityEvent({
+        kind: 'activity',
+        sessionId: 'sess-1',
+        taskId: 'task-1',
+        payload: { type: 'session-ended', intentional: true },
+      });
+      seedPausedTask({ snapshotAt: CURRENT_SNAPSHOT_AT + 1 });
+    });
+
+    // Control: the pause really did offer Resume, so the silence is the spent claim.
+    expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
+    expect(resumeTaskOnOpenMock).not.toHaveBeenCalled();
+  });
+
+  it('sends once for a push tap onto the screen that is already mounted, and never again without a new note', async () => {
+    seedPausedTask();
+    await renderSessionScreen();
+    expect(resumeTaskOnOpenMock).not.toHaveBeenCalled();
+
+    await act(() => {
+      noteTaskOpened('task-1');
+    });
+    expect(resumeTaskOnOpenMock).toHaveBeenCalledTimes(1);
+    expect(resumeTaskOnOpenMock).toHaveBeenCalledWith('task-1', 'project-1');
+
+    // A re-subscribe, a refresh and a re-render are not opens.
+    await act(() => {
+      seedPausedTask({ snapshotAt: CURRENT_SNAPSHOT_AT + 1 });
+    });
+    await screen.rerender(
+      <ThemeProvider>
+        <SessionScreen />
+      </ThemeProvider>,
+    );
+    expect(resumeTaskOnOpenMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores an open of another task', async () => {
+    seedPausedTask();
+    noteTaskOpened('task-2');
+    await renderSessionScreen();
+    await act(() => {
+      noteTaskOpened('task-3');
+    });
+
+    expect(resumeTaskOnOpenMock).not.toHaveBeenCalled();
+  });
+
+  it('reads "Resuming agent..." with the button disabled while the open attempt runs, and a plain Resume after it clears', async () => {
+    resumeTaskOnOpenMock.mockImplementationOnce(async (taskId: string) => {
+      useResumeStore.getState().markResuming(taskId, Date.now(), 'open');
+    });
+    seedPausedTask();
+    noteTaskOpened('task-1');
+    await renderSessionScreen();
+
+    expect(useResumeStore.getState().byTaskId['task-1']).toEqual(expect.objectContaining({ phase: 'resuming', origin: 'open' }));
+    expect(screen.getByText('Resuming agent...')).toBeTruthy();
+    expect(screen.getByTestId('session-resume-button').props.accessibilityState).toEqual(expect.objectContaining({ disabled: true }));
+
+    // The desktop answered not-eligible (or the send failed): cleared silently.
+    await act(() => {
+      useResumeStore.getState().clear('task-1');
+    });
+    expect(screen.getByText('Resume session')).toBeTruthy();
+    expect(screen.queryByTestId('session-resume-error')).toBeNull();
+    expect(screen.getByTestId('session-resume-button').props.accessibilityState).toEqual(expect.objectContaining({ disabled: false }));
+  });
+});
+
+/**
+ * The queued panel (protocol 0.28.0): the terminal lens for a QUEUED session
+ * shows the desktop's queued window, read from the board row's `queue_place`.
+ */
+describe('SessionScreen queued panel', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsFocused = true;
+    mockFocusListeners.clear();
+    useBoardStore.getState().reset();
+    useActivityStore.getState().reset();
+    useResumeStore.setState({ byTaskId: {} });
+    useSettingsStore.setState({ preferredSessionLensByTaskId: {} });
+  });
+
+  function seedSession({
+    sessionStatus,
+    queuePlace,
+  }: {
+    sessionStatus: 'queued' | 'running';
+    queuePlace: BoardTaskWire['queue_place'];
+  }): void {
+    seedBoard({ sessionId: 'sess-1', queuePlace });
+    useActivityStore.getState().registerSession('sess-1', 'task-1', 'project-1');
+    useActivityStore
+      .getState()
+      .applySnapshot('sess-1', 'task-1', 'project-1', streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus }));
+  }
+
+  it('names the next place in a column queue, with its count and column reason, and drops the quick keys', async () => {
+    seedSession({
+      sessionStatus: 'queued',
+      queuePlace: { kind: 'column', position: 1, total: 2, column_name: 'Merge', max_agents: 1 },
+    });
+    await renderSessionScreen();
+
+    expect(screen.getByTestId('session-queued-panel')).toBeTruthy();
+    expect(screen.getByTestId('session-queued-heading').props.children).toBe('Next in line');
+    expect(screen.getByText('1 of 2')).toBeTruthy();
+    expect(screen.getByText('Merge runs one agent at a time')).toBeTruthy();
+    expect(screen.getByTestId('stub-session-input-bar').props.accessibilityValue).toEqual({ text: 'keys-hidden' });
+  });
+
+  it('gives the global reason for a global place', async () => {
+    seedSession({
+      sessionStatus: 'queued',
+      queuePlace: { kind: 'global', position: 3, total: 4, column_name: null, max_agents: 4 },
+    });
+    await renderSessionScreen();
+
+    expect(screen.getByTestId('session-queued-heading').props.children).toBe('2 tasks ahead');
+    expect(screen.getByText('3 of 4')).toBeTruthy();
+    expect(screen.getByText('Up to 4 agents run at a time')).toBeTruthy();
+  });
+
+  it('reads plain "Queued" with no count or reason when the desktop gave no place', async () => {
+    seedSession({ sessionStatus: 'queued', queuePlace: null });
+    await renderSessionScreen();
+
+    expect(screen.getByTestId('session-queued-heading').props.children).toBe('Queued');
+    expect(screen.queryByTestId('session-queued-count')).toBeNull();
+    expect(screen.queryByTestId('session-queued-reason')).toBeNull();
+  });
+
+  it('draws no panel for a running session, whatever place the row still carries', async () => {
+    seedSession({
+      sessionStatus: 'running',
+      queuePlace: { kind: 'column', position: 1, total: 2, column_name: 'Merge', max_agents: 1 },
+    });
+    await renderSessionScreen();
+
+    expect(screen.queryByTestId('session-queued-panel')).toBeNull();
+    expect(screen.getByTestId('stub-session-input-bar').props.accessibilityValue).toEqual({ text: 'keys-shown' });
   });
 });

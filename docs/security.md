@@ -208,7 +208,11 @@ can contain are the thirteen above, with no shell, file, or arbitrary-command ve
 `start-session` starts or resumes the agent the desktop would have started for that task anyway
 (the desktop's own Resume button, reachable from the phone), never a shell. The phone sends it only
 for a paused session the desktop marks `resumable` (protocol 0.16.0), so it only ever reaches a
-desktop that answers it with that same Resume path. `pause-session` (protocol 0.18.0) is its
+desktop that answers it with that same Resume path. Its `trigger: 'open'` form (protocol 0.28.0, the
+resume on open) is narrower still: the desktop resumes only a task its own idle timeout paused, and
+only when that sends the agent nothing, and answers everything else `not-eligible`; the phone sends
+it only to a desktop whose snapshot advertises `resumeOnOpenOffered`, because an older one would drop
+the trigger and take the Resume path. `pause-session` (protocol 0.18.0) is its
 inverse and narrower still: it only suspends the agent the desktop is already running for that
 task, keeping the conversation for a later Resume (the desktop's own Pause button), and starts
 nothing. The phone sends it only for a task the desktop marks `pausable`.

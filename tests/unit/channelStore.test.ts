@@ -8,7 +8,7 @@
  * src/state/channelStore.ts, and commit c603987). noteRekey now increments
  * unconditionally and is wired to SessionManager.onRekey instead.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useChannelStore } from '@/state/channelStore';
 
 describe('channelStore', () => {
@@ -41,6 +41,52 @@ describe('channelStore', () => {
 
       expect(useChannelStore.getState().established).toBe(true);
       expect(useChannelStore.getState().rekeyCount).toBe(2);
+    });
+  });
+
+  describe('establishedAt', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('is null until the channel is established', () => {
+      expect(useChannelStore.getState().establishedAt).toBeNull();
+    });
+
+    it('markEstablished stamps the current time', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(123_456);
+
+      useChannelStore.getState().markEstablished();
+
+      expect(useChannelStore.getState().establishedAt).toBe(123_456);
+    });
+
+    it.each(['idle', 'connecting', 'reconnecting', 'closed'] as const)('is cleared when the transport goes %s', (transportState) => {
+      useChannelStore.getState().markEstablished();
+      expect(useChannelStore.getState().establishedAt).not.toBeNull();
+
+      useChannelStore.getState().setTransportState(transportState);
+
+      expect(useChannelStore.getState().establishedAt).toBeNull();
+    });
+
+    it('survives the transport reporting connected', () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(5_000);
+      useChannelStore.getState().markEstablished();
+
+      useChannelStore.getState().setTransportState('connected');
+
+      expect(useChannelStore.getState().establishedAt).toBe(5_000);
+    });
+
+    it('is cleared by reset', () => {
+      useChannelStore.getState().markEstablished();
+
+      useChannelStore.getState().reset();
+
+      expect(useChannelStore.getState().establishedAt).toBeNull();
     });
   });
 

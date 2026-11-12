@@ -16,7 +16,7 @@
  *  - register-push had no handler at all, failing every registration a
  *    release build fires on establish.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BridgeEvent, CapabilityErrorCode } from '@kangentic/protocol';
 import { CapabilityError, ChannelController } from '@/channel';
 import {
@@ -780,6 +780,56 @@ describe('Resume (protocol 0.16.0)', () => {
 
     expect(first.outcome).toBe('starting');
     expect(second.outcome).toBe('live');
+  });
+
+  describe('resume on open (protocol 0.28.0)', () => {
+    const BLOCKED_TASK_ID = 'mock-task-blocked-start';
+
+    it('advertises the resume on open and a five-level priority scale on the board snapshot', async () => {
+      const snapshot = await controller.verbs.readBoardSubscribe('mock-project', { view: 'sessions' });
+
+      expect(snapshot.resumeOnOpenOffered).toBe(true);
+      expect(snapshot.priorities).toHaveLength(5);
+    });
+
+    it('resumes an idle-timeout paused task that keeps its session, answering starting', async () => {
+      const response = await controller.verbs.startSession({ taskId: PAUSED_TASK_ID, projectId: 'mock-project', trigger: 'open' });
+
+      expect(response.outcome).toBe('starting');
+      await waitForBoardTask((task) => task.spawn_progress === 'Resuming session...', PAUSED_TASK_ID);
+    });
+
+    it('declines a blocked start with not-eligible and leaves it paused and blocked', async () => {
+      const response = await controller.verbs.startSession({ taskId: BLOCKED_TASK_ID, projectId: MOCK_PROJECT_2_ID, trigger: 'open' });
+
+      expect(response.outcome).toBe('not-eligible');
+      const board = await controller.verbs.readBoardSubscribe(MOCK_PROJECT_2_ID, { view: 'full' });
+      const row = board.tasks.find((task) => task.id === BLOCKED_TASK_ID);
+      expect(row?.session_id).toBeNull();
+      expect(row?.resumable).toBe(true);
+      expect(row?.start_blocked_reason).toBe('worktree-missing');
+    });
+
+    it('answers live for a running task', async () => {
+      const response = await controller.verbs.startSession({ taskId: 'mock-task-1', projectId: 'mock-project', trigger: 'open' });
+
+      expect(response.outcome).toBe('live');
+    });
+
+    it('still resumes the blocked start on a plain start with no trigger, and clears its blocked reason', async () => {
+      const response = await controller.verbs.startSession({ taskId: BLOCKED_TASK_ID, projectId: MOCK_PROJECT_2_ID });
+
+      expect(response.outcome).toBe('starting');
+      await vi.waitFor(
+        async () => {
+          const board = await controller.verbs.readBoardSubscribe(MOCK_PROJECT_2_ID, { view: 'full' });
+          const row = board.tasks.find((task) => task.id === BLOCKED_TASK_ID);
+          expect(row?.session_id).not.toBeNull();
+          expect(row?.start_blocked_reason ?? null).toBeNull();
+        },
+        { timeout: 8000, interval: 100 },
+      );
+    }, 15_000);
   });
 
   it(

@@ -1157,6 +1157,15 @@ describe('activityStore', () => {
       }
     });
 
+    /** A turn the board has stopped (protocol 0.28.0) shows no elapsed time; a plain idle one still does. */
+    it('returns null for an idle entry whose reason is stopped, and still returns since for a plain idle one', () => {
+      liveEntry('sess-stopped', { activity: { state: 'idle', reason: { kind: 'idle', since: 111_000, stopped: true } } });
+      liveEntry('sess-plain', { activity: { state: 'idle', reason: { kind: 'idle', since: 111_000 } } });
+
+      expect(selectWaitingSince(useActivityStore.getState().bySessionId['sess-stopped'])).toBeNull();
+      expect(selectWaitingSince(useActivityStore.getState().bySessionId['sess-plain'])).toBe(111_000);
+    });
+
     it('returns null while the agent is working', () => {
       liveEntry('sess-1', { activity: { state: 'thinking', reason: { kind: 'turn-active' } } });
       expect(selectWaitingSince(useActivityStore.getState().bySessionId['sess-1'])).toBeNull();

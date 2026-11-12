@@ -10,6 +10,7 @@ import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { boardColumnFixture, boardSnapshotFixture, boardTaskFixture, streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 import { peekLastAssistantMessage, peekLastTerminalLine } from '@/connection/actions';
+import { claimTaskOpen, resetTaskOpenIntentForTests } from '@/navigation/taskOpenIntent';
 import { workflowWireFixture } from '../helpers/workflows';
 
 const mockPush = jest.fn();
@@ -219,6 +220,7 @@ function seedTwoProjectBoards(): void {
 describe('TriageHomeScreen', () => {
   beforeEach(() => {
     mockPush.mockClear();
+    resetTaskOpenIntentForTests();
     mockPeekAwaitedPrompt.mockReset();
     mockPeekAwaitedPrompt.mockResolvedValue(null);
     // Reset here, not just at the end of the tests that override it: a test
@@ -330,6 +332,22 @@ describe('TriageHomeScreen', () => {
     expect(statusIcon.props.color).toBe(darkTerminalTheme.colors.statusNeedsYou);
     const drawnPaths = statusIcon.queryAll((node) => typeof node.props.d === 'string').map((node) => String(node.props.d));
     expect(drawnPaths).toEqual(activityMarks[mark].shapes.flatMap((shape) => (shape.kind === 'path' ? [shape.d] : [])));
+  });
+
+  /**
+   * An Agents card tap is an OPEN of the task (protocol 0.28.0's resume on
+   * open), noted where the navigation is performed.
+   *
+   * Mutation: dropping `noteTaskOpened(entry.taskId)` from ActivityRow's openTask.
+   */
+  it('records an open for the task when an Agents row is tapped', async () => {
+    await renderHome();
+    expect(claimTaskOpen('task-1')).toBe(false);
+
+    await fireEvent.press(screen.getByTestId('activity-row-sess-1'));
+
+    expect(mockPush).toHaveBeenCalledTimes(1);
+    expect(claimTaskOpen('task-1')).toBe(true);
   });
 
   it('renders board-card parity (project in the band, ticket number in the title row) and the context-usage bar', async () => {
@@ -2255,6 +2273,25 @@ describe('TriageHomeScreen', () => {
 
       await fireEvent(screen.getByTestId('task-row-task-1'), 'longPress');
       expect(mockPush).toHaveBeenCalledWith({ pathname: '/task-actions', params: { taskId: 'task-1', projectId: 'project-1' } });
+    });
+
+    /**
+     * The paused card is the commonest way into a task the resume on open
+     * (protocol 0.28.0) applies to, so the tap records an open for it. The
+     * long press opens the hub, which is not an open of the session screen.
+     *
+     * Mutation: dropping `noteTaskOpened(task.id)` from SessionlessTaskRow's
+     * openTask.
+     */
+    it('records an open for the task when the Paused card is tapped, and none for its long press', async () => {
+      makeTaskOneSessionless({ resumable: true });
+      await renderHome();
+
+      await fireEvent(screen.getByTestId('task-row-task-1'), 'longPress');
+      expect(claimTaskOpen('task-1')).toBe(false);
+
+      await fireEvent.press(screen.getByTestId('task-row-task-1'));
+      expect(claimTaskOpen('task-1')).toBe(true);
     });
 
     /**

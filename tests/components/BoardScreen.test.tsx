@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import type { ActivityReasonWire } from '@kangentic/protocol';
 import { activityMarks, type ActivityMarkName } from '@/brand/activityMarks.generated';
 import { ThemeProvider, darkTerminalTheme } from '@/components';
+import { claimTaskOpen, resetTaskOpenIntentForTests } from '@/navigation/taskOpenIntent';
 import { getOpenNotificationSurfaces } from '@/notifications/notificationSignals';
 import { BoardScreen } from '@/screens/BoardScreen';
 import { ENDED_ROW_GRACE_MS, useActivityStore } from '@/state/activityStore';
@@ -151,6 +152,7 @@ describe('BoardScreen', () => {
     mockIsFocused = true;
     mockFocusListeners.clear();
     mockPush.mockClear();
+    resetTaskOpenIntentForTests();
     mockMoveTaskOptimistic.mockClear();
     mockCreateTask.mockClear();
     mockLaunchCommandTerminal.mockClear();
@@ -305,6 +307,24 @@ describe('BoardScreen', () => {
       pathname: '/task/[taskId]',
       params: { taskId: 'task-1', sessionId: 'sess-1', projectId: 'project-1' },
     });
+  });
+
+  /**
+   * A card that opens the session screen is an OPEN of the task (protocol
+   * 0.28.0's resume on open). Mutation: dropping the `noteTaskOpened(task.id)`
+   * before the session-bearing push in useOpenBoardTask.
+   */
+  it('records an open for the task when a card with a session is tapped', async () => {
+    await render(
+      <ThemeProvider>
+        <BoardScreen />
+      </ThemeProvider>,
+    );
+    expect(claimTaskOpen('task-1')).toBe(false);
+
+    await fireEvent.press(screen.getByTestId('board-card-task-1'));
+
+    expect(claimTaskOpen('task-1')).toBe(true);
   });
 
   it('shows the ticket number only when the board setting is on', async () => {
@@ -513,6 +533,9 @@ describe('BoardScreen', () => {
       expect(screen.getByTestId('board-card-task-1-status-bar-label')).toHaveTextContent('Paused');
       await fireEvent.press(screen.getByTestId('board-card-task-1'));
       expect(mockPush).toHaveBeenCalledWith({ pathname: '/task/[taskId]', params: { taskId: 'task-1', projectId: 'project-1' } });
+      // The commonest resume on open (protocol 0.28.0). Mutation: dropping the
+      // `noteTaskOpened(task.id)` in the sessionless branch of useOpenBoardTask.
+      expect(claimTaskOpen('task-1')).toBe(true);
     });
 
     it('draws a first start\'s step and opens it on the session screen', async () => {
@@ -530,6 +553,9 @@ describe('BoardScreen', () => {
 
       await fireEvent.press(screen.getByTestId('board-card-task-1'));
       expect(mockPush).toHaveBeenCalledWith({ pathname: '/edit-task', params: { taskId: 'task-1', projectId: 'project-1' } });
+      // The edit form is not the session screen, so nothing could claim an open.
+      // Mutation: a `noteTaskOpened(task.id)` before the edit-task push.
+      expect(claimTaskOpen('task-1')).toBe(false);
     });
 
     /**
@@ -633,6 +659,57 @@ describe('BoardScreen', () => {
     expect(screen.getByTestId('board-card-task-1-status-bar-label')).toHaveTextContent('Queued...');
     expect(screen.getByTestId('board-card-task-1-status-bar-queued')).toBeTruthy();
     expect(screen.queryByTestId('board-card-task-1-status')).toBeNull();
+  });
+
+  /**
+   * Protocol 0.28.0: the card resolves its priority against the project's own
+   * scale. Mutation seen failing: BoardTaskCard passing `null` for the scale
+   * ("Unable to find an element with testID: board-card-task-1-priority").
+   */
+  describe('the priority pill', () => {
+    const SCALE = [
+      { label: 'None', color: '#6b7280' },
+      { label: 'Low', color: '#3b82f6' },
+      { label: 'Medium', color: '#eab308' },
+      { label: 'High', color: '#f97316' },
+      { label: 'Urgent', color: '#ef4444' },
+    ];
+
+    function seedPriority(priority: number): void {
+      useBoardStore.setState((state) => {
+        const board = state.boardsByProjectId['project-1'];
+        const task = board.tasksById['task-1'];
+        return {
+          boardsByProjectId: {
+            ...state.boardsByProjectId,
+            'project-1': { ...board, priorities: SCALE, tasksById: { 'task-1': { ...task, priority } } },
+          },
+        };
+      });
+    }
+
+    it('shows the Urgent pill for priority 4 against a five-level scale', async () => {
+      seedPriority(4);
+      await render(
+        <ThemeProvider>
+          <BoardScreen />
+        </ThemeProvider>,
+      );
+
+      expect(screen.getByTestId('board-card-task-1-priority').props.accessibilityLabel).toBe('Priority: Urgent');
+    });
+
+    it('shows no pill for priority 0, the bottom of the scale', async () => {
+      seedPriority(0);
+      await render(
+        <ThemeProvider>
+          <BoardScreen />
+        </ThemeProvider>,
+      );
+
+      expect(screen.getByTestId('board-card-task-1')).toBeTruthy();
+      expect(screen.queryByTestId('board-card-task-1-priority')).toBeNull();
+    });
   });
 
   /**

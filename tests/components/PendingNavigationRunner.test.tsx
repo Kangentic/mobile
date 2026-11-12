@@ -19,6 +19,7 @@ import React from 'react';
 import { act, render } from '@testing-library/react-native';
 import { PendingNavigationRunner } from '@/navigation/PendingNavigationRunner';
 import { consumePendingNavigation, publishPendingNavigation } from '@/navigation/pendingNavigation';
+import { claimTaskOpen, resetTaskOpenIntentForTests } from '@/navigation/taskOpenIntent';
 import { routeFromPushResponse } from '@/notifications/tapRouter';
 import { useBoardStore } from '@/state/boardStore';
 
@@ -128,6 +129,7 @@ describe('PendingNavigationRunner', () => {
     // the publish is silently swallowed, which reads as a broken consumer rather
     // than a test-setup mistake. Give every case its own identifier.
     consumePendingNavigation();
+    resetTaskOpenIntentForTests();
     // The cold-start shape: nothing has arrived from the desktop yet, so the
     // project list is empty and no project is selected.
     useBoardStore.getState().reset();
@@ -358,6 +360,49 @@ describe('PendingNavigationRunner', () => {
     expect(mockRouterNavigate).toHaveBeenCalledWith('/');
     expect(mockRouterNavigate).toHaveBeenCalledTimes(1);
     expect(mockRouterPush).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A performed open-task is an OPEN of the task (protocol 0.28.0's resume on
+   * open), noted where the navigation is performed. Only that kind: a terminal,
+   * a Board and a reset are not opens of a task's session screen.
+   *
+   * Mutation: dropping the `noteTaskOpened(navigation.taskId)` call in the
+   * runner's open-task branch.
+   */
+  it('records an open of the task when it performs an open-task intent', async () => {
+    publishPendingNavigation({ kind: 'open-task', taskId: 'task-1', projectId: 'project-1', sessionId: 'sess-1' });
+
+    await render(<PendingNavigationRunner />);
+
+    expect(mockRouterNavigate).toHaveBeenCalledTimes(1);
+    expect(claimTaskOpen('task-1')).toBe(true);
+    // Spent by the first claim.
+    expect(claimTaskOpen('task-1')).toBe(false);
+  });
+
+  it('records an open for a push tap too, through the shipping tap router', async () => {
+    await render(<PendingNavigationRunner />);
+
+    await act(async () => {
+      await publishTap('open-recorded-notification');
+    });
+
+    expect(claimTaskOpen('task-1')).toBe(true);
+  });
+
+  it.each([
+    ['open-command-terminal', { kind: 'open-command-terminal', projectId: 'project-1', sessionId: 'terminal-sess-1' }],
+    ['open-project-board', { kind: 'open-project-board', projectId: 'project-1' }],
+    ['reset-to-root', { kind: 'reset-to-root' }],
+  ] as const)('records no open when it performs a %s intent', async (_kind, intent) => {
+    publishPendingNavigation(intent);
+
+    await render(<PendingNavigationRunner />);
+
+    expect(mockRouterNavigate).toHaveBeenCalledTimes(1);
+    expect(claimTaskOpen('task-1')).toBe(false);
+    expect(claimTaskOpen('terminal-sess-1')).toBe(false);
   });
 
   it('navigates nowhere when nothing was ever published', async () => {
