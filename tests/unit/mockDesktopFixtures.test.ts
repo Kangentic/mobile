@@ -295,13 +295,13 @@ describe('the mock fixtures stay inside the customer fiction', () => {
 
 /**
  * The mock board's PR-bearing cards are curated, per the comments beside them
- * in `initialTasks()`, to demonstrate the full set of readiness outcomes a
- * reviewer or a store screenshot can land on: every recognised verdict, a
- * value this client does not recognise (degrading to plain open), and a
- * stale verdict surviving on a PR that is no longer open. Nothing else in
- * the repo renders these fixtures through the board, so a retune that drops
- * one of those cases - the same way `pr_merge_readiness` itself could be
- * dropped in a merge - is invisible to every other check.
+ * in `initialTasks()` and `initialTasks2()`, to demonstrate the full set of
+ * readiness outcomes a reviewer or a store screenshot can land on: every
+ * recognised verdict, a value this client does not recognise (degrading to
+ * plain open), and a stale verdict surviving on a PR that is no longer open.
+ * Nothing else in the repo renders these fixtures through the board, so a
+ * retune that drops one of those cases - the same way `pr_merge_readiness`
+ * itself could be dropped in a merge - is invisible to every other check.
  *
  * Deliberately NOT pinned to which task id carries which verdict: these
  * cards get retuned for design review and the store shelves, so a copy of
