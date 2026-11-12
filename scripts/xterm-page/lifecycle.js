@@ -99,7 +99,13 @@
     // arm. Every init starts with no underline and no press: the next render
     // draws the new grid's links.
     terminalLinksEnabled = initMessage.terminalLinks !== false;
+    // Only the probe's `rebuilt-link-overlay` arm rebuilds the underlines on
+    // every change; the cleared overlay below starts either way from empty.
+    linkOverlayRebuild = initMessage.linkOverlay === 'rebuild';
     clearTerminalLinks();
+    // The release-build link-stats report (links.js): a fresh window per
+    // init, so an arm's first report never carries the last arm's renders.
+    armLinkStatsWindow(initMessage.linkStatsWindowMs);
     // The page owns the font: the reference cell for this grid (or the cell
     // it already converged on), or the pinch. Capped either way, which on the
     // legacy no-dims path is the only guard between a wide grid and the GPU

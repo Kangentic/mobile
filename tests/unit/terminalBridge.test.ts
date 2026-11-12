@@ -10,6 +10,25 @@ import {
 } from '@/terminal/terminalBridge';
 
 describe('host -> terminal round-trip', () => {
+  /** An init with only the fields a host has always sent, so each case below decodes one optional field. */
+  const MINIMAL_INIT = {
+    type: 'init',
+    seq: 9,
+    scrollback: '',
+    cols: 80,
+    rows: 24,
+    fitHeightPx: null,
+    theme: {},
+    cleanFeed: false,
+    holdFrame: false,
+    preservePinch: false,
+  };
+
+  function decodeMinimalInit(overrides: Record<string, unknown>): Extract<HostToTerminalMessage, { type: 'init' }> | undefined {
+    const decoded = decodeHostMessage(JSON.stringify({ ...MINIMAL_INIT, ...overrides }));
+    return decoded?.type === 'init' ? decoded : undefined;
+  }
+
   it('round-trips an init message with known dims and with unknown dims (legacy)', () => {
     const knownDims: HostToTerminalMessage = {
       type: 'init',
@@ -25,6 +44,8 @@ describe('host -> terminal round-trip', () => {
       fitStrategy: 'computed',
       longPressMenuGuard: true,
       terminalLinks: true,
+      linkOverlay: 'slots',
+      linkStatsWindowMs: 10_000,
     };
     expect(decodeHostMessage(encodeHostMessage(knownDims))).toEqual(knownDims);
 
@@ -43,8 +64,42 @@ describe('host -> terminal round-trip', () => {
       fitStrategy: 'measured',
       longPressMenuGuard: false,
       terminalLinks: false,
+      linkOverlay: 'rebuild',
+      linkStatsWindowMs: 0,
     };
     expect(decodeHostMessage(encodeHostMessage(legacy))).toEqual(legacy);
+  });
+
+  /**
+   * The link-stats report runs only on a positive interval, which the host
+   * sends only in a connection-trace build (task #147). A host that predates
+   * the field, or sends anything else, gets no report.
+   *
+   * Mutation that reddens this: decode the field without the `> 0` check.
+   */
+  it('reports link stats only on a positive init interval', () => {
+    const decodeWindow = (overrides: Record<string, unknown>): number | undefined =>
+      decodeMinimalInit(overrides)?.linkStatsWindowMs;
+    expect(decodeWindow({})).toBe(0);
+    expect(decodeWindow({ linkStatsWindowMs: 10_000 })).toBe(10_000);
+    expect(decodeWindow({ linkStatsWindowMs: -5 })).toBe(0);
+    expect(decodeWindow({ linkStatsWindowMs: '10000' })).toBe(0);
+  });
+
+  /**
+   * The underline slots are the default, read exactly as the page reads it
+   * (`initMessage.linkOverlay === 'rebuild'` in lifecycle.js): only an explicit
+   * 'rebuild', the retention probe's control arm, brings the old overlay back.
+   *
+   * Mutation that reddens this: decode the field as `!== 'slots'`.
+   */
+  it('keeps the underline slots unless the init names the rebuild', () => {
+    const decodeOverlay = (overrides: Record<string, unknown>): string | undefined =>
+      decodeMinimalInit(overrides)?.linkOverlay;
+    expect(decodeOverlay({})).toBe('slots');
+    expect(decodeOverlay({ linkOverlay: 'rebuild' })).toBe('rebuild');
+    expect(decodeOverlay({ linkOverlay: 'Rebuild' })).toBe('slots');
+    expect(decodeOverlay({ linkOverlay: true })).toBe('slots');
   });
 
   /**
@@ -56,22 +111,8 @@ describe('host -> terminal round-trip', () => {
    * Mutation that reddens this: decode the field as `=== true`.
    */
   it('keeps terminal links on unless the init says false', () => {
-    const base = {
-      type: 'init',
-      seq: 9,
-      scrollback: '',
-      cols: 80,
-      rows: 24,
-      fitHeightPx: null,
-      theme: {},
-      cleanFeed: false,
-      holdFrame: false,
-      preservePinch: false,
-    };
-    const decodeLinks = (overrides: Record<string, unknown>): boolean | undefined => {
-      const decoded = decodeHostMessage(JSON.stringify({ ...base, ...overrides }));
-      return decoded?.type === 'init' ? decoded.terminalLinks : undefined;
-    };
+    const decodeLinks = (overrides: Record<string, unknown>): boolean | undefined =>
+      decodeMinimalInit(overrides)?.terminalLinks;
     expect(decodeLinks({})).toBe(true);
     expect(decodeLinks({ terminalLinks: false })).toBe(false);
     expect(decodeLinks({ terminalLinks: 0 })).toBe(true);
@@ -84,22 +125,8 @@ describe('host -> terminal round-trip', () => {
    * host that predates the field still gets the guarded page.
    */
   it('keeps the long-press menu guard on unless the init says false', () => {
-    const base = {
-      type: 'init',
-      seq: 9,
-      scrollback: '',
-      cols: 80,
-      rows: 24,
-      fitHeightPx: null,
-      theme: {},
-      cleanFeed: false,
-      holdFrame: false,
-      preservePinch: false,
-    };
-    const decodeGuard = (overrides: Record<string, unknown>): boolean | undefined => {
-      const decoded = decodeHostMessage(JSON.stringify({ ...base, ...overrides }));
-      return decoded?.type === 'init' ? decoded.longPressMenuGuard : undefined;
-    };
+    const decodeGuard = (overrides: Record<string, unknown>): boolean | undefined =>
+      decodeMinimalInit(overrides)?.longPressMenuGuard;
     expect(decodeGuard({})).toBe(true);
     expect(decodeGuard({ longPressMenuGuard: false })).toBe(false);
     expect(decodeGuard({ longPressMenuGuard: 0 })).toBe(true);
@@ -113,22 +140,8 @@ describe('host -> terminal round-trip', () => {
    * it, so the page and this decoder can never disagree about the default.
    */
   it('defaults the init fit strategy to computed unless measured is named', () => {
-    const base = {
-      type: 'init',
-      seq: 9,
-      scrollback: '',
-      cols: 80,
-      rows: 24,
-      fitHeightPx: null,
-      theme: {},
-      cleanFeed: false,
-      holdFrame: false,
-      preservePinch: false,
-    };
-    const decodeStrategy = (overrides: Record<string, unknown>): string | undefined => {
-      const decoded = decodeHostMessage(JSON.stringify({ ...base, ...overrides }));
-      return decoded?.type === 'init' ? decoded.fitStrategy : undefined;
-    };
+    const decodeStrategy = (overrides: Record<string, unknown>): string | undefined =>
+      decodeMinimalInit(overrides)?.fitStrategy;
     expect(decodeStrategy({})).toBe('computed');
     expect(decodeStrategy({ fitStrategy: 'measured' })).toBe('measured');
     expect(decodeStrategy({ fitStrategy: 'Measured' })).toBe('computed');
@@ -466,6 +479,31 @@ describe('terminal -> host round-trip', () => {
     });
   });
 
+  /**
+   * A link-stats window lands in the release-build connection trace, so the
+   * decoder rebuilds it from its seven counts and nothing else: a field the
+   * page added (a URL, say) must not ride through into the log.
+   *
+   * Mutation that reddens this: return `parsedObject` cast to the message type
+   * instead of rebuilding it.
+   */
+  it('round-trips a link-stats window as counts only', () => {
+    const statsWindow: TerminalToHostMessage = {
+      type: 'link-stats',
+      windowMs: 10_002,
+      renders: 311,
+      scans: 311,
+      scanMsTotal: 152.35,
+      scanMsMax: 2.4,
+      overlayWrites: 0,
+      visible: 8,
+    };
+    expect(decodeTerminalMessage(encodeTerminalMessage(statsWindow))).toEqual(statsWindow);
+    expect(
+      decodeTerminalMessage(JSON.stringify({ ...statsWindow, url: 'https://github.com/kangentic/kangentic-mobile/pull/146' })),
+    ).toEqual(statsWindow);
+  });
+
   it('round-trips a painted report, with and without an init seq to attribute it to', () => {
     const attributed: TerminalToHostMessage = { type: 'painted', seq: 4, blank: false };
     expect(decodeTerminalMessage(encodeTerminalMessage(attributed))).toEqual(attributed);
@@ -518,6 +556,19 @@ describe('decodeTerminalMessage - malformed input', () => {
     expect(decodeTerminalMessage('{"type":"open-link"}')).toBeNull();
     expect(decodeTerminalMessage('{"type":"open-link","url":7}')).toBeNull();
     expect(decodeTerminalMessage('{"type":"open-link","url":{"href":"https://example.com"}}')).toBeNull();
+  });
+
+  it('returns null for a link-stats window missing a count or carrying a non-finite one', () => {
+    const counts = { windowMs: 10_000, renders: 1, scans: 1, scanMsTotal: 0.5, scanMsMax: 0.5, overlayWrites: 0, visible: 1 };
+    expect(decodeTerminalMessage(JSON.stringify({ type: 'link-stats', ...counts }))).not.toBeNull();
+    for (const field of Object.keys(counts)) {
+      const missing: Record<string, unknown> = { type: 'link-stats', ...counts };
+      delete missing[field];
+      expect(decodeTerminalMessage(JSON.stringify(missing))).toBeNull();
+      expect(decodeTerminalMessage(JSON.stringify({ type: 'link-stats', ...counts, [field]: '3' }))).toBeNull();
+    }
+    // JSON has no Infinity, so a page's Infinity arrives as null.
+    expect(decodeTerminalMessage(JSON.stringify({ type: 'link-stats', ...counts, scanMsMax: Infinity }))).toBeNull();
   });
 
   it('returns null for a painted report whose blank flag is missing or not a boolean', () => {

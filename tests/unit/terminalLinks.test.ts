@@ -1,9 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Terminal } from '@xterm/headless';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { decodeTerminalMessage } from '@/terminal/terminalBridge';
 import { httpsUrlOrNull } from '@/lib/httpsUrl';
+import { linkStreamSeedFrame, linkStreamStillUrls, linkStreamTickFrame } from '@/devsupport/terminalLinkStream';
 
 /**
  * Tappable links in the terminal mirror (task #144), run from the page
@@ -109,6 +110,10 @@ interface LinksPage {
   setScreenPresent: (present: boolean) => void;
   pressedLink: () => FoundLink | null;
   linkStats: () => { scans: number; visible: number; opened: number };
+  armLinkStatsWindow: (windowMs: unknown) => void;
+  reportLinkWindowStats: () => void;
+  linkStatsWindowArmed: () => boolean;
+  setOverlayRebuild: (rebuild: boolean) => void;
   reachPx: number;
 }
 
@@ -151,6 +156,10 @@ function buildLinksPage(): {
        clearTerminalLinks: clearTerminalLinks,
        pressedLink: function () { return pressedLink; },
        linkStats: function () { return linkStats; },
+       armLinkStatsWindow: armLinkStatsWindow,
+       reportLinkWindowStats: reportLinkWindowStats,
+       linkStatsWindowArmed: function () { return linkStatsWindowTimer !== null; },
+       setOverlayRebuild: function (rebuild) { linkOverlayRebuild = rebuild; },
        reachPx: LINK_TAP_REACH_PX,
      };`,
   ) as (...dependencies: unknown[]) => LinksPage;
@@ -523,6 +532,67 @@ describe('findLinksInRows', () => {
   });
 });
 
+/**
+ * The link-scan probe's stream (src/devsupport/terminalLinkStream.ts, task
+ * #147), written into a headless terminal at the mock's 210x48 grid and read
+ * back through the page's real finder. The stream only measures what it
+ * claims to if the finder actually walks every wrapped shape in it, so these
+ * pin that it does, rather than trusting the generator's comments.
+ */
+describe('the link-scan probe stream, through the real finder', () => {
+  const grid = { cols: 210, rows: 48 };
+
+  async function write(terminal: Terminal, data: string): Promise<void> {
+    await new Promise<void>((resolve) => terminal.write(data, resolve));
+  }
+
+  function visibleLinks(terminal: Terminal): FoundLink[] {
+    const buffer = terminal.buffer.active;
+    return page.findLinksInRows(buffer, buffer.viewportY, grid.rows, grid.cols);
+  }
+
+  it('still: finds every link whole, each wrapped shape included, and none moves as it ticks', async () => {
+    const terminal = await terminalWith(linkStreamSeedFrame('still', grid), grid.cols, grid.rows);
+    const expectedUrls = linkStreamStillUrls(grid);
+    // The shapes the stream exists to carry: a URL longer than a row, and one
+    // a TUI wrapped over three rows whose middle row holds no separator.
+    expect(expectedUrls.some((url) => url.length > grid.cols)).toBe(true);
+    expect(terminal.buffer.active.getLine(6)?.isWrapped).toBe(true);
+    for (const row of [9, 10]) expect(terminal.buffer.active.getLine(row)?.isWrapped).toBe(false);
+    // The padded block is one logical line of autowrapped rows.
+    expect(terminal.buffer.active.getLine(13)?.isWrapped).toBe(true);
+
+    const seedLinks = visibleLinks(terminal);
+    expect(seedLinks.map((link) => link.url)).toEqual(expectedUrls);
+    const tuiWrapped = seedLinks.find((link) => link.url === expectedUrls[3]);
+    expect(tuiWrapped?.segments.map((segment) => segment.row)).toEqual([8, 9, 10]);
+
+    for (let tick = 1; tick <= 5; tick += 1) await write(terminal, linkStreamTickFrame('still', tick, grid));
+    expect(visibleLinks(terminal)).toEqual(seedLinks);
+    // The ticks did write: the live region shows the last one.
+    expect(terminal.buffer.active.getLine(grid.rows - 1)?.translateToString(true)).toContain('tick 5');
+  });
+
+  it('scroll: keeps links on screen in every shape, and every tick moves them', async () => {
+    const terminal = await terminalWith(linkStreamSeedFrame('scroll', grid), grid.cols, grid.rows);
+    let previousRows = visibleLinks(terminal).map((link) => link.segments[0].bufferRow - terminal.buffer.active.viewportY);
+    const urlsSeen = new Set<string>();
+
+    for (let tick = 1; tick <= 40; tick += 1) {
+      await write(terminal, linkStreamTickFrame('scroll', tick, grid));
+      const links = visibleLinks(terminal);
+      expect(links.length).toBeGreaterThanOrEqual(8);
+      for (const link of links) urlsSeen.add(link.url);
+      const rows = links.map((link) => link.segments[0].bufferRow - terminal.buffer.active.viewportY);
+      expect(rows).not.toEqual(previousRows);
+      previousRows = rows;
+    }
+    // Every shape went past whole: the hard row, the padded pair, and both wraps.
+    const stillUrls = linkStreamStillUrls(grid);
+    for (const url of stillUrls.slice(0, 4)) expect(urlsSeen.has(url)).toBe(true);
+  });
+});
+
 describe('linkAtPoint (the tap reach)', () => {
   // A 10 x 20 px cell; the link covers columns 5-14 of viewport row 3.
   const link: FoundLink = {
@@ -692,7 +762,17 @@ describe('a tap on the page', () => {
   });
 
   describe('the underline overlay', () => {
-    it('underlines each link in percent of the grid, inside the screen element', async () => {
+    /** The boxes on screen: a reused slot with nothing to draw is hidden, not removed. */
+    function shownBoxes(overlay: FakeElement): FakeElement[] {
+      return overlay.children.filter((child) => !child.style.cssText.startsWith('display:none'));
+    }
+
+    /** A box's transform: where it sits, in cells and rows, and how many cells it spans. */
+    function boxTransform(startColumn: number, row: number, cells: number): string {
+      return `transform:translate(${startColumn * 100}%,${row * 100}%) scaleX(${cells})`;
+    }
+
+    it('underlines each link in cells of the grid, inside the screen element', async () => {
       const harness = await pageWithLink();
 
       harness.page.refreshTerminalLinks();
@@ -703,10 +783,13 @@ describe('a tap on the page', () => {
       expect(overlay.style.cssText).toContain('z-index:2');
       expect(overlay.children).toHaveLength(1);
       const underline = overlay.children[0].style.cssText;
-      // Columns 2-56 of 60, row 1 of 6.
-      expect(underline).toContain(`left:${(2 / 60) * 100}%`);
-      expect(underline).toContain(`width:${(54 / 60) * 100}%`);
-      expect(underline).toContain(`top:${(1 / 6) * 100}%`);
+      // One cell of a 60x6 grid, moved to column 2 of row 1 and stretched
+      // across columns 2-56.
+      expect(underline).toContain(`width:${(1 / 60) * 100}%`);
+      expect(underline).toContain(`height:${(1 / 6) * 100}%`);
+      expect(underline).toContain(boxTransform(2, 1, 54));
+      expect(underline).toContain('transform-origin:0 0');
+      expect(underline).toContain('will-change:transform');
       expect(underline).toContain('border-bottom:1px solid #f0e9dd');
       expect(harness.page.linkStats().visible).toBe(1);
     });
@@ -717,12 +800,67 @@ describe('a tap on the page', () => {
       const overlay = harness.screen.children[0];
 
       harness.page.pressLinkAt(200, 30);
-      expect(overlay.children).toHaveLength(2);
+      expect(shownBoxes(overlay)).toHaveLength(2);
+      // The tint first, so the underline draws over it.
       expect(overlay.children[0].style.cssText).toContain('background:#e8a33d');
+      expect(overlay.children[1].style.cssText).toContain('border-bottom:1px solid #f0e9dd');
 
       harness.page.releaseLinkPress();
+      expect(shownBoxes(overlay)).toHaveLength(1);
+      expect(shownBoxes(overlay)[0].style.cssText).not.toContain('background');
+    });
+
+    /**
+     * THE COST THIS OVERLAY EXISTS TO AVOID (task #147). A scrolling stream
+     * moves every link on every write, and rebuilding the underlines for each
+     * one was measured costing the WebView's GPU thread 15-19% of a core
+     * against 2-4% without links (a release build on an emulator, one
+     * diagnostic thread sample of 6 readings per arm; docs/architecture.md).
+     * A moved link reuses its element, and its style string differs from the
+     * last one in the transform alone.
+     *
+     * Mutation that reddens this: route the slot path through
+     * rebuildLinkOverlay (the element is replaced and a new one made).
+     */
+    it('moves a link that scrolled with its own element, rewriting only the transform', async () => {
+      const harness = await pageWithLink();
+      harness.page.refreshTerminalLinks();
+      const overlay = harness.screen.children[0];
+      const underline = overlay.children[0];
+      const cssBefore = underline.style.cssText;
+      const createdBefore = harness.createdElements();
+
+      // A line inserted at the top pushes the link down a row.
+      await new Promise<void>((resolve) => harness.terminal.write('\x1b[1;1H\x1b[L', resolve));
+      harness.page.refreshTerminalLinks();
+
+      expect(harness.createdElements()).toBe(createdBefore);
+      expect(overlay.children).toEqual([underline]);
+      expect(underline.style.cssText).toBe(cssBefore.replace(boxTransform(2, 1, 54), boxTransform(2, 2, 54)));
+    });
+
+    /**
+     * The retention probe's control arm keeps the overlay as it first
+     * shipped, so the A/B measures the slots against it in one build.
+     */
+    it('rebuilds every element on a move under the rebuild arm, boxed by left and top', async () => {
+      const harness = await pageWithLink();
+      harness.page.setOverlayRebuild(true);
+      harness.page.refreshTerminalLinks();
+      const overlay = harness.screen.children[0];
+      const underline = overlay.children[0];
+      expect(underline.style.cssText).toContain(`left:${(2 / 60) * 100}%`);
+      expect(underline.style.cssText).toContain(`width:${(54 / 60) * 100}%`);
+      expect(underline.style.cssText).toContain(`top:${(1 / 6) * 100}%`);
+      const createdBefore = harness.createdElements();
+
+      await new Promise<void>((resolve) => harness.terminal.write('\x1b[1;1H\x1b[L', resolve));
+      harness.page.refreshTerminalLinks();
+
+      expect(harness.createdElements()).toBe(createdBefore + 1);
       expect(overlay.children).toHaveLength(1);
-      expect(overlay.children[0].style.cssText).not.toContain('background');
+      expect(overlay.children[0]).not.toBe(underline);
+      expect(overlay.children[0].style.cssText).toContain(`top:${(2 / 6) * 100}%`);
     });
 
     /**
@@ -741,6 +879,57 @@ describe('a tap on the page', () => {
 
       expect(harness.createdElements()).toBe(createdAfterFirst);
       expect(harness.page.linkStats().scans).toBe(3);
+    });
+
+    /**
+     * The release-build readout (task #147): one window's counts, posted as
+     * numbers only and then zeroed, so each A/B arm reads its own. `renders`
+     * counts the control arm's renders too, where nothing is scanned.
+     *
+     * Mutations that redden this: drop the reset in reportLinkWindowStats
+     * (the second report repeats the first), or count `renders` after the
+     * enabled check (the control arm reports 0 renders).
+     */
+    it('reports a window of counts, then starts the next from zero', async () => {
+      const harness = await pageWithLink();
+      harness.page.armLinkStatsWindow(0);
+      harness.page.refreshTerminalLinks();
+      harness.page.refreshTerminalLinks();
+      harness.page.refreshTerminalLinks();
+
+      harness.page.reportLinkWindowStats();
+      expect(harness.posted).toHaveLength(1);
+      const first = harness.posted[0] as Record<string, unknown>;
+      expect(Object.keys(first).sort()).toEqual(
+        ['overlayWrites', 'renders', 'scanMsMax', 'scanMsTotal', 'scans', 'type', 'visible', 'windowMs'].sort(),
+      );
+      expect(first).toMatchObject({ type: 'link-stats', renders: 3, scans: 3, overlayWrites: 1, visible: 1 });
+      expect(decodeTerminalMessage(JSON.stringify(first))?.type).toBe('link-stats');
+
+      harness.page.setEnabled(false);
+      harness.page.refreshTerminalLinks();
+      harness.page.reportLinkWindowStats();
+      expect(harness.posted[1]).toMatchObject({ type: 'link-stats', renders: 1, scans: 0, scanMsTotal: 0, overlayWrites: 0 });
+    });
+
+    /**
+     * Mutation that reddens this: arm the timer whatever the interval, so a
+     * store build's page runs a report timer for nothing.
+     */
+    it('runs the report timer only for a positive interval, and replaces it on every init', async () => {
+      const harness = await pageWithLink();
+      try {
+        harness.page.armLinkStatsWindow(0);
+        expect(harness.page.linkStatsWindowArmed()).toBe(false);
+        harness.page.armLinkStatsWindow(undefined);
+        expect(harness.page.linkStatsWindowArmed()).toBe(false);
+        harness.page.armLinkStatsWindow(10_000);
+        expect(harness.page.linkStatsWindowArmed()).toBe(true);
+        harness.page.armLinkStatsWindow(0);
+        expect(harness.page.linkStatsWindowArmed()).toBe(false);
+      } finally {
+        harness.page.armLinkStatsWindow(0);
+      }
     });
 
     it('draws nothing and makes no overlay on a screen with no link', async () => {
@@ -810,8 +999,183 @@ describe('a tap on the page', () => {
       await new Promise<void>((resolve) => harness.terminal.write('\x1b[2J\x1b[Hno links here', resolve));
       harness.page.refreshTerminalLinks();
 
-      expect(overlay.children).toHaveLength(0);
+      // The slot stays for the next link, hidden.
+      expect(shownBoxes(overlay)).toHaveLength(0);
       expect(harness.screen.children).toHaveLength(1);
+    });
+
+    /**
+     * A spare slot is hidden in place and kept, and a link that returns takes
+     * the same element back: slots are created only past the high-water mark.
+     *
+     * Mutations that redden this: remove the spare element instead of hiding
+     * it (the children length drops to 0), or always create a new slot element
+     * (the created count rises and the element is a different one).
+     */
+    it('hides a spare slot with display:none and reuses that same element when the link returns', async () => {
+      const harness = await pageWithLink();
+      harness.page.refreshTerminalLinks();
+      const overlay = harness.screen.children[0];
+      const slotElement = overlay.children[0];
+      const createdAfterFirst = harness.createdElements();
+
+      await new Promise<void>((resolve) => harness.terminal.write('\x1b[2J\x1b[Hno links here', resolve));
+      harness.page.refreshTerminalLinks();
+
+      expect(overlay.children).toHaveLength(1);
+      expect(overlay.children[0]).toBe(slotElement);
+      expect(slotElement.style.cssText).toBe('display:none;');
+
+      await new Promise<void>((resolve) => harness.terminal.write(`\x1b[2J${hardRows(['', `  ${PR_URL}`])}`, resolve));
+      harness.page.refreshTerminalLinks();
+
+      expect(harness.createdElements()).toBe(createdAfterFirst);
+      expect(overlay.children).toHaveLength(1);
+      expect(overlay.children[0]).toBe(slotElement);
+      expect(slotElement.style.cssText).toContain(boxTransform(2, 1, 54));
+    });
+
+    /**
+     * Two links, one of which moves while the other keeps its box: only the
+     * moved slot's style is assigned again.
+     *
+     * Mutation that reddens this: drop the `css !== slot.css` comparison in
+     * writeLinkOverlaySlots (always assign), which gives the unchanged slot a
+     * second write.
+     */
+    it('does not rewrite the style of a slot whose box did not change', async () => {
+      const harness = await pageWithLink();
+      await new Promise<void>((resolve) => harness.terminal.write('\x1b[4;1H\x1b[2K  https://example.com/second', resolve));
+      harness.page.refreshTerminalLinks();
+      const overlay = harness.screen.children[0];
+      expect(overlay.children).toHaveLength(2);
+      expect(overlay.children[0].style.cssText).toContain(boxTransform(2, 1, 54));
+      expect(overlay.children[1].style.cssText).toContain(boxTransform(2, 3, 26));
+
+      const writes = [0, 0];
+      overlay.children.forEach((child, index) => {
+        let current = child.style.cssText;
+        Object.defineProperty(child.style, 'cssText', {
+          configurable: true,
+          get: () => current,
+          set: (value: string) => {
+            writes[index] += 1;
+            current = value;
+          },
+        });
+      });
+
+      // The first link moves to column 4 of its row; the second stays put.
+      await new Promise<void>((resolve) => harness.terminal.write(`\x1b[2;1H\x1b[2K    ${PR_URL}`, resolve));
+      harness.page.refreshTerminalLinks();
+
+      expect(overlay.children[0].style.cssText).toContain(boxTransform(4, 1, 54));
+      expect(writes).toEqual([1, 0]);
+    });
+
+    describe('the stats window timer and values', () => {
+      let currentNow = 0;
+
+      afterEach(() => {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+      });
+
+      function fakeIntervals(): void {
+        vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+      }
+
+      /** Mutation that reddens this: pass a no-op as the interval's callback. */
+      it('posts one link-stats report each period the window was armed for', async () => {
+        fakeIntervals();
+        const harness = await pageWithLink();
+        harness.page.armLinkStatsWindow(1000);
+        harness.page.refreshTerminalLinks();
+        harness.page.refreshTerminalLinks();
+        expect(harness.posted).toHaveLength(0);
+
+        vi.advanceTimersByTime(1000);
+
+        expect(harness.posted).toHaveLength(1);
+        expect(harness.posted[0]).toMatchObject({ type: 'link-stats', renders: 2 });
+        harness.page.armLinkStatsWindow(0);
+      });
+
+      /** Mutation that reddens this: drop the clearInterval in armLinkStatsWindow (the period posts twice). */
+      it('clears the previous interval when it is armed again', async () => {
+        fakeIntervals();
+        const harness = await pageWithLink();
+        harness.page.armLinkStatsWindow(1000);
+        harness.page.armLinkStatsWindow(1000);
+
+        vi.advanceTimersByTime(1000);
+
+        expect(harness.posted).toHaveLength(1);
+        harness.page.armLinkStatsWindow(0);
+      });
+
+      /** Mutation that reddens this: drop `linkWindowStats = freshLinkWindowStats()` from armLinkStatsWindow. */
+      it('starts a fresh window when it is armed', async () => {
+        const harness = await pageWithLink();
+        harness.page.refreshTerminalLinks();
+        harness.page.refreshTerminalLinks();
+
+        harness.page.armLinkStatsWindow(0);
+        harness.page.reportLinkWindowStats();
+
+        expect(harness.posted[0]).toMatchObject({ type: 'link-stats', renders: 0, scans: 0 });
+      });
+
+      it.each([[0], [-5], [Number.NaN], ['1000'], [undefined]])(
+        'arms no timer for the interval %s',
+        async (windowMs) => {
+          fakeIntervals();
+          const harness = await pageWithLink();
+          harness.page.armLinkStatsWindow(windowMs);
+
+          vi.advanceTimersByTime(60_000);
+
+          expect(harness.posted).toHaveLength(0);
+          expect(harness.page.linkStatsWindowArmed()).toBe(false);
+        },
+      );
+
+      /**
+       * Mutations that redden this: flip the subtraction in windowMs (it goes
+       * negative), or never update linkWindowStats.scanMsMax (it reads 0).
+       */
+      it('reports the clock delta between windows, the rounded scan times, and visible 0 after a links-off render', async () => {
+        const harness = await pageWithLink();
+        const nowSpy = vi.spyOn(globalThis.performance, 'now');
+        currentNow = 1000;
+        nowSpy.mockImplementation(() => currentNow);
+        harness.page.armLinkStatsWindow(0);
+
+        // Each scan reads the clock twice: before and after.
+        nowSpy.mockReturnValueOnce(2000).mockReturnValueOnce(2012.504);
+        harness.page.refreshTerminalLinks();
+        nowSpy.mockReturnValueOnce(2100).mockReturnValueOnce(2103.254);
+        harness.page.refreshTerminalLinks();
+
+        currentNow = 5000;
+        harness.page.reportLinkWindowStats();
+
+        expect(harness.posted[0]).toMatchObject({
+          type: 'link-stats',
+          windowMs: 4000,
+          scans: 2,
+          scanMsTotal: 15.76,
+          scanMsMax: 12.5,
+          visible: 1,
+        });
+
+        harness.page.setEnabled(false);
+        harness.page.refreshTerminalLinks();
+        currentNow = 7000;
+        harness.page.reportLinkWindowStats();
+
+        expect(harness.posted[1]).toMatchObject({ windowMs: 2000, renders: 1, scans: 0, scanMsMax: 0, visible: 0 });
+      });
     });
 
     /**
@@ -822,13 +1186,13 @@ describe('a tap on the page', () => {
       const harness = await pageWithLink();
       harness.page.refreshTerminalLinks();
       const overlay = harness.screen.children[0];
-      expect(overlay.children[0].style.cssText).toContain(`top:${(1 / 6) * 100}%`);
+      expect(overlay.children[0].style.cssText).toContain(boxTransform(2, 1, 54));
 
       await new Promise<void>((resolve) => harness.terminal.write(`\x1b[2J${hardRows(['', '', '', `  ${PR_URL}`])}`, resolve));
       harness.page.refreshTerminalLinks();
 
       expect(overlay.children).toHaveLength(1);
-      expect(overlay.children[0].style.cssText).toContain(`top:${(3 / 6) * 100}%`);
+      expect(overlay.children[0].style.cssText).toContain(boxTransform(2, 3, 54));
     });
 
     it('redraws when the grid changes under an unmoved link', async () => {
@@ -844,7 +1208,9 @@ describe('a tap on the page', () => {
       });
       harness.page.refreshTerminalLinks();
 
-      expect(overlay.children[0].style.cssText).toContain(`top:${(1 / 8) * 100}%`);
+      // Still row 1, now a row of an 8-row grid.
+      expect(overlay.children[0].style.cssText).toContain(`height:${(1 / 8) * 100}%`);
+      expect(overlay.children[0].style.cssText).toContain(boxTransform(2, 1, 54));
     });
 
     /**
@@ -887,8 +1253,8 @@ describe('a tap on the page', () => {
     });
 
     /**
-     * Mutation that reddens this: drop `|| !terminalLinksEnabled` from the
-     * early return in refreshTerminalLinks (the scan counter then rises).
+     * Mutation that reddens this: drop the `!terminalLinksEnabled` early
+     * return in refreshTerminalLinks (the scan counter then rises).
      */
     it('does not scan or draw while links are off', async () => {
       const harness = await pageWithLink();

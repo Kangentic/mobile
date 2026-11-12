@@ -41,6 +41,14 @@ import {
   type RecordedTerminalCapture,
   type RecordedTerminalPlayback,
 } from '@/devsupport/recordedTerminal';
+import { retentionProbeEnabled } from '@/devsupport/retentionProbe';
+import {
+  linkStreamSeedFrame,
+  linkStreamTickFrame,
+  parseLinkStreamCommand,
+  TERMINAL_LINK_STREAM_TICK_MS,
+  type TerminalLinkStreamMode,
+} from '@/devsupport/terminalLinkStream';
 
 /**
  * The in-app fake desktop: the real channel stack (KK handshake,
@@ -3928,6 +3936,16 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
   let codexStreamSubscribed = false;
   let geminiStreamSubscribed = false;
   /**
+   * The link-scan probe's stream (src/devsupport/terminalLinkStream.ts), set
+   * by the `/link-stream` command and honoured only in a retention-probe
+   * build. While a scenario is set it REPLACES the codex terminal: the codex
+   * snapshot is the scenario's seed, a 16 ms timer writes its ticks while the
+   * codex terminal is subscribed, and the 2 s codex repaint stands down.
+   * Reset per connection with the rest of the scenario.
+   */
+  let linkStreamMode: TerminalLinkStreamMode | null = null;
+  let linkStreamTimer: ReturnType<typeof setInterval> | null = null;
+  /**
    * The Command Terminals this connection's reviewer has started (protocol
    * 0.20.0). None are seeded: the store-capture flow and every fixture test
    * see the feed they always saw, and New on the Board's Terminals button is
@@ -3939,6 +3957,45 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
   function emit(event: BridgeEvent): void {
     if (!peer.isEstablished) return;
     peer.emitEvent(event);
+  }
+
+  /** What the codex terminal shows at subscribe: the link stream's seed while one is set, else its TUI. */
+  function codexTerminalSeed(): string {
+    return linkStreamMode === null ? codexTuiFrame(0) : linkStreamSeedFrame(linkStreamMode, activeGrid());
+  }
+
+  function stopLinkStream(): void {
+    if (linkStreamTimer !== null) clearInterval(linkStreamTimer);
+    linkStreamTimer = null;
+  }
+
+  /** (Re)start the link stream's ticks, if a scenario is set and the codex terminal is subscribed. */
+  function startLinkStream(): void {
+    stopLinkStream();
+    const mode = linkStreamMode;
+    if (mode === null || !codexStreamSubscribed) return;
+    const grid = activeGrid();
+    let tick = 0;
+    linkStreamTimer = setInterval(() => {
+      if (!peer.isEstablished) return;
+      tick += 1;
+      emit({
+        kind: 'terminal',
+        sessionId: MOCK_CODEX_SESSION_ID,
+        taskId: MOCK_CODEX_TASK_ID,
+        payload: { data: linkStreamTickFrame(mode, tick, grid) },
+      });
+    }, TERMINAL_LINK_STREAM_TICK_MS);
+  }
+
+  /**
+   * The codex terminal stops streaming (an unsubscribe, or its session
+   * paused): the 2 s repaint and the link stream's ticks both end, so every
+   * path that ends it stops the stream's timer too.
+   */
+  function endCodexTerminalStream(): void {
+    codexStreamSubscribed = false;
+    stopLinkStream();
   }
 
   /** The desktop's `command-terminals-changed`: on a start, an end or a rename, never on activity. */
@@ -4283,7 +4340,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       emit({ kind: 'activity', sessionId: pausedSessionId, taskId: task.id, payload: { type: 'session-ended', intentional: true } });
       // The two live TUIs repaint on the tick while subscribed; a paused one
       // must stop, as the desktop's PTY does.
-      if (pausedSessionId === MOCK_CODEX_SESSION_ID) codexStreamSubscribed = false;
+      if (pausedSessionId === MOCK_CODEX_SESSION_ID) endCodexTerminalStream();
       if (pausedSessionId === MOCK_GEMINI_SESSION_ID) geminiStreamSubscribed = false;
       // The desktop dropped the live row: a subscribe for its id now fails.
       staticSessionStates.delete(pausedSessionId);
@@ -4661,7 +4718,9 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       // The codex and gemini sessions repaint their fullscreen TUIs every
       // other tick - live terminals for live agents, alongside their
       // structured transcripts.
-      if (codexStreamSubscribed && feedTick % 2 === 0) {
+      // Not while the link-scan probe's stream owns the codex terminal: a
+      // full repaint every 2 s would wipe the screen it streams over.
+      if (codexStreamSubscribed && linkStreamMode === null && feedTick % 2 === 0) {
         emit({
           kind: 'terminal',
           sessionId: MOCK_CODEX_SESSION_ID,
@@ -5083,7 +5142,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
           return ok(request, terminalSnapshot as unknown as JsonValue);
         }
         if (payload.action === 'unsubscribe') {
-          if (payload.sessionId === MOCK_CODEX_SESSION_ID) codexStreamSubscribed = false;
+          if (payload.sessionId === MOCK_CODEX_SESSION_ID) endCodexTerminalStream();
           else if (payload.sessionId === MOCK_GEMINI_SESSION_ID) geminiStreamSubscribed = false;
           else if (!staticSessionStates.has(payload.sessionId)) {
             streamSubscribed = false;
@@ -5120,9 +5179,13 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
           if (payload.sessionId === MOCK_CODEX_SESSION_ID) {
             codexStreamSubscribed = wantsTerminal;
             if (wantsTerminal) startFeed();
+            // Stops on a list-only re-subscribe, restarts from tick 1 on a
+            // fresh terminal subscribe, which hands over the seed below. The
+            // first tick fires a timer period after this response goes out.
+            startLinkStream();
             const codexSnapshot: ReadStreamResponsePayload = {
               ...staticSessionSnapshot(staticState.spec, wantsTerminal),
-              scrollback: wantsTerminal ? codexTuiFrame(0) : '',
+              scrollback: wantsTerminal ? codexTerminalSeed() : '',
             };
             return ok(request, codexSnapshot as unknown as JsonValue);
           }
@@ -5228,6 +5291,25 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         }
         if (payload.text.trim() === '/fail-resume') {
           failNextResume = true;
+          return ok(request, { delivered: true });
+        }
+        // The link-scan probe's stream (task #147), from any session's
+        // composer. Only in a retention-probe build: everywhere else, the
+        // shipped demo included, it is an ordinary message.
+        const linkStreamCommand = retentionProbeEnabled() ? parseLinkStreamCommand(payload.text) : null;
+        if (linkStreamCommand !== null) {
+          linkStreamMode = linkStreamCommand === 'off' ? null : linkStreamCommand;
+          if (codexStreamSubscribed) {
+            // An open codex terminal switches at once: a full repaint from the
+            // new scenario's seed (or the codex TUI's), then its ticks.
+            emit({
+              kind: 'terminal',
+              sessionId: MOCK_CODEX_SESSION_ID,
+              taskId: MOCK_CODEX_TASK_ID,
+              payload: { data: codexTerminalSeed() },
+            });
+          }
+          startLinkStream();
           return ok(request, { delivered: true });
         }
         // Route by the session the composer actually sent into. Ignoring
@@ -5672,6 +5754,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       if (feedTimer) clearInterval(feedTimer);
       feedTimer = null;
       stopTerminalPlayback();
+      stopLinkStream();
       for (const timer of oneShotTimers) clearTimeout(timer);
       oneShotTimers.clear();
       peer.dispose();

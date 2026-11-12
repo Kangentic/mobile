@@ -71,15 +71,34 @@
   // Off only under the retention probe's control arm (the host's init says
   // terminalLinks: false): no underline, and a tap is a plain tap again.
   var terminalLinksEnabled = true;
+  // True only under the probe's other control arm (the init's linkOverlay is
+  // 'rebuild'): the overlay rebuilds every element whenever a link changes,
+  // as it first shipped, instead of moving reused ones.
+  var linkOverlayRebuild = false;
   var linkOverlayElement = null;
   // What the overlay currently draws, so a frame whose links did not change
   // touches no DOM at all.
   var linkOverlaySignature = '';
+  // The reused underline and tint elements, in drawing order, each with the
+  // style it last wrote (see writeLinkOverlaySlots).
+  var linkOverlaySlots = [];
+  var LINK_HIDDEN_SLOT_CSS = 'display:none;';
   // The link a finger is on right now (tinted), or null. Set at touchstart,
   // dropped by anything that makes the gesture not a tap.
   var pressedLink = null;
   // Probe counters: what the scan costs and how often a tap opened a link.
   var linkStats = { scans: 0, lastScanMs: null, maxScanMs: 0, totalScanMs: 0, visible: 0, opened: 0 };
+  // The same cost per WINDOW, for a release build (task #147): linkStats
+  // above lives for the whole page and only the dev probe can read it. When
+  // an init asks (linkStatsWindowMs, which the host sets only in a
+  // connection-trace build), the page posts these counts every window and
+  // starts the next from zero, so each arm of an A/B reads its own numbers.
+  // `renders` counts every xterm render with links on or off, so both arms
+  // show they streamed at the same rate; `overlayWrites` counts the renders
+  // that rebuilt the underlines' DOM. Counts and milliseconds only: never a
+  // URL or any text from the screen.
+  var linkWindowStats = freshLinkWindowStats();
+  var linkStatsWindowTimer = null;
 
   /** The text without its run of trailing punctuation, scanned back from the end so it stays linear. */
   function dropLinkTrailingPunctuation(text) {
@@ -424,6 +443,7 @@
     screen.appendChild(overlay);
     linkOverlayElement = overlay;
     linkOverlaySignature = '';
+    linkOverlaySlots = [];
     return overlay;
   }
 
@@ -439,6 +459,116 @@
       'top:' + linkPercent(segment.row, rows) + ';' +
       'height:' + linkPercent(1, rows) + ';'
     );
+  }
+
+  /** The press tint's colour: the theme's accent, as the cursor draws it. */
+  function linkTintColor(theme) {
+    return theme.cursor || '#e8a33d';
+  }
+
+  /**
+   * What a box draws, shared by the slots and the rebuild arm so the A/B
+   * compares how boxes are placed and never how they look: the press tint
+   * fills its box, an underline is its bottom border.
+   */
+  function linkPaintCss(tint, color) {
+    return tint
+      ? 'background:' + color + ';opacity:' + LINK_PRESS_TINT_OPACITY + ';'
+      : 'border-bottom:1px solid ' + color + ';opacity:' + LINK_UNDERLINE_OPACITY + ';';
+  }
+
+  /**
+   * One box's style for a REUSED slot (see writeLinkOverlaySlots). The box is
+   * one cell wide and one row tall, moved by a translate in units of its own
+   * size, so in cells and rows, and stretched across its segment by a scaleX
+   * from its left edge. A horizontal stretch leaves a 1px border 1px tall, so
+   * it draws what linkSegmentBox draws. will-change gives each box its own
+   * compositor layer. A moved box gets its whole style string again, but the
+   * only declaration that differs is the transform, which (inferred from how
+   * compositing works, not measured on its own) the GPU applies as a move
+   * with nothing repainted.
+   */
+  function linkSlotCss(box, rows, cols) {
+    return (
+      'position:absolute;left:0;top:0;box-sizing:border-box;transform-origin:0 0;will-change:transform;' +
+      'width:' + linkPercent(1, cols) + ';' +
+      'height:' + linkPercent(1, rows) + ';' +
+      'transform:translate(' + box.startColumn * 100 + '%,' + box.row * 100 + '%) scaleX(' + (box.endColumn - box.startColumn) + ');' +
+      linkPaintCss(box.tint, box.color)
+    );
+  }
+
+  /**
+   * The boxes in drawing order: per segment, the press tint (pressed link
+   * only), then the underline over it. Elements later in the DOM draw on top,
+   * so this order is what keeps the underline visible over the tint.
+   */
+  function linkOverlayBoxes(drawn, theme) {
+    var boxes = [];
+    for (var drawnIndex = 0; drawnIndex < drawn.length; drawnIndex += 1) {
+      var item = drawn[drawnIndex];
+      var segment = item.segment;
+      if (item.pressed) {
+        boxes.push({ tint: true, color: linkTintColor(theme), row: segment.row, startColumn: segment.startColumn, endColumn: segment.endColumn });
+      }
+      boxes.push({ tint: false, color: item.color, row: segment.row, startColumn: segment.startColumn, endColumn: segment.endColumn });
+    }
+    return boxes;
+  }
+
+  /**
+   * Draw the boxes into the reused slots: a slot whose style did not change is
+   * not touched, a slot is created only when more boxes show than ever have,
+   * and a slot left over is hidden rather than removed. A scrolling stream
+   * moves every link on every write, and rebuilding the underlines for each
+   * one read the WebView's GPU thread in the APP process at 15-19% of a core
+   * against 2-4% without links (measured, task #147, docs/architecture.md: a
+   * release build on an emulator whose GPU work is translated to the host's,
+   * one diagnostic thread sample of 6 readings per arm).
+   */
+  function writeLinkOverlaySlots(overlay, boxes, rows, cols) {
+    for (var boxIndex = 0; boxIndex < boxes.length; boxIndex += 1) {
+      var slot = linkOverlaySlots[boxIndex];
+      if (!slot) {
+        slot = { element: document.createElement('div'), css: '' };
+        overlay.appendChild(slot.element);
+        linkOverlaySlots.push(slot);
+      }
+      var css = linkSlotCss(boxes[boxIndex], rows, cols);
+      if (css !== slot.css) {
+        slot.element.style.cssText = css;
+        slot.css = css;
+      }
+    }
+    for (var spareIndex = boxes.length; spareIndex < linkOverlaySlots.length; spareIndex += 1) {
+      var spare = linkOverlaySlots[spareIndex];
+      if (spare.css !== LINK_HIDDEN_SLOT_CSS) {
+        spare.element.style.cssText = LINK_HIDDEN_SLOT_CSS;
+        spare.css = LINK_HIDDEN_SLOT_CSS;
+      }
+    }
+  }
+
+  /**
+   * The retention probe's control arm for the slots (`rebuilt-link-overlay`):
+   * the overlay as it first shipped, every element thrown away and made again
+   * whenever any link changed.
+   */
+  function rebuildLinkOverlay(overlay, drawn, rows, cols, theme) {
+    linkOverlaySlots = [];
+    overlay.textContent = '';
+    for (var drawnIndex = 0; drawnIndex < drawn.length; drawnIndex += 1) {
+      var item = drawn[drawnIndex];
+      var boxCss = linkSegmentBox(item.segment, rows, cols);
+      if (item.pressed) {
+        var tint = document.createElement('div');
+        tint.style.cssText = boxCss + linkPaintCss(true, linkTintColor(theme));
+        overlay.appendChild(tint);
+      }
+      var underline = document.createElement('div');
+      underline.style.cssText = boxCss + linkPaintCss(false, item.color);
+      overlay.appendChild(underline);
+    }
   }
 
   /** Draw an underline under every segment, and the press tint under the pressed link's. */
@@ -467,26 +597,19 @@
     var overlay = ensureLinkOverlay();
     if (!overlay) return;
     linkOverlaySignature = signature;
-    overlay.textContent = '';
-    for (var drawnIndex = 0; drawnIndex < drawn.length; drawnIndex += 1) {
-      var item = drawn[drawnIndex];
-      var box = linkSegmentBox(item.segment, rows, cols);
-      if (item.pressed) {
-        var tint = document.createElement('div');
-        tint.style.cssText = box + 'background:' + (theme.cursor || '#e8a33d') + ';opacity:' + LINK_PRESS_TINT_OPACITY + ';';
-        overlay.appendChild(tint);
-      }
-      var underline = document.createElement('div');
-      underline.style.cssText = box + 'border-bottom:1px solid ' + item.color + ';opacity:' + LINK_UNDERLINE_OPACITY + ';';
-      overlay.appendChild(underline);
-    }
+    linkWindowStats.overlayWrites += 1;
+    if (linkOverlayRebuild) rebuildLinkOverlay(overlay, drawn, rows, cols, theme);
+    else writeLinkOverlaySlots(overlay, linkOverlayBoxes(drawn, theme), rows, cols);
   }
 
   /** Rescan the screen and redraw the overlay. Runs from xterm's onRender, so at most once a frame. */
   function refreshTerminalLinks() {
+    if (!terminal) return;
+    // Counted before the switch below, so the control arm reports its renders too.
+    linkWindowStats.renders += 1;
     // Off (the probe's control arm): the init that turned links off already
     // cleared the overlay, and nothing is scanned.
-    if (!terminal || !terminalLinksEnabled) return;
+    if (!terminalLinksEnabled) return;
     var startedAt = performance.now();
     var links = visibleTerminalLinks();
     renderLinkOverlay(links);
@@ -496,12 +619,53 @@
     linkStats.totalScanMs += elapsedMs;
     if (elapsedMs > linkStats.maxScanMs) linkStats.maxScanMs = elapsedMs;
     linkStats.visible = links.length;
+    linkWindowStats.scans += 1;
+    linkWindowStats.scanMsTotal += elapsedMs;
+    if (elapsedMs > linkWindowStats.scanMsMax) linkWindowStats.scanMsMax = elapsedMs;
+    linkWindowStats.visible = links.length;
+  }
+
+  function freshLinkWindowStats() {
+    return { startedAt: performance.now(), renders: 0, scans: 0, scanMsTotal: 0, scanMsMax: 0, overlayWrites: 0, visible: 0 };
+  }
+
+  function roundLinkMs(milliseconds) {
+    return Math.round(milliseconds * 100) / 100;
+  }
+
+  /** Post this window's counts and start the next one from zero. */
+  function reportLinkWindowStats() {
+    var finished = linkWindowStats;
+    linkWindowStats = freshLinkWindowStats();
+    postToHost({
+      type: 'link-stats',
+      windowMs: Math.round(linkWindowStats.startedAt - finished.startedAt),
+      renders: finished.renders,
+      scans: finished.scans,
+      scanMsTotal: roundLinkMs(finished.scanMsTotal),
+      scanMsMax: roundLinkMs(finished.scanMsMax),
+      overlayWrites: finished.overlayWrites,
+      visible: finished.visible,
+    });
+  }
+
+  /**
+   * Every init: stop the last init's report timer, start a fresh window, and
+   * report every `windowMs` when the host asked for it (0 or absent: never,
+   * which is every build without the connection trace).
+   */
+  function armLinkStatsWindow(windowMs) {
+    if (linkStatsWindowTimer !== null) clearInterval(linkStatsWindowTimer);
+    linkStatsWindowTimer = null;
+    linkWindowStats = freshLinkWindowStats();
+    if (typeof windowMs === 'number' && windowMs > 0) linkStatsWindowTimer = setInterval(reportLinkWindowStats, windowMs);
   }
 
   /** Drop every underline and any press (every init, before the new grid's first render). */
   function clearTerminalLinks() {
     pressedLink = null;
     linkOverlaySignature = '';
+    linkOverlaySlots = [];
     if (linkOverlayElement && linkOverlayElement.firstChild) linkOverlayElement.textContent = '';
   }
 

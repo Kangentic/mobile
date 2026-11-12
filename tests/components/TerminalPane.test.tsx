@@ -34,8 +34,12 @@ jest.mock('@/connection/actions', () => ({
 // (never set here), so mocked directly to observe the 'terminal-renderer' call's
 // exact field shape - the whole point of the renderer report being routed through
 // the trace rather than the bare console.log it replaced.
+// A holder, like the probe's below: a test turns the trace build on to see the
+// init ask for the link-stats report.
+const mockConnectionTraceEnabled = { current: false };
 jest.mock('@/devsupport/connectionTrace', () => ({
   traceConnection: jest.fn(),
+  connectionTraceEnabled: () => mockConnectionTraceEnabled.current,
 }));
 
 // The retention probe is compiled out without its build flag; a holder lets a
@@ -371,6 +375,81 @@ describe('TerminalPane (faithful mirror)', () => {
     await postFromWebView(JSON.stringify({ type: 'renderer', renderer: 'dom' }));
 
     expect(connectionTraceMock.traceConnection).toHaveBeenCalledWith('terminal-renderer', { renderer: 'dom' });
+  });
+
+  /**
+   * The link scan's per-window cost (task #147) reaches the release-build
+   * trace as the decoder's counts and nothing else: no session id, and no
+   * field the page added.
+   *
+   * Mutation that reddens this: spread `message` into the fields, or add
+   * `sessionId` to them.
+   */
+  it('traces a link-stats window as counts only', async () => {
+    retainTerminal('sess-1');
+    await renderPaneAndReady();
+
+    await postFromWebView(
+      JSON.stringify({
+        type: 'link-stats',
+        windowMs: 10_001,
+        renders: 312,
+        scans: 312,
+        scanMsTotal: 98.5,
+        scanMsMax: 1.75,
+        overlayWrites: 0,
+        visible: 8,
+        url: 'https://github.com/kangentic/kangentic-mobile/pull/146',
+      }),
+    );
+
+    expect(connectionTraceMock.traceConnection).toHaveBeenCalledWith('terminal-link-stats', {
+      windowMs: 10_001,
+      renders: 312,
+      scans: 312,
+      scanMsTotal: 98.5,
+      scanMsMax: 1.75,
+      overlayWrites: 0,
+      visible: 8,
+      active: true,
+    });
+  });
+
+  /**
+   * The traced `active` field follows the pane's live isActive prop, not a
+   * constant: a window posted by a pane that is NOT the active lens must say
+   * so, or the trace cannot tell a hidden pane's scan cost from the visible one.
+   *
+   * Mutation that reddens this: replace `active: isActiveRef.current` with
+   * `active: true` in the link-stats branch of TerminalPane.tsx.
+   */
+  it('traces a link-stats window from an inactive pane with active false', async () => {
+    retainTerminal('sess-1');
+    await renderPaneAndReady(false);
+
+    await postFromWebView(
+      JSON.stringify({
+        type: 'link-stats',
+        windowMs: 10_001,
+        renders: 4,
+        scans: 4,
+        scanMsTotal: 1.5,
+        scanMsMax: 0.5,
+        overlayWrites: 0,
+        visible: 2,
+      }),
+    );
+
+    expect(connectionTraceMock.traceConnection).toHaveBeenCalledWith('terminal-link-stats', {
+      windowMs: 10_001,
+      renders: 4,
+      scans: 4,
+      scanMsTotal: 1.5,
+      scanMsMax: 0.5,
+      overlayWrites: 0,
+      visible: 2,
+      active: false,
+    });
   });
 
   /**
@@ -1250,6 +1329,60 @@ describe('TerminalPane (faithful mirror)', () => {
         expect(probedInit?.type === 'init' ? probedInit.terminalLinks : 'no init').toBe(false);
         // The arm moves nothing else.
         expect(probedInit?.type === 'init' ? probedInit.longPressMenuGuard : 'no init').toBe(true);
+      } finally {
+        mockRetentionProbeVariant.current = 'off';
+      }
+    });
+
+    /**
+     * The page reports the link scan's per-window cost only in a
+     * connection-trace build, the one build whose trace can log it (task
+     * #147). Every other build's page runs no report timer at all.
+     *
+     * Mutation that reddens this: send LINK_STATS_WINDOW_MS unconditionally.
+     */
+    it('asks for link-stats windows only in a connection-trace build', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      await renderPaneAndReady();
+      const shippedInit = decodedPosts().find((message) => message?.type === 'init');
+      expect(shippedInit?.type === 'init' ? shippedInit.linkStatsWindowMs : 'no init').toBe(0);
+
+      mockConnectionTraceEnabled.current = true;
+      try {
+        webViewMock.__postMessageMock.mockClear();
+        await postFromWebView(JSON.stringify({ type: 'ready' }));
+        const tracedInit = decodedPosts().find((message) => message?.type === 'init');
+        expect(tracedInit?.type === 'init' ? tracedInit.linkStatsWindowMs : 'no init').toBe(10_000);
+        // The links themselves stay on: the report is not an arm.
+        expect(tracedInit?.type === 'init' ? tracedInit.terminalLinks : 'no init').toBe(true);
+      } finally {
+        mockConnectionTraceEnabled.current = false;
+      }
+    });
+
+    /**
+     * The underline slots ship, and only the probe's `rebuilt-link-overlay`
+     * arm brings back the overlay that rebuilt every element on each change,
+     * so the A/B compares the two overlays with the scan on in both.
+     *
+     * Mutation that reddens this: send 'rebuild' unconditionally, or drop the field.
+     */
+    it('inits with the underline slots, and the rebuild only under the probe arm', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      await renderPaneAndReady();
+      const shippedInit = decodedPosts().find((message) => message?.type === 'init');
+      expect(shippedInit?.type === 'init' ? shippedInit.linkOverlay : 'no init').toBe('slots');
+
+      mockRetentionProbeVariant.current = 'rebuilt-link-overlay';
+      try {
+        webViewMock.__postMessageMock.mockClear();
+        await postFromWebView(JSON.stringify({ type: 'ready' }));
+        const probedInit = decodedPosts().find((message) => message?.type === 'init');
+        expect(probedInit?.type === 'init' ? probedInit.linkOverlay : 'no init').toBe('rebuild');
+        // The arm keeps the links on: it changes the overlay, not the scan.
+        expect(probedInit?.type === 'init' ? probedInit.terminalLinks : 'no init').toBe(true);
       } finally {
         mockRetentionProbeVariant.current = 'off';
       }
