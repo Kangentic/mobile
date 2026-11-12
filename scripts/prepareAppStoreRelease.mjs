@@ -614,7 +614,15 @@ async function describeLocalizations(request, versionId) {
 async function compareListingScreenshots(request, appId, versionId, frames) {
   const target = await readScreenshotTarget({ request, describeFailure, appId, frames });
   const localizations = await readLocalizations(request, versionId);
-  /** @type {{ locale: string, localizationId: string, placementCount: number, plan: ScreenshotPlan }[]} */
+  /**
+   * @type {{
+   *   locale: string,
+   *   localizationId: string,
+   *   placementCount: number,
+   *   placements: import('./lib/appStoreScreenshots.mjs').ScreenshotPlacement[],
+   *   plan: ScreenshotPlan,
+   * }[]}
+   */
   const results = [];
   for (const localization of localizations) {
     const placements = await readScreenshotPlacements({
@@ -627,6 +635,7 @@ async function compareListingScreenshots(request, appId, versionId, frames) {
       locale: localization.locale,
       localizationId: localization.id,
       placementCount: placements.length,
+      placements,
       plan: planScreenshotSync(frames, placements),
     });
   }
@@ -1222,6 +1231,24 @@ async function reportListingScreenshots(request, appId, versionId, frames, log) 
   for (const result of results) {
     log(`- ${result.locale}: ${describeScreenshotPlan(result.plan, result.placementCount)}.`);
 
+    // What each side holds, when they differ: the two lists a person needs side
+    // by side to see WHY. These are the names and sizes of public listing images.
+    if (!result.plan.inSync) {
+      for (const [index, placement] of result.placements.entries()) {
+        const image = placement.image;
+        log(
+          `  - listing ${index + 1}: ${image?.fileName ?? 'no file name'}, ${image?.fileSize ?? 'unknown'} bytes, ` +
+            `reference name ${image?.referenceName ? `"${image.referenceName}"` : 'none'}, ${image?.state ?? 'no state'}.`
+        );
+      }
+      for (const [index, frame] of frames.entries()) {
+        log(
+          `  - committed ${index + 1}: ${frame.fileName}, ${frame.byteLength} bytes, ` +
+            `sha256 ${frame.sha256.slice(0, 16)}, md5 ${frame.md5}.`
+        );
+      }
+    }
+
     const everyGroup = await readScreenshotPlacements({
       request,
       describeFailure,
@@ -1260,6 +1287,9 @@ async function reportListingScreenshots(request, appId, versionId, frames, log) 
             `${legacySet.checksums.length} screenshot(s), ${matching} with a checksum that is a committed frame` +
             `${inOrder ? ', in listing order' : ''}.`
         );
+        if (!inOrder) {
+          log(`  - its checksums, in order: ${legacySet.checksums.map((checksum) => JSON.stringify(checksum)).join(', ')}.`);
+        }
       }
     } catch (error) {
       log(
