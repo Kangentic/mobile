@@ -399,7 +399,7 @@ sync.
 | What decides an upload | each shelf's listed SHA-256 sequence against the committed files | each placement's image against the committed files |
 | Off for one release | `-f listing_images=skip` | `-f listing_images=skip`, which also restores stage 2's count-only check |
 | Needs | the service account to hold **Manage store presence** | the API key on the App Manager role, which the release needs anyway |
-| Has run against the store | not yet (2026-11-12) | the reads, yes (2026-11-12, run 43280259631); the writes first run on the next App Store release |
+| Has run against the store | yes, 2026-11-12: all three shelves replaced and read back (run 43296915425), then read in sync by a separate run | yes, 2026-11-12: version 1.5.0's seven frames replaced and read back (run 43299583161), then submitted through stage 2 (run 43300066612) |
 
 Both scripts read their frames through `scripts/lib/listingFrames.mjs`, which refuses a shelf
 before the first network call if it holds a missing or stray file, a frame of the wrong size, or a
@@ -457,6 +457,8 @@ release run leaves the listing alone for one), and to retry a sync that failed i
 run: a re-run of a release job uses the release's own commit, so it cannot pick up a fix to the
 script, while this runs from the branch it is dispatched on. On iOS it can only change a version
 that has not been submitted. Between releases there is none, and it says so and changes nothing.
+To change the screenshots of a version already waiting for review, remove it from review in App
+Store Connect, sync, and submit it again; that is what the first live run did.
 
 **What the first live check found.** On 2026-11-12 the 1.5.0 App Store version, already
 `WAITING_FOR_REVIEW` and so locked, was still showing the seven frames committed for v1.1.0 on
@@ -464,6 +466,31 @@ that has not been submitted. Between releases there is none, and it says so and 
 report since had read "7 screenshot(s)". A count cannot see that, which is the reason stage 2
 compares the listing with the committed frames, and the reason the check prints both lists when
 they differ.
+
+**What the first live syncs proved, and what they did not.** Both ran on 2026-11-12, before this
+change merged, from a throwaway ref that carried `store-listing.yml`'s jobs unchanged under the
+path of `app-store-check.yml`. A new `workflow_dispatch` workflow cannot be dispatched until it is
+on `main`, but an existing one runs a branch's copy with `--ref`, which is how to prove a new
+store workflow before it lands.
+
+- **Play.** The check read all three shelves as differing (7 listed, 7 committed; it does not say
+  whether by content or by order). The sync replaced each with its 7 frames, read the order back
+  and committed, in a job of 1m19s (run 43296915425). A separate check run then read all three in
+  sync (run 43297642160). That second read also settles a question the API reference leaves open:
+  Play lists the SHA-256 of the bytes as uploaded, because a re-encoded image would have read as
+  differing. The commit went through about five minutes after **Manage store presence** was
+  saved, so the 24 hours Google quotes for a permission change is a ceiling.
+- **App Store.** 1.5.0 was removed from review by hand first, because a submitted version is
+  locked; it then read `DEVELOPER_REJECTED`, which is editable. The sync uploaded 7 frames, placed
+  them, removed the 7 stale placements, read the order back, and reported the live 1.4.0 still
+  showing its 7 (run 43299583161, a job of 39s). A separate check matched all 7 by content hash,
+  and Apple's deprecated `sourceFileChecksum` read the committed files' MD5s in listing order
+  (run 43299818334). Stage 2 found the listing in sync and resubmitted the version (run
+  43300066612).
+- **Not exercised against a store:** stage 2 refusing a listing that differs, and a Play edit
+  lost to another edit, are covered by unit tests only. The two call sites inside a release (the
+  `Listing images (Google Play)` job and the step after stage 1) run the scripts proven above
+  with the same arguments, and first run in a release on the next one.
 
 ## Agent tooling (MCP servers)
 
@@ -2603,13 +2630,12 @@ manual procedure below is the fallback for when you need a bundle without a runn
   does: **View app information** (the version-code check), **Release apps to testing tracks**
   (granted in July 2026, after the first API release failed at its commit on 2026-07-28),
   **Release to production** (2026-10-08, the same failure one track up), and **Manage store
-  presence**, which
-  the listing-screenshot upload needs and the release permissions do not include. **That last
-  grant is a one-time owner step for task #149 and was still to be made on 2026-11-12:** until it
-  is, the `Listing images (Google Play)` job fails with a 403 naming it, and the release itself is
-  unaffected. Play has enforced a missing permission only at the commit before, so the 403 can
-  arrive after the uploads appear to succeed. Permission changes can take up to 24 hours to
-  propagate.
+  presence** (2026-11-12, for task #149), which the listing-screenshot upload needs and the
+  release permissions do not include. Without it the `Listing images (Google Play)` job fails
+  with a 403 naming it, and the release itself is unaffected. Play has enforced a missing
+  permission only at the commit before, so the 403 can arrive after the uploads appear to
+  succeed. Google says a permission change can take up to 24 hours to propagate; this one let a
+  commit through about five minutes after it was saved.
 - See [docs/privacy-policy.md](privacy-policy.md) and [docs/store-listing.md](store-listing.md)
   for the store-facing text already prepared.
 
