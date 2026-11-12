@@ -1241,8 +1241,13 @@ desktop also carries them on the card, in the task window's header and in the co
 phone deliberately does not (design decisions D2 and E2, task #145): the session header has no room
 for a button, and the hub is one long-press away from every card, on the session header's column
 chip too. Archived rows carry them, so a completed task's Done card lists them in its hub. Only https
-links are shown and opened, through `Linking.openURL` as Chat's links are (`openableArtifacts`); the
-wire carries no platform, so there are no vendor logos.
+links are shown and opened, through `Linking.openURL` as Chat's links are (`openableArtifacts`), and
+only those whose host the caption can name truthfully: a link whose authority holds a `user@` part, a
+backslash, whitespace or a control character is left out, because the OS openers read those
+differently from a string split (Chrome opens `evil.example` for `https://evil.example\@trusted.example`).
+At most the protocol's `BOARD_TASK_ARTIFACTS_WIRE_MAX` (20) are kept, which the parser does not
+enforce itself. A link the OS refuses reports through the handled-error door as
+`task-artifact-open`. The wire carries no platform, so there are no vendor logos.
 
 **Resume** is the desktop task view's, from the phone, on three surfaces: the session screen's
 terminal lens shows the desktop's "Resume session" button in place of the terminal (`ResumePanel`,
