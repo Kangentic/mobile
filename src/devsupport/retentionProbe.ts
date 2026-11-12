@@ -36,7 +36,8 @@ export type RetentionProbeVariant =
   | 'measured-fit'
   | 'autofillable-terminal-input'
   | 'description-commonmark'
-  | 'no-terminal-links';
+  | 'no-terminal-links'
+  | 'rebuilt-link-overlay';
 
 export const RETENTION_PROBE_VARIANTS: {
   variant: RetentionProbeVariant;
@@ -129,11 +130,30 @@ export const RETENTION_PROBE_VARIANTS: {
     // scripts/xterm-page/links.js): the page neither scans the screen for
     // links on each render nor underlines them, and a tap is a plain tap.
     // Read idle and streaming CPU with frames over the same window in each
-    // arm, and the page's linkStats (`term probe`). Takes effect from the next
+    // arm. A streaming arm with links on screen comes from the mock's
+    // `/link-stream still|scroll` command (task #147), and a release build
+    // reads the scan's cost from the `terminal-link-stats` line, which needs
+    // the connection trace compiled in too. Takes effect from the next
     // terminal init.
     variant: 'no-terminal-links',
     label: 'No terminal links',
     description: 'No link scan, underline or tap',
+  },
+  {
+    // The control arm of the underline slots (task #147,
+    // scripts/xterm-page/links.js): the overlay as it first shipped, every
+    // underline element thrown away and made again whenever a link changed.
+    // A scrolling stream with links on screen (`/link-stream scroll`) moves
+    // every link on every write, and that rebuild was measured holding the
+    // WebView's GPU thread, in the app process, at 15-19% of a core against
+    // 2-4% without links (docs/architecture.md: a release build on the
+    // kangentic_profile emulator, whose GPU work is translated to the host's,
+    // one diagnostic thread sample of 6 readings per arm). Read app and renderer CPU
+    // with frames against the shipped slots and against `no-terminal-links`.
+    // Takes effect from the next terminal init.
+    variant: 'rebuilt-link-overlay',
+    label: 'Old link underlines',
+    description: 'Rebuilt on every change',
   },
 ];
 

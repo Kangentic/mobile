@@ -293,9 +293,10 @@ real desktop only hits on a model switch, a pause or a failure, and live in
 | `/pause` | the streaming task | A user's Pause: `suspended`, then the end, then the board row loses its `session_id` and gains `resumable: true`. Resume then runs from the board row alone. |
 | `/stall-resume` | any session | Arms the NEXT Resume to be accepted and then followed by nothing, the path to the phone's own 20 s "Session could not be resumed." |
 | `/fail-resume` | any session | Arms the NEXT Resume to be labelled "Resuming session..." and then fail its spawn: the label clears and the task stays paused, which the phone fails at once. |
+| `/link-stream still`, `/link-stream scroll`, `/link-stream off` | any session, **retention-probe builds only** | Replaces the codex session's terminal with the link-scan probe's stream (`src/devsupport/terminalLinkStream.ts`, task #147): a write every 16 ms, faster than the pane's 32 ms batch, with https links on screen in every shape the finder joins. `still` holds eight links while the bottom rows repaint; `scroll` streams lines with about one in four carrying a link, so every link moves on every write. `off` puts the codex TUI back. An open codex terminal switches at once; a closed one starts the stream when it opens. Anywhere else, the shipped demo included, it is an ordinary message. |
 
-The two Resume arms are one-shot, and the fake desktop's state (including a pause) resets on every
-launch.
+The two Resume arms are one-shot, and the fake desktop's state (including a pause and a link
+stream) resets on every launch.
 
 The E2E stub (`scripts/stubDesktopPeer.mjs`, `dev:stub`) takes `/respawn`, `/respawn-quiet` and
 `/end-session` too, plus one command of its own: `/refuse-stream on` refuses every `read-stream`
@@ -1963,7 +1964,7 @@ move-opened window, the end arriving, with `sinceMoveMs`), `phase=bind` (the suc
 `sinceEndedMs` and `sinceMoveMs`), `phase=settled` (the veil let go, with the `mode` it settled
 in, `sinceEndedMs`, `sinceMoveMs` and `sinceBindMs`) or `phase=deadline` (the quiet threshold
 passed first, with `bound` and `ended`; `ended=false` is a move whose end never came, which drops
-the veil without spending the window), plus seven from the terminal pane: `terminal-fit-height`
+the veil without spending the window), plus eight from the terminal pane: `terminal-fit-height`
 when the pane's measured fit height changes (`fitHeightPx`, `previousPx`, `ready`, whether the
 page was up to be told, and `active`, false for a provisional value taken while another lens
 showed; a fit must end on the pane's settled height, so with the keyboard
@@ -1998,9 +1999,17 @@ and the pane answers it with a `grid-mismatch` init, once per grid. Then
 `terminal-recovery` when the blank-recovery deadline fires (`action`, `refresh` when no seed ever
 arrived, so the stream is re-subscribed, or `remount` when the page sent no paint report at all for
 its init, so the WebView is rebuilt; and `attempt`, at most two per episode), `terminal-painted`
-on every paint report the WebView sends (`blank` and `sinceInitMs`), and `terminal-renderer` on
+on every paint report the WebView sends (`blank` and `sinceInitMs`), `terminal-renderer` on
 the page's renderer report (`webgl` or `dom`; until 2026-09-18 this was a bare console.log
-carrying the session id into release logcat). `session-open` comes from `openSessionScreen` on
+carrying the session id into release logcat), and `terminal-link-stats` every 10 s, the link
+scan's cost over that window (task #147; the page reports only when a trace build's init asks):
+`windowMs`, `renders` (every xterm render, counted with links on or off, so both arms of an A/B
+show the same rate), `scans` (0 under the retention probe's `no-terminal-links` arm),
+`scanMsTotal` and `scanMsMax` (the page's own clock over the scan and the underline redraw; it does
+not see the style and layout the browser does afterwards), `overlayWrites` (renders that rebuilt
+the underlines), `visible` (links on screen at the last scan) and `active`. Counts only, never a
+URL. Every init starts a fresh window, so read only the windows that close after the init's
+settle. `session-open` comes from `openSessionScreen` on
 every session screen mount (`hasConnection` and `established`; `hasConnection=false` is a
 cold-launch notification tap that beat the connection, which the screen's retention now survives
 because every later subscription manager reads it). And one from the subscription manager, `board-subscribe`, on a

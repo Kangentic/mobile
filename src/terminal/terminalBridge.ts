@@ -32,6 +32,15 @@ export type TerminalFitSource = 'settled' | 'texture-cap' | 'unknown';
  */
 export type TerminalFitStrategy = 'computed' | 'measured';
 
+/**
+ * How the page redraws the link underlines when they change
+ * (scripts/xterm-page/links.js): 'slots' moves reused elements by transform,
+ * so a link that scrolled repaints nothing; 'rebuild' throws every element
+ * away and makes them again, as the overlay first shipped. 'rebuild' is the
+ * retention probe's control arm (task #147).
+ */
+export type TerminalLinkOverlay = 'slots' | 'rebuild';
+
 /** What a settled chain actually ran: a strategy, or a computed fit that missed and handed over to the measured chain. */
 export type TerminalFitChainStrategy = TerminalFitStrategy | 'computed-miss';
 
@@ -111,6 +120,14 @@ export type HostToTerminalMessage =
        * under the retention probe's control arm, for the scan's CPU A/B.
        */
       terminalLinks: boolean;
+      /** How the underlines are redrawn when a link moves (see TerminalLinkOverlay). */
+      linkOverlay: TerminalLinkOverlay;
+      /**
+       * How often the page posts 'link-stats', the link scan's per-window
+       * counts, or 0 for never. Above 0 only in a connection-trace build,
+       * which is how a RELEASE build reads what the scan costs (task #147).
+       */
+      linkStatsWindowMs: number;
     }
   | { type: 'write'; data: string }
   | { type: 'set-font-size'; fontSizePx: number }
@@ -224,6 +241,24 @@ export type TerminalToHostMessage =
    * the boundary.
    */
   | { type: 'open-link'; url: string }
+  /**
+   * One window of the link scan's cost (scripts/xterm-page/links.js), posted
+   * only when the init asked (linkStatsWindowMs). Counts and milliseconds
+   * only, never a URL, because it lands in the release-build connection
+   * trace: `renders` (every xterm render, links on or off), `scans` and their
+   * total and longest time, `overlayWrites` (renders that rebuilt the
+   * underlines), and `visible` (links found by the last scan).
+   */
+  | {
+      type: 'link-stats';
+      windowMs: number;
+      renders: number;
+      scans: number;
+      scanMsTotal: number;
+      scanMsMax: number;
+      overlayWrites: number;
+      visible: number;
+    }
   /**
    * The first PAINT after an init: reported once when the init's seed has
    * flushed (blank or not), then once more on the first write that leaves
@@ -360,6 +395,29 @@ export function decodeTerminalMessage(raw: string): TerminalToHostMessage | null
   if (parsedObject.type === 'open-link' && typeof parsedObject.url === 'string') {
     return { type: 'open-link', url: parsedObject.url };
   }
+  if (
+    parsedObject.type === 'link-stats' &&
+    isFiniteNumber(parsedObject.windowMs) &&
+    isFiniteNumber(parsedObject.renders) &&
+    isFiniteNumber(parsedObject.scans) &&
+    isFiniteNumber(parsedObject.scanMsTotal) &&
+    isFiniteNumber(parsedObject.scanMsMax) &&
+    isFiniteNumber(parsedObject.overlayWrites) &&
+    isFiniteNumber(parsedObject.visible)
+  ) {
+    // Rebuilt field by field, so nothing else the page sent can ride along
+    // into the trace.
+    return {
+      type: 'link-stats',
+      windowMs: parsedObject.windowMs,
+      renders: parsedObject.renders,
+      scans: parsedObject.scans,
+      scanMsTotal: parsedObject.scanMsTotal,
+      scanMsMax: parsedObject.scanMsMax,
+      overlayWrites: parsedObject.overlayWrites,
+      visible: parsedObject.visible,
+    };
+  }
   if (parsedObject.type === 'painted' && typeof parsedObject.blank === 'boolean') {
     return {
       type: 'painted',
@@ -433,6 +491,13 @@ export function decodeHostMessage(raw: string): HostToTerminalMessage | null {
       longPressMenuGuard: parsedObject.longPressMenuGuard !== false,
       // And the links.
       terminalLinks: parsedObject.terminalLinks !== false,
+      // Only an explicit 'rebuild' selects the old overlay, as the page reads it.
+      linkOverlay: parsedObject.linkOverlay === 'rebuild' ? 'rebuild' : 'slots',
+      // Only a positive interval reports; anything else is never.
+      linkStatsWindowMs:
+        isFiniteNumber(parsedObject.linkStatsWindowMs) && parsedObject.linkStatsWindowMs > 0
+          ? parsedObject.linkStatsWindowMs
+          : 0,
     };
   }
   return null;

@@ -575,7 +575,15 @@ what is underlined is exactly what a tap opens:
   screen element and sized in percent of the grid, so a pan, the vertical follow and a pinch move
   it with the text and redraw nothing. It is rescanned from xterm's `onRender`, at most once a
   frame (read from xterm's `RenderDebouncer`, which batches every refresh into one
-  `requestAnimationFrame`), and a frame whose links did not change touches no DOM. It sits under
+  `requestAnimationFrame`), and a frame whose links did not change touches no DOM. When links do
+  move, as every one does on every write of a scrolling stream, each underline keeps its element:
+  a box one cell wide and one row tall with its own compositor layer, placed by a `translate` in
+  cells and rows and stretched across its segment by a `scaleX`. A move sets the box's style
+  string again, and the transform is the only declaration in it that differs, which (inferred
+  from how compositing works; the thread sample below is the measurement) the GPU applies with
+  nothing repainted. Rebuilding the elements on every change, as the overlay first
+  shipped, was measured costing the WebView's GPU thread in the app process (task #147, below);
+  the retention probe's `rebuilt-link-overlay` arm keeps that path for the A/B. It sits under
   the frame hold, so a swap never shows the old grid's underlines on the new one. Not
   `registerDecoration`, which returns nothing while the alternate buffer is active.
 - **The tap** is the page's own clean-tap detection (`bootstrap.js`), not xterm's link provider,
@@ -621,14 +629,129 @@ demo's own load (spinners, streaming). Its medians read on 100, 102 and 92 again
 the on arm sat higher in three of the four adjacent pairs and level in the fourth, and the two arms'
 ranges of medians touch at 92. Those gaps (0-15 points) are no larger than the wider windows' own
 ranges (16-18 points), so this run resolves no difference; it does not show that there is none.
-Inferred, not measured: the arm should not reach the app process at all, since the scan runs in the
-renderer, and read out of `renderLinkOverlay`, with no link on screen the overlay is never created.
-The frame counts (2244-2273) agree that the WebView drew the same frames. What this does
-NOT cover is a terminal streaming at full frame rate with links on screen, which the mock cannot
-produce. The page times every scan (`linkStats` on the dev `term` probe), and on a dev-client
-emulator warm scans read 0.2-0.7 ms, one a cold 16.8 ms, and one 251 ms at page start that did not
-repeat. That is a page-side clock on a dev client, so it bounds nothing; it is where to look first
-if a heavy stream ever reads hot.
+Read out of `renderLinkOverlay`: with no link on screen the overlay is never created. **Retracted:**
+this paragraph used to add, inferred and unmeasured, that the arm could not reach the app process at
+all because the scan runs in the renderer. The streaming run below refutes it. Android WebView runs
+its GPU thread (`Chrome_InProcGpu`) inside the APP process, and that is where an underline rebuild
+lands. The frame counts (2244-2273) agree that the WebView drew the same frames. This run did not
+cover a terminal streaming at full rate with links on screen, which the mock could not produce
+then; the next one does.
+
+**What the scan costs while a terminal streams with links on screen, measured 2026-11-12** (task
+#147), on the same demo-paired `kangentic_profile` AVD, cold-booted (API 36, x86_64). Its GPU work
+is translated to the host's, so the absolute size of a GPU cost is specific to the emulator; the
+A/B between arms on the one AVD is what holds. The build was a release build with the retention
+probe and the connection trace compiled in, and every arm ran in ONE process. The stream is the
+mock's `/link-stream` command (`src/devsupport/terminalLinkStream.ts`), which replaces the codex
+session's terminal with a write every 16 ms, faster than the pane's 32 ms chunk batch
+(`CHUNK_BATCH_INTERVAL_MS`), so every batch carries a write. That batch would allow about 31 renders
+a second. **Measured, the page drew about 20** (191-200 renders per 10 s window in `still`, with
+links on and off alike); inferred, not measured, the batch's React Native timer fires late enough
+to stretch its period to about 50 ms. Two scenarios, because they cost the page different things:
+
+- **still**: eight links in every shape the finder joins: hard rows, a URL longer than the row, a
+  URL a TUI wrapped over three indented rows whose middle row holds no separator, and a block of
+  full-width rows joined by autowrap. Only the bottom three rows repaint. Every render rescans,
+  the overlay signature never changes, and no DOM is written.
+- **scroll**: lines stream in at the bottom, one in four carrying a link in the same shapes, so
+  every link moves on every write. Every render rescans AND rebuilds the underlines
+  (`overlayWrites` equalled `scans` in every links-on window).
+
+Each arm was a fresh terminal init: back to the Board, the probe arm picked in Settings, the task
+reopened. Each then had a 21 s settle, a gfxinfo reset, and 20 `top` samples over 40 s on the app
+process and the WebView renderer (a new renderer process per open). The arms alternated links on,
+off, on, off, on. The page's own numbers are the `terminal-link-stats` trace lines (10 s windows,
+counts only); "warm" leaves out each init's first window. The verdict rule was written down before
+the runs. The scan is HOT if, in either scenario, any of these holds:
+
+1. The renderer CPU medians separate: the three links-on medians and the two links-off medians do
+   not overlap, by more than each arm's own spread of medians and by at least 5 points of a core.
+2. Frames or renders drop in the links-on arms by more than the links-off arms' spread.
+3. Warm scans average 2 ms or more (about 6% of a core at 31 a second), or a warm window's longest
+   scan reaches 16 ms in more than one window.
+
+| still | Renderer, median (range) | App, median (range) | Frames / 40 s | Janky | Warm scan, mean (window max) |
+|---|---|---|---|---|---|
+| links on | 12.75% (12-13.5) | 102% (94.5-115) | 2287 | 0.83% | 0.31-0.36 ms (0.9-1.4) |
+| links off | 11.5% (11-16) | 107% (103-136) | 2287 | 0.79% | (no scan) |
+| links on | 13% (12-15) | 108% (100-121) | 2272 | 1.54% | 0.35-0.40 ms (1.1-3.9) |
+| links off | 12% (11-16) | 108% (106-120) | 2287 | 0.79% | (no scan) |
+| links on | 14% (12-15) | 111% (104-118) | 2284 | 0.92% | 0.38-0.41 ms (1.3-1.9) |
+
+| scroll | Renderer, median (range) | App, median (range) | Frames / 40 s | Janky | Warm scan, mean (window max) |
+|---|---|---|---|---|---|
+| links on | 17.5% (12-19.5) | 132% (125-138) | 2269 | 1.50% | 0.59-0.62 ms (1.9-6.3) |
+| links off | 13% (12-14.5) | 110% (106-124) | 2291 | 0.74% | (no scan) |
+| links on | 17.75% (15.5-20) | 132.5% (125-140) | 2260 | 1.95% | 0.59-0.68 ms (2.0-5.1) |
+| links off | 14% (12-16.5) | 117.5% (112-123) | 2285 | 1.01% | (no scan) |
+| links on | 17% (16-21) | 135.5% (125-139) | 2239 | 3.89% | 0.56-0.65 ms (1.4-4.4) |
+
+**still is cold.** The renderer medians do separate (links on 12.75-14, off 11.5-12), but by 0.75
+points, less than the on arms' own 1.25-point spread and far under the 5-point floor. The frame
+counts overlap (2272-2287 against 2287), and the app medians overlap (102-111 against 107-108).
+Warm scans averaged 0.31-0.41 ms, about 0.7% of a core at 20 a second, and no warm window's
+longest scan passed 3.9 ms. Each init's first window carried one longer scan (4.6-11.5 ms). Both
+tables were measured on the overlay as it first shipped (rebuilt on every change), and `still` was
+not re-run with the slots below. Inferred, not measured: in `still` the overlay is written once
+per init and never again, so the slots change nothing there except giving its eight boxes their
+own compositor layers.
+
+**scroll is HOT, by the second criterion.** Every links-on frame count (2239-2269) sits below every
+links-off count (2285-2291), by more than the off arms' spread of 6, and warm renders dipped to
+175-201 a window against 196-200. The app medians separate the same way: 132-135.5% against
+110-117.5%, a gap of at least 14.5 points against spreads of 3.5 and 7.5. The renderer gap (3
+points) stays under the floor. But **the scan itself is not the cost**: by the page's clock, warm
+scans averaged 0.56-0.68 ms, about 1.2% of a core. One diagnostic pair of thread samples (`top
+-H` on the app, 6 samples over 12 s per arm, not a headline number) placed the difference in
+`Chrome_InProcGpu`, the WebView's GPU thread, which runs in the app process: 15-19% with links on
+against 2-4% off. RenderThread (82-90%), the JS thread (9-15%) and the main thread (8-12%) read
+the same in both. So the cost of a moving link is rebuilding its underline, and the GPU work that
+rebuild sends to the app process. The per-logical-line scan cache this measurement was meant to
+justify would speed up the part that is already cheap, so it was not built. The rebuild was
+replaced instead.
+
+**The fix, measured the same day** on a second build with the same flags, the same AVD and the
+same procedure. Each underline now keeps its element and moves by a transform (the underline
+bullet above), and the old rebuild stays behind the retention probe's `rebuilt-link-overlay` arm,
+so all three ran in ONE process on the `scroll` stream: slots (as shipped), the old rebuild, and
+`no-terminal-links`, alternating.
+
+| scroll | Renderer, median (range) | App, median (range) | Frames / 40 s | Janky |
+|---|---|---|---|---|
+| slots | 17% (16-20) | 125% (122-129) | 2253 | 2.26% |
+| old rebuild | 16% (13-20) | 134.5% (116-148) | 2203 | 3.81% |
+| no links | 13.5% (8-16) | 112.5% (103-121) | 2276 | 1.32% |
+| slots | 16% (12-18.5) | 118.5% (108-124) | 2272 | 1.45% |
+| old rebuild | 16.25% (15.5-18) | 133% (122-143) | 2267 | 1.68% |
+| no links | 12.5% (11-16) | 107% (100-119) | 2283 | 0.92% |
+| slots | 16% (15-19) | 115% (100-127) | 2273 | 1.45% |
+
+The old rebuild reproduced the first run: app medians 133-134.5% against no links' 107-112.5%,
+and the lowest frame count of the session (2203). The slots took the app medians down to
+115-125%, below every rebuild arm. The thread sample, taken the same way as before (one
+diagnostic pair, 6 samples each, not a headline number), read `Chrome_InProcGpu` at 4-5% with
+the slots, back to the no-links level: one pair says the slots took away the GPU work the
+rebuild sent to the app process, and a second pair would confirm it. Against no links, by the
+same rule, **scroll with the slots is not resolved: one slots arm met the second criterion, and
+this run did not clear it**:
+
+- The renderer medians still separate, by 2.5 points (slots 16-17 against 12.5-13.5), more than
+  either arm's 1-point spread but under the 5-point floor. Inferred, not measured: that is the
+  scan (about 1% of a core by the page's clock) and the style work of moving ten transforms a
+  render.
+- The frame counts sit 3-30 below no links (2253-2273 against 2276-2283). The second criterion
+  holds for one arm: 2253 is beyond the no-links spread of 7, and its warm windows also drew the
+  session's fewest renders (172-195 a window against 191-201 in the other slots arms). The other
+  two slots arms (2272, 2273) sit 3-4 below the lowest no-links count, less than that spread, so
+  the slots arms do not all drop frames as the first run's rebuild arms did, every one of them
+  below every links-off count. That 2253 was the first arm of a freshly launched process is a
+  candidate cause, inferred and not tested: the arm was not re-run once the process had warmed.
+- The app medians (115-125 against 107-112.5) separate by 2.5 points at the closest. The slots
+  arms' own medians spread 10 points, so this resolves no difference, and it does not show there
+  is none.
+
+Warm scans read 0.46-0.57 ms with the slots against 0.52-0.60 ms with the rebuild; the page's
+clock times the scan and the overlay's DOM writes, not what the browser does afterwards.
 
 **An open waits visibly (`TerminalWaitOverlay`).** From opening a session until the desktop's
 answer is on screen, the pane shows the swap veil's wait cursor at the grid's origin instead of a

@@ -219,7 +219,10 @@ src/
                   #   and commandTerminalCapture.ts: the three recorded screens of one real
                   #   Claude Code turn the mock's Command Terminals replay (the frames are
                   #   generated into commandTerminal{Opening,Submitted,Answered}.ts),
-                  #   the retention probe (EXPO_PUBLIC_KANGENTIC_RETENTION_PROBE), the concurrency
+                  #   the retention probe (EXPO_PUBLIC_KANGENTIC_RETENTION_PROBE; only its build
+                  #   honours the mock's `/link-stream` command, terminalLinkStream.ts's full-rate
+                  #   stream with links on screen, for the terminal link scan's A/B; the module
+                  #   itself ships with the demo in every build), the concurrency
                   #   probe (EXPO_PUBLIC_KANGENTIC_CONCURRENCY_PROBE: sweeps the Agents feed's
                   #   snippet-warm queue depth on a LIVE queue, so the MOBILE-8 A/B happens in one
                   #   process) and the NSE probe

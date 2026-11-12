@@ -13,7 +13,7 @@ import {
 import { hasVisibleContent, parseColsFromScrollback } from '@/terminal/liveTail';
 import { buildModeRestoreSequence } from '@/terminal/modeRestore';
 import { XTERM_BUILD_ID } from '@/terminal/xtermBuildId';
-import { traceConnection } from '@/devsupport/connectionTrace';
+import { connectionTraceEnabled, traceConnection } from '@/devsupport/connectionTrace';
 import type { InspectTerminalHandle, InspectTerminalWriteStats } from '@/devsupport/inspectState';
 import { getRetentionProbeVariant } from '@/devsupport/retentionProbe';
 import { httpsUrlOrNull } from '@/lib/httpsUrl';
@@ -101,6 +101,12 @@ const FONT_SIZE_POST_THROTTLE_MS = 50;
 const BLANK_RECOVERY_DELAY_MS = 5000;
 /** Repairs per episode before the pane stops trying and leaves it to a remount, a lens switch or the fit button. */
 const BLANK_RECOVERY_MAX_ATTEMPTS = 2;
+/**
+ * How often the page reports the link scan's cost in a connection-trace
+ * build (the `terminal-link-stats` line), and never otherwise. Four windows
+ * fit inside one 40 s `top` sample, the A/B procedure in docs/architecture.md.
+ */
+const LINK_STATS_WINDOW_MS = 10_000;
 
 // Metro asset reference; ESM import syntax cannot load an html asset.
 const xtermHtmlModule = require('../../terminal/xterm.html') as number;
@@ -671,6 +677,11 @@ export function TerminalPane({
         // Underlined, tappable https links; the probe's control arm turns
         // the page's scan off.
         terminalLinks: getRetentionProbeVariant() !== 'no-terminal-links',
+        // Reused underlines moved by transform; the probe's control arm
+        // rebuilds them on every change, as the overlay first shipped.
+        linkOverlay: getRetentionProbeVariant() === 'rebuilt-link-overlay' ? 'rebuild' : 'slots',
+        // The scan's per-window cost, only where the trace can log it.
+        linkStatsWindowMs: connectionTraceEnabled() ? LINK_STATS_WINDOW_MS : 0,
       });
       armBlankRecovery();
     },
@@ -1078,6 +1089,22 @@ export function TerminalPane({
         // release build's logcat on every terminal open, which the trace's own
         // rule (phases and milliseconds, never an identifier) exists to avoid.
         traceConnection('terminal-renderer', { renderer: message.renderer });
+        return;
+      }
+      if (message.type === 'link-stats') {
+        // One window of the link scan's cost, which the page posts only when
+        // the init asked (a connection-trace build). Counts and milliseconds,
+        // as the decoder rebuilt them: never a URL, never the session id.
+        traceConnection('terminal-link-stats', {
+          windowMs: message.windowMs,
+          renders: message.renders,
+          scans: message.scans,
+          scanMsTotal: message.scanMsTotal,
+          scanMsMax: message.scanMsMax,
+          overlayWrites: message.overlayWrites,
+          visible: message.visible,
+          active: isActiveRef.current,
+        });
         return;
       }
       if (message.type === 'clean-lines') {

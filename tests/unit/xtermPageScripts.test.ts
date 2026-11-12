@@ -4114,6 +4114,7 @@ describe('generated xterm.html', () => {
       fitStrategy: string;
       longPressMenuGuard: boolean | string;
       terminalLinksEnabled: boolean | string;
+      linkOverlayRebuild: boolean | string;
     };
     /** The fit strategy the font was chosen under, one entry per fittedFontPxForGrid call. */
     strategyWhenFontWasFitted: () => string[];
@@ -4121,6 +4122,8 @@ describe('generated xterm.html', () => {
     bodyClassToggles: () => { name: string; force: unknown }[];
     /** How many times an init cleared the link overlay (links.js clearTerminalLinks). */
     clearTerminalLinksCallCount: () => number;
+    /** The interval each init armed the link-stats report with (links.js armLinkStatsWindow). */
+    linkStatsWindowsArmed: () => unknown[];
   } {
     const source = pageModule('lifecycle.js');
     const resetSource = source.slice(source.indexOf('function resetSessionViewState('), source.indexOf('function seedAndSettle('));
@@ -4137,11 +4140,14 @@ describe('generated xterm.html', () => {
       'fitStrategy',
       'longPressMenuGuard',
       'terminalLinksEnabled',
+      'linkOverlayRebuild',
       'clearTerminalLinks',
+      'armLinkStatsWindow',
     ]);
     const strategyWhenFontWasFitted: string[] = [];
     let readFitStrategy: () => string = () => '';
     let clearTerminalLinksCallCount = 0;
+    const linkStatsWindowsArmed: unknown[] = [];
     const build = new Function(
       'textureCappedFontPx',
       'fittedFontPxForGrid',
@@ -4152,6 +4158,7 @@ describe('generated xterm.html', () => {
       'document',
       'initialState',
       'clearTerminalLinks',
+      'armLinkStatsWindow',
       `var knownCols = initialState.knownCols;
        var knownRows = initialState.knownRows;
        var hostFitHeightPx = null;
@@ -4160,6 +4167,7 @@ describe('generated xterm.html', () => {
        var fitStrategy = 'unset';
        var longPressMenuGuard = 'unset';
        var terminalLinksEnabled = 'unset';
+       var linkOverlayRebuild = 'unset';
        var lastAppCursorMode = false;
        var lastReportedModes = null;
        var activeInitSeq = null;
@@ -4175,7 +4183,8 @@ describe('generated xterm.html', () => {
          state: function () {
            return { pinchOverrideFontPx: pinchOverrideFontPx, currentFontSizePx: currentFontSizePx,
                     hostFitHeightPx: hostFitHeightPx, fitStrategy: fitStrategy,
-                    longPressMenuGuard: longPressMenuGuard, terminalLinksEnabled: terminalLinksEnabled };
+                    longPressMenuGuard: longPressMenuGuard, terminalLinksEnabled: terminalLinksEnabled,
+                    linkOverlayRebuild: linkOverlayRebuild };
          },
        };`,
     ) as (...dependencies: unknown[]) => {
@@ -4187,6 +4196,7 @@ describe('generated xterm.html', () => {
         fitStrategy: string;
         longPressMenuGuard: boolean | string;
         terminalLinksEnabled: boolean | string;
+        linkOverlayRebuild: boolean | string;
       };
     };
     const bodyClassToggles: { name: string; force: unknown }[] = [];
@@ -4215,6 +4225,9 @@ describe('generated xterm.html', () => {
       () => {
         clearTerminalLinksCallCount += 1;
       },
+      (windowMs: unknown) => {
+        linkStatsWindowsArmed.push(windowMs);
+      },
     );
     readFitStrategy = () => built.state().fitStrategy;
     return {
@@ -4222,6 +4235,7 @@ describe('generated xterm.html', () => {
       strategyWhenFontWasFitted: () => strategyWhenFontWasFitted,
       bodyClassToggles: () => bodyClassToggles,
       clearTerminalLinksCallCount: () => clearTerminalLinksCallCount,
+      linkStatsWindowsArmed: () => linkStatsWindowsArmed,
     };
   }
 
@@ -4386,6 +4400,44 @@ describe('generated xterm.html', () => {
 
       expect(harness.state().terminalLinksEnabled).toBe(adopted);
       expect(harness.clearTerminalLinksCallCount()).toBe(1);
+    });
+
+    /**
+     * The underline slots ship, and only an explicit 'rebuild' (the retention
+     * probe's `rebuilt-link-overlay` arm) brings back the overlay that rebuilt
+     * every element on each change, the same reading as the bridge decoder.
+     *
+     * Mutation that reddens this: read the field as `!== 'slots'`.
+     */
+    it.each([
+      [undefined, false],
+      ['slots', false],
+      ['rebuild', true],
+      ['Rebuild', false],
+      [true, false],
+    ])('adopts linkOverlay %s from an init as rebuild=%s', (sent, rebuild) => {
+      const harness = buildResetSessionViewStateHarness({ knownCols: 210, knownRows: 48, pinchOverrideFontPx: null });
+
+      harness.reset({ cols: 210, rows: 48, linkOverlay: sent });
+
+      expect(harness.state().linkOverlayRebuild).toBe(rebuild);
+    });
+
+    /**
+     * Every init starts a fresh link-stats window with the interval the host
+     * sent, so an A/B arm's first report never carries the last arm's
+     * renders (task #147).
+     *
+     * Mutation that reddens this: drop the armLinkStatsWindow call from
+     * resetSessionViewState.
+     */
+    it('arms a fresh link-stats window on every init, with the interval the init carries', () => {
+      const harness = buildResetSessionViewStateHarness({ knownCols: 210, knownRows: 48, pinchOverrideFontPx: null });
+
+      harness.reset({ cols: 210, rows: 48, linkStatsWindowMs: 10_000 });
+      harness.reset({ cols: 210, rows: 48 });
+
+      expect(harness.linkStatsWindowsArmed()).toEqual([10_000, undefined]);
     });
   });
 
