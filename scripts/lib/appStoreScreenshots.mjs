@@ -12,8 +12,10 @@
  *
  * So "replace the screenshots" is: get the frames into the library, then make
  * the localization's placements for the group be exactly those images, in
- * listing order. Library images are never deleted here: the live version's
- * placements point at the same images as the version being prepared.
+ * listing order. An image a placement shows, or showed, is never deleted here:
+ * the live version's placements point at the same images as the version being
+ * prepared. The one thing removed from the library is a reservation of our own
+ * that a dead run left unusable (see ABANDONED_IMAGE_STATES).
  *
  * Idempotency without a checksum. The library has no checksum attribute (the
  * old flow's `sourceFileChecksum` is gone; Apple validates an upload against
@@ -34,7 +36,8 @@
  */
 import { setTimeout as delay } from 'node:timers/promises';
 
-const ASC_API_BASE = 'https://api.appstoreconnect.apple.com/v1';
+/** Shared with scripts/prepareAppStoreRelease.mjs, whose transport prefixes every path with it. */
+export const ASC_API_BASE = 'https://api.appstoreconnect.apple.com/v1';
 
 export const SCREENSHOT_PLACEMENT_TYPE = 'APP_SCREENSHOT';
 const SCREENSHOT_CATEGORY = 'APP_SCREENSHOTS_AND_PREVIEWS';
@@ -109,7 +112,14 @@ const ABANDONED_IMAGE_STATES = new Set(['AWAITING_UPLOAD', 'FAILED']);
 
 const noLog = () => {};
 
-function describeApiErrors(body) {
+/**
+ * Apple's error list as one line. Shared with scripts/prepareAppStoreRelease.mjs,
+ * so the two describe a refusal the same way.
+ *
+ * @param {any} body
+ * @returns {string}
+ */
+export function describeApiErrors(body) {
   if (!Array.isArray(body?.errors)) return JSON.stringify(body);
   return body.errors.map((error) => `${error.title}: ${error.detail ?? ''}`.trim()).join('; ');
 }
@@ -138,18 +148,38 @@ function apiCaller(request, describeFailure = describeFailureGenerically) {
  * sent with these reads on purpose: the reference-data endpoint answers a
  * `limit` with a 400, and the placement and library endpoints do not document
  * a maximum, so the default page size plus the next link is the safe shape.
+ *
+ * A list that cannot be read to its end throws. Every caller treats the result
+ * as the whole list: placements cut short can read as in sync when the listing
+ * holds more, and library images cut short get uploaded again. So a next link
+ * outside the API base (never followed, the token goes with every request) and
+ * a list still going after MAXIMUM_PAGES are both errors, not a quiet stop.
  */
 async function listAll(callApi, apiPath, purpose) {
   const data = [];
   const included = [];
   let nextPath = apiPath;
-  for (let page = 0; nextPath && page < MAXIMUM_PAGES; page += 1) {
+  for (let page = 0; nextPath; page += 1) {
+    if (page >= MAXIMUM_PAGES) {
+      throw new Error(
+        `Could not ${purpose}: App Store Connect still had more after ${MAXIMUM_PAGES} pages, so the list would ` +
+          'be incomplete.'
+      );
+    }
     const body = await callApi('GET', nextPath, undefined, purpose);
     data.push(...(body.data ?? []));
     included.push(...(body.included ?? []));
     const nextLink = body.links?.next;
-    nextPath =
-      typeof nextLink === 'string' && nextLink.startsWith(ASC_API_BASE) ? nextLink.slice(ASC_API_BASE.length) : null;
+    if (nextLink === undefined || nextLink === null || nextLink === '') {
+      nextPath = null;
+    } else if (typeof nextLink === 'string' && nextLink.startsWith(ASC_API_BASE)) {
+      nextPath = nextLink.slice(ASC_API_BASE.length);
+    } else {
+      throw new Error(
+        `Could not ${purpose}: App Store Connect returned a next-page link outside ${ASC_API_BASE}, which is ` +
+          'not followed, so the list would be incomplete.'
+      );
+    }
   }
   return { data, included };
 }
@@ -449,15 +479,27 @@ export function planScreenshotSync(frames, placements, libraryImages = []) {
     placements.length === frames.length &&
     frames.every((frame, index) => matchEvidence(frame, placements[index].image) !== null);
   const evidences = new Set(slots.map((slot) => slot.evidence).filter((evidence) => evidence !== null));
+  /** @type {MatchEvidence | 'mixed' | null} */
+  let evidence = null;
+  if (inSync) {
+    evidence = evidences.size === 1 ? /** @type {MatchEvidence} */ ([...evidences][0]) : 'mixed';
+  }
 
   return {
     inSync,
-    evidence: !inSync ? null : evidences.size === 1 ? /** @type {MatchEvidence} */ ([...evidences][0]) : 'mixed',
+    evidence,
     slots,
     stale: placements.filter((placement) => !claimed.has(placement.id)),
     abandoned,
   };
 }
+
+/** How an in-sync plan says it knows, by the evidence its slots matched on. */
+const EVIDENCE_DESCRIPTIONS = {
+  hash: 'matched by content hash',
+  size: 'matched by file size, so uploaded by hand',
+  mixed: 'matched by content hash and by file size',
+};
 
 /**
  * One line saying what a plan found, for a report a person reads before
@@ -469,12 +511,7 @@ export function planScreenshotSync(frames, placements, libraryImages = []) {
  */
 export function describeScreenshotPlan(plan, placementCount) {
   if (plan.inSync) {
-    const how =
-      plan.evidence === 'hash'
-        ? 'matched by content hash'
-        : plan.evidence === 'size'
-          ? 'matched by file size, so uploaded by hand'
-          : 'matched by content hash and by file size';
+    const how = EVIDENCE_DESCRIPTIONS[plan.evidence ?? 'mixed'];
     return `${placementCount} screenshot(s), in sync with the committed frames (${how})`;
   }
   const missing = plan.slots.filter((slot) => !slot.placement).map((slot) => slot.frame.fileName);
@@ -552,13 +589,24 @@ async function waitForImages(callApi, imageIds, { sleep, pollAttempts, pollInter
     for (const imageId of waiting) {
       const image = await callApi('GET', `/appAssetLibraryImages/${imageId}`, undefined, 'read an uploaded image');
       const state = image.data?.attributes?.state;
-      if (state === 'FAILED') {
+      if (PROCESSING_IMAGE_STATES.has(state)) {
+        stillWaiting.push(imageId);
+        continue;
+      }
+      // Processing is over. Every state that cannot back a placement stops the
+      // run HERE, not only FAILED: step 2 deletes a stale placement to make room
+      // when the group is at its cap, and a create that Apple then refuses would
+      // leave the listing a screenshot short.
+      if (UNUSABLE_IMAGE_STATES.has(state)) {
+        const fileName = image.data?.attributes?.fileName ?? imageId;
+        const details = JSON.stringify(image.data?.attributes?.stateDetails ?? null);
         throw new Error(
-          `Apple could not process an uploaded screenshot (${image.data?.attributes?.fileName ?? imageId}): ` +
-            `${JSON.stringify(image.data?.attributes?.stateDetails ?? null)}. Nothing on the listing was changed.`
+          state === 'FAILED'
+            ? `Apple could not process an uploaded screenshot (${fileName}): ${details}. Nothing on the listing was changed.`
+            : `Apple left an uploaded screenshot (${fileName}) ${state}, which cannot be placed: ${details}. ` +
+              'Nothing on the listing was changed.'
         );
       }
-      if (PROCESSING_IMAGE_STATES.has(state)) stillWaiting.push(imageId);
     }
     waiting = stillWaiting;
     if (waiting.length === 0) return;

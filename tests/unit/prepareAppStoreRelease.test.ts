@@ -1642,6 +1642,96 @@ describe('the listing screenshots', () => {
       );
     });
 
+    it('refuses to guess between two editable versions when none is named', async () => {
+      // An on-demand run from store-listing.yml passes no --version. Taking the
+      // first of two drafts would write the frames to a version nobody chose.
+      const library = libraryShowing();
+      const fake = createFakeAppStoreConnect({
+        versions: [
+          preparedVersion(),
+          editableVersion({ id: 'version-rejected', versionString: '1.1.9', appVersionState: 'DEVELOPER_REJECTED' }),
+        ],
+        localizations: [preparedLocalization()],
+        assetLibrary: library,
+      });
+      await expect(syncAgainst(fake, library, { versionString: undefined }).promise).rejects.toThrow(
+        'More than one App Store version is editable (1.2.0, 1.1.9). Name the one to update with --version.'
+      );
+      expect(libraryWrites(library.calls)).toEqual([]);
+      expect(writes(fake.calls)).toEqual([]);
+    });
+
+    it('refuses a version that has no localizations to put screenshots on', async () => {
+      // An empty list is vacuously "in sync", which would report success having
+      // put nothing on the listing.
+      const library = createFakeAssetLibrary();
+      const fake = createFakeAppStoreConnect({
+        versions: [preparedVersion()],
+        localizations: [],
+        assetLibrary: library,
+      });
+      await expect(syncAgainst(fake, library).promise).rejects.toThrow(
+        'Version 1.2.0 has no localizations to put screenshots on.'
+      );
+      expect(libraryWrites(library.calls)).toEqual([]);
+    });
+
+    it('watches the NEWEST live version, including one in the deprecated READY_FOR_SALE state', async () => {
+      // Two live versions: the older one in the current state, the newer one in
+      // the deprecated spelling. The tripwire must watch the newer (the one the
+      // store shows), so a reversed sort or a dropped READY_FOR_SALE lets the
+      // loss below pass unnoticed because the older version's count is steady.
+      const olderLocalization = 'localization-live-older';
+      const newerLocalization = 'localization-live-newer';
+      const editable = placedFrames(oldFrames, { localizationId: EDITABLE_LOCALIZATION, by: 'size' });
+      const placeOnLive = (localizationId: string) =>
+        editable.images.map((image, index) => ({
+          id: `${localizationId}-placement-${index}`,
+          localizationId,
+          imageId: image.id,
+        }));
+      const library = createFakeAssetLibrary({
+        images: editable.images,
+        placements: [...editable.placements, ...placeOnLive(olderLocalization), ...placeOnLive(newerLocalization)],
+      });
+      const fake = createFakeAppStoreConnect({
+        versions: [
+          editableVersion({
+            id: 'version-live-older',
+            versionString: '1.0.0',
+            appVersionState: 'READY_FOR_DISTRIBUTION',
+            createdDate: '2026-09-01T04:00:00-07:00',
+          }),
+          editableVersion({
+            id: 'version-live-newer',
+            versionString: '1.1.0',
+            appVersionState: 'READY_FOR_SALE',
+            createdDate: '2026-10-12T04:00:00-07:00',
+          }),
+          preparedVersion(),
+        ],
+        localizations: [
+          englishLocalization({ id: olderLocalization, versionId: 'version-live-older' }),
+          englishLocalization({ id: newerLocalization, versionId: 'version-live-newer' }),
+          preparedLocalization(),
+        ],
+        assetLibrary: library,
+      });
+      let sabotaged = false;
+      const request: typeof fake.request = async (method, apiPath, body) => {
+        const response = await fake.request(method, apiPath, body);
+        if (!sabotaged && method === 'DELETE' && apiPath.startsWith('/appAssetLibraryPlacements/')) {
+          sabotaged = true;
+          const newerIndex = library.placements.findIndex((entry) => entry.localizationId === newerLocalization);
+          library.placements.splice(newerIndex, 1);
+        }
+        return response;
+      };
+      await expect(syncAgainst(fake, library, { request }).promise).rejects.toThrow(
+        /The LIVE version 1\.1\.0 had 7 screenshot\(s\) before this run and has 6 now/
+      );
+    });
+
     it('names the role when the key may not write', async () => {
       const library = libraryShowing();
       const fake = releaseInProgress(library, { forbidden: ['POST /appAssetLibraryImages'] });

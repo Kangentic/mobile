@@ -14,39 +14,29 @@
  *
  * Implemented against the Play Developer API v3 with no dependencies: the
  * service-account JWT is signed with node:crypto, so nothing is added to
- * package-lock.json for a CI-only check. The sign-in lives in
+ * package-lock.json for a CI-only check. The sign-in and the transport live in
  * scripts/lib/playPublisher.mjs, shared with scripts/syncPlayListingImages.mjs.
  *
  * Usage:
  *   node scripts/checkPlayVersionCode.mjs \
  *     --key <service-account.json> --package <applicationId> --version-code <n>
  */
-import { PLAY_API_BASE, readServiceAccount, requestAccessToken } from './lib/playPublisher.mjs';
+import { parseFlagPairs } from './lib/cliArguments.mjs';
+import {
+  createPlayRequest,
+  describeMissingPackage,
+  readServiceAccount,
+  requestAccessToken,
+} from './lib/playPublisher.mjs';
 
 function parseArguments(argv) {
-  const parsed = {};
-  for (let index = 0; index < argv.length; index += 2) {
-    const flag = argv[index];
-    const value = argv[index + 1];
-    if (!flag.startsWith('--') || value === undefined) {
-      throw new Error(`Malformed argument near "${flag}".`);
-    }
-    parsed[flag.slice(2)] = value;
-  }
+  const parsed = parseFlagPairs(argv);
   for (const required of ['key', 'package', 'version-code']) {
     if (!parsed[required]) {
       throw new Error(`Missing required argument --${required}.`);
     }
   }
   return parsed;
-}
-
-async function callPlayApi(accessToken, path, method = 'GET') {
-  const response = await fetch(`${PLAY_API_BASE}${path}`, {
-    method,
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  return { ok: response.ok, status: response.status, body: response.status === 204 ? {} : await response.json() };
 }
 
 async function main() {
@@ -56,24 +46,22 @@ async function main() {
     throw new Error(`--version-code must be a positive integer, got "${options['version-code']}".`);
   }
 
-  const serviceAccount = readServiceAccount(options.key);
-  const accessToken = await requestAccessToken(serviceAccount);
+  // The shared transport, so this preflight and the listing sync cannot drift
+  // apart on how a Play response is read.
+  const request = createPlayRequest(await requestAccessToken(readServiceAccount(options.key)));
   const applicationId = options.package;
 
-  const edit = await callPlayApi(accessToken, `/${applicationId}/edits`, 'POST');
+  const edit = await request('POST', `/${applicationId}/edits`);
   if (!edit.ok) {
     if (edit.status === 404) {
-      throw new Error(
-        `Play has no record of ${applicationId}. The very first release for a package must be uploaded by hand ` +
-          'through the Play Console UI before the Play Developer API will accept anything.'
-      );
+      throw new Error(describeMissingPackage(applicationId));
     }
     throw new Error(`Could not open a Play edit (${edit.status}): ${JSON.stringify(edit.body)}`);
   }
 
   const editId = edit.body.id;
   try {
-    const tracks = await callPlayApi(accessToken, `/${applicationId}/edits/${editId}/tracks`);
+    const tracks = await request('GET', `/${applicationId}/edits/${editId}/tracks`);
     if (!tracks.ok) {
       throw new Error(`Could not list Play tracks (${tracks.status}): ${JSON.stringify(tracks.body)}`);
     }
@@ -108,7 +96,7 @@ async function main() {
   } finally {
     // Edits expire on their own, but leaving them open clutters the app and
     // can block a concurrent edit.
-    await callPlayApi(accessToken, `/${applicationId}/edits/${editId}`, 'DELETE');
+    await request('DELETE', `/${applicationId}/edits/${editId}`);
   }
 }
 

@@ -434,9 +434,10 @@ pressing Send for review after a hand upload did.
 processed before any placement changes, so a failed upload leaves the listing untouched.
 Placements are created before stale ones are deleted, as far as the group's cap of 10 allows, so a
 run that dies halfway never leaves a localization with no screenshots. One ordering request sets
-the display order, and the result is read back. Library images are never deleted: the live version
-places the same images as the version being prepared, and the run counts the live version's
-screenshots before and after as a tripwire.
+the display order, and the result is read back. An image a listing shows, or showed, is never
+deleted: the live version places the same images as the version being prepared, and the run counts
+the live version's screenshots before and after as a tripwire. The only thing removed from the
+library is one of this script's own uploads that a dead run left unfinished or failed.
 
 The asset library has no checksum, so a frame is recognised two ways. One this script uploaded
 carries a SHA-256 prefix at the end of its reference name (`02-board 1b1b8c51838bb8f3`). One

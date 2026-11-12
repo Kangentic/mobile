@@ -48,21 +48,15 @@ import { createSign } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
+import { parseFlagPairs } from './lib/cliArguments.mjs';
+
 const ASC_API_BASE = 'https://api.appstoreconnect.apple.com/v1';
 
 /** Apple rejects a token whose lifetime exceeds 20 minutes. */
 export const MAX_TOKEN_LIFETIME_SECONDS = 20 * 60;
 
 function parseArguments(argv) {
-  const parsed = {};
-  for (let index = 0; index < argv.length; index += 2) {
-    const flag = argv[index];
-    const value = argv[index + 1];
-    if (!flag.startsWith('--') || value === undefined) {
-      throw new Error(`Malformed argument near "${flag}".`);
-    }
-    parsed[flag.slice(2)] = value;
-  }
+  const parsed = parseFlagPairs(argv);
   for (const required of ['key', 'key-id', 'issuer-id', 'bundle-id', 'build-number']) {
     if (!parsed[required]) {
       throw new Error(`Missing required argument --${required}.`);

@@ -55,9 +55,15 @@
 import { appendFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 
+import { parseFlagPairs } from './lib/cliArguments.mjs';
 import { isEntrypoint } from './lib/is-entrypoint.mjs';
 import { readPlayShelves } from './lib/listingFrames.mjs';
-import { createPlayRequest, readServiceAccount, requestAccessToken } from './lib/playPublisher.mjs';
+import {
+  createPlayRequest,
+  describeMissingPackage,
+  readServiceAccount,
+  requestAccessToken,
+} from './lib/playPublisher.mjs';
 
 const MODES = ['check', 'sync'];
 
@@ -171,10 +177,7 @@ async function runInOneEdit({ request, packageName, language, shelves, mode, for
   const opened = await send('POST', `/${packageName}/edits`);
   if (!opened.ok) {
     if (opened.status === 404) {
-      throw new Error(
-        `Play has no record of ${packageName}. The very first release for a package must be uploaded by hand ` +
-          'through the Play Console UI before the Play Developer API will accept anything.'
-      );
+      throw new Error(describeMissingPackage(packageName));
     }
     throw new Error(describePlayFailure(opened, 'open a Play edit'));
   }
@@ -288,16 +291,9 @@ async function runInOneEdit({ request, packageName, language, shelves, mode, for
       );
     }
 
-    const commit = await send('POST', `${editPath}:commit`);
-    if (!commit.ok) {
-      if (commit.status === 404 || commit.status === 409) {
-        const edit = await send('GET', editPath);
-        if (!edit.ok) {
-          throw new EditLostError(`The Play edit was invalidated before it could be committed (${commit.status}).`);
-        }
-      }
-      throw new Error(describePlayFailure(commit, 'commit the listing edit'));
-    }
+    // Through callInEdit like every other call: an edit invalidated between the
+    // last write and the commit answers 404 or 409 here, and is a fresh start.
+    await callInEdit('POST', `${editPath}:commit`, undefined, 'commit the listing edit');
     committed = true;
     log(
       `Committed: ${toReplace.length} shelf(s) replaced on the ${language} listing. Google reviews a listing ` +
@@ -358,23 +354,14 @@ export async function syncPlayListingImages({
 }
 
 /**
- * Flag/value pairs, strictly, like scripts/checkPlayVersionCode.mjs: a bare flag
- * would silently swallow the next flag as its value.
+ * Flag/value pairs, strictly (scripts/lib/cliArguments.mjs), then this
+ * script's own modes and required arguments.
  *
  * @param {string[]} argv
  * @returns {Record<string, string>}
  */
 export function parseArguments(argv) {
-  /** @type {Record<string, string>} */
-  const parsed = {};
-  for (let index = 0; index < argv.length; index += 2) {
-    const flag = argv[index];
-    const value = argv[index + 1];
-    if (!flag.startsWith('--') || value === undefined) {
-      throw new Error(`Malformed argument near "${flag}".`);
-    }
-    parsed[flag.slice(2)] = value;
-  }
+  const parsed = parseFlagPairs(argv);
   if (!MODES.includes(parsed.mode ?? '')) {
     throw new Error(`--mode must be check or sync, not "${parsed.mode ?? ''}".`);
   }

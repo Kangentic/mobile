@@ -303,6 +303,40 @@ describe('the reads', () => {
     expect(paths).toEqual(['/appAssetLibraries/library-1/images', '/appAssetLibraries/library-1/images?cursor=abc']);
   });
 
+  it('throws on a next link outside the API base rather than returning a partial list, and never requests it', async () => {
+    const paths: string[] = [];
+    const request = async (_method: string, apiPath: string) => {
+      paths.push(apiPath);
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          data: [{ type: 'appAssetLibraryImages', id: 'image-1', attributes: { state: 'APPROVED' } }],
+          links: { next: 'https://elsewhere.invalid/v1/appAssetLibraries/library-1/images?cursor=abc' },
+        },
+      };
+    };
+    await expect(readLibraryImages({ request, libraryId: 'library-1' })).rejects.toThrow(/next-page link outside/);
+    expect(paths).toEqual(['/appAssetLibraries/library-1/images']);
+  });
+
+  it('throws when a list is still going after the page cap rather than returning a partial list', async () => {
+    let requested = 0;
+    const request = async () => {
+      requested += 1;
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          data: [{ type: 'appAssetLibraryImages', id: `image-${requested}`, attributes: { state: 'APPROVED' } }],
+          links: { next: 'https://api.appstoreconnect.apple.com/v1/appAssetLibraries/library-1/images?cursor=more' },
+        },
+      };
+    };
+    await expect(readLibraryImages({ request, libraryId: 'library-1' })).rejects.toThrow(/still had more after 20 pages/);
+    expect(requested).toBe(20);
+  });
+
   it('reads Apple\'s own checksum for each screenshot out of the deprecated sets', async () => {
     const request = async () => ({
       ok: true,
@@ -448,6 +482,60 @@ describe('syncScreenshots', () => {
     expect(library.shownOn(LOCALIZATION)).toEqual(frames.map(referenceNameOf));
   });
 
+  it('waits for a reused image a dead run uploaded but Apple was still processing, before placing it', async () => {
+    // The recovery case: the earlier run died after the commit and before Apple
+    // finished. The images are reused, not uploaded again, and a placement made
+    // while one is still processing would be refused.
+    const library = inherited({
+      images: [
+        ...placedFrames(oldFrames, { localizationId: LOCALIZATION, by: 'size' }).images,
+        ...frames.map((frame, index) => ({
+          id: `uploaded-earlier-${index}`,
+          referenceName: referenceNameOf(frame),
+          fileName: frame.fileName,
+          fileSize: frame.byteLength,
+          state: 'UPLOAD_COMPLETE',
+          readsUntilProcessed: 1,
+        })),
+      ],
+    });
+    const result = await sync(library, frames).promise;
+
+    expect(result).toMatchObject({ uploaded: 0, reused: 7, placed: 7 });
+    expect(library.partUploads).toEqual([]);
+    expect(library.shownOn(LOCALIZATION)).toEqual(frames.map(referenceNameOf));
+    const firstPlacement = library.calls.findIndex((call) => call.method === 'POST' && call.path === '/appAssetLibraryPlacements');
+    const lastPoll = library.calls.findLastIndex(
+      (call) => call.method === 'GET' && call.path.startsWith('/appAssetLibraryImages/uploaded-earlier-')
+    );
+    expect(lastPoll).toBeGreaterThan(-1);
+    expect(lastPoll).toBeLessThan(firstPlacement);
+  });
+
+  it('carries on with the upload when an abandoned reservation cannot be removed', async () => {
+    // Cleanup is best effort: a refusal must not stop the upload that replaces it.
+    const library = inherited({
+      images: [
+        ...placedFrames(oldFrames, { localizationId: LOCALIZATION, by: 'size' }).images,
+        {
+          id: 'reserved-and-abandoned',
+          referenceName: referenceNameOf(frames[0]),
+          fileName: frames[0].fileName,
+          fileSize: frames[0].byteLength,
+          state: 'AWAITING_UPLOAD',
+        },
+      ],
+      failWith: [{ prefix: 'DELETE /appAssetLibraryImages', status: 409 }],
+    });
+    const { promise, logged } = sync(library, frames);
+    const result = await promise;
+
+    expect(library.images.has('reserved-and-abandoned')).toBe(true);
+    expect(result).toMatchObject({ uploaded: 7, placed: 7 });
+    expect(library.shownOn(LOCALIZATION)).toEqual(frames.map(referenceNameOf));
+    expect(logged.join('\n')).toMatch(/Could not remove an abandoned upload of 01-agents\.png \(409\); leaving it\./);
+  });
+
   it('clears a reservation a dead run never uploaded, then uploads the frame properly', async () => {
     const library = inherited({
       images: [
@@ -522,6 +610,24 @@ describe('syncScreenshots', () => {
       untouched(library);
     });
 
+    it.each(['REJECTED', 'ARCHIVED'])(
+      'when processing ends %s, with the group at its cap so a create would have needed a delete first',
+      async (finishedState) => {
+        // Step 2 deletes a stale placement to make room when the group is full,
+        // and the create that follows is then refused for an image that cannot be
+        // placed. Only FAILED used to stop the run here, so the listing lost a
+        // screenshot. Every unusable finished state has to stop it before any write.
+        const library = inherited({ maxCount: 7, processingEndsAs: finishedState });
+        const rejection = sync(library, frames, { maxCount: 7 }).promise;
+        await expect(rejection).rejects.toThrow(
+          new RegExp(`Apple left an uploaded screenshot \\(01-agents\\.png\\) ${finishedState}, which cannot be placed`)
+        );
+        await expect(rejection).rejects.toThrow(/Nothing on the listing was changed\./);
+        untouched(library);
+        expect(library.calls.filter((call) => call.method === 'DELETE' && call.path.startsWith('/appAssetLibraryPlacements'))).toEqual([]);
+      }
+    );
+
     it('when storage refuses a part', async () => {
       const library = inherited({ failUploadPart: ['02-board.png'] });
       await expect(sync(library, frames).promise).rejects.toThrow(/Uploading 02-board\.png to Apple's storage failed \(500\)/);
@@ -554,6 +660,22 @@ describe('syncScreenshots', () => {
     await expect(sync(library, frames, { verifyAttempts: 2 }).promise).rejects.toThrow(
       /reading them back does not show the committed frames in order \(7 screenshot\(s\), the committed frames in a DIFFERENT ORDER\)/
     );
+  });
+
+  it('accepts a listing that reads back in order only on a later read', async () => {
+    // Apple does not say whether the ordering request applies before it answers.
+    // The first read-back still shows the old order, so a single read would fail
+    // a sync that had in fact worked.
+    const seed = placedFrames(frames, { localizationId: LOCALIZATION, by: 'hash' });
+    seed.placements.reverse();
+    const library = createFakeAssetLibrary({ ...seed, orderingAppliesAfterReads: 1 });
+    const sleep = vi.fn(async (_milliseconds: number) => undefined);
+    const result = await sync(library, frames, { sleep, pollIntervalMilliseconds: 250 }).promise;
+
+    expect(result).toMatchObject({ changed: true });
+    expect(library.shownOn(LOCALIZATION)).toEqual(frames.map(referenceNameOf));
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledWith(250);
   });
 
   it('turns a refused write into an error naming what it was doing', async () => {
