@@ -12,6 +12,7 @@ import {
   type DiffFileListWire,
   type JsonValue,
   type PermissionWaitKindWire,
+  type PriorityLevelWire,
   type ReadBoardView,
   type ReadStreamResponsePayload,
   type ReadStreamSessionStatusWire,
@@ -171,6 +172,26 @@ const MOCK_QUEUED_TASK_ID = 'mock-task-queued';
  */
 const MOCK_QUEUED_RESUME_SESSION_ID = 'mock-session-queued-resume';
 const MOCK_QUEUED_RESUME_TASK_ID = 'mock-task-queued-resume';
+/**
+ * The desktop's default priority scale (kangentic `src/shared/types.ts`), lowest
+ * first, as a 0.28.0 board snapshot sends it. The bottom entry draws nothing.
+ */
+const MOCK_PRIORITY_SCALE: PriorityLevelWire[] = [
+  { label: 'None', color: '#6b7280' },
+  { label: 'Low', color: '#3b82f6' },
+  { label: 'Medium', color: '#eab308' },
+  { label: 'High', color: '#f97316' },
+  { label: 'Urgent', color: '#ef4444' },
+];
+
+/**
+ * A paused task whose last start never reached its agent (protocol 0.28.0's
+ * `start_blocked_reason`), on checkout-api so no store screenshot holds it.
+ * Its conversation waits in `userPausedStaticStates` from the start, the way
+ * a person's Pause leaves one, so Resume has something to pick back up.
+ */
+const MOCK_BLOCKED_START_SESSION_ID = 'mock-session-blocked-start';
+const MOCK_BLOCKED_START_TASK_ID = 'mock-task-blocked-start';
 const PERMISSION_TOOL_ID = 'mock-tool-2';
 const QUESTION_TOOL_ID = 'mock-tool-3';
 const PERMISSION_PROMPT_ID = `${MOCK_SESSION_ID}:${PERMISSION_TOOL_ID}`;
@@ -388,6 +409,12 @@ export interface MockStaticSessionSpec {
    * transcript peek, which shows the same line.
    */
   previewAtSubscribe?: string;
+  /**
+   * The idle reason's `stopped` (protocol 0.28.0): the board has stopped this
+   * session's task and it waits on a person. Only an idle session uses it;
+   * omitted means a plain idle.
+   */
+  stopped?: true;
 }
 
 export interface MockExtraThinkingSessionSpec extends MockStaticSessionSpec {
@@ -968,6 +995,11 @@ export const MOCK_IDLE_STATIC_SESSION: MockStaticSessionSpec = {
   // The long-blocked one: exercises the label's hours branch ('4h 7m'), which
   // a rig where every session starts counting from zero never reaches.
   alreadyWaitingForMs: 4 * 60 * 60_000 + 7 * 60_000,
+  // And the board has stopped it (protocol 0.28.0): Testing's rows ended the
+  // run, so the card wears the stopped pennant, not the envelope. The first
+  // message sent into it starts a turn, which clears the mark as the desktop's
+  // next turn does.
+  stopped: true,
   toolCells: [
     { name: 'Read', input: { file_path: 'perf/load-test-results.json' }, result: '50 carts, 4 regions, 20 minute soak' },
     {
@@ -1774,6 +1806,23 @@ export const MOCK_QUEUED_RESUME_STATIC_SESSION: MockStaticSessionSpec = {
   previewAtSubscribe: MOCK_QUEUED_RESUME_LAST_WORD,
 };
 
+/**
+ * The blocked start's conversation (see MOCK_BLOCKED_START_TASK_ID). Not in
+ * MOCK_STATIC_SESSIONS: like any conversation a person paused, nothing
+ * answers under its id until a Resume binds a successor to it.
+ */
+export const MOCK_BLOCKED_START_STATIC_SESSION: MockStaticSessionSpec = {
+  sessionId: MOCK_BLOCKED_START_SESSION_ID,
+  taskId: MOCK_BLOCKED_START_TASK_ID,
+  userText: 'Backfill the missing refund reason codes from their support tickets.',
+  assistantText: 'Mapped the first 40 refunds to their tickets. The ticket tags line up with the reason codes for all but three.',
+  replyText: 'Picking the backfill up from the three refunds that need a closer look.',
+  scrollback: '',
+  model: MOCK_MODEL_SONNET,
+  usedTokens: 9_000,
+  activityState: 'idle',
+};
+
 /** Every session that answers from static content: the extras, codex, opencode, gemini, idle, paused, both queued, and the archived pair. */
 export const MOCK_STATIC_SESSIONS: MockStaticSessionSpec[] = [
   ...MOCK_EXTRA_THINKING_SESSIONS,
@@ -1871,7 +1920,7 @@ export function staticSessionSnapshot(spec: MockStaticSessionSpec, wantsTerminal
     scrollback: wantsTerminal ? spec.scrollback : '',
     activity:
       spec.activityState === 'idle'
-        ? { state: 'idle', reason: { kind: 'idle', since } }
+        ? { state: 'idle', reason: spec.stopped === true ? { kind: 'idle', since, stopped: true } : { kind: 'idle', since } }
         : { state: 'thinking', reason: { kind: 'turn-active' } },
     usage: usageReported ? mockUsage(spec.usedTokens, spec.model) : null,
     awaitedPromptId: null,
@@ -2097,6 +2146,12 @@ export function initialTasks(): BoardTaskWire[] {
       // The headline verdict: a merge would land right now, so the chip
       // relabels itself and keeps the open green.
       pr_merge_readiness: 'ready',
+      // Two links (protocol 0.28.0): the long-press hub's one Artifacts row,
+      // opening the Artifacts sheet.
+      artifacts: [
+        { url: 'https://claude.ai/artifact/mock-redirect-design-review', name: 'Redirect design review' },
+        { url: 'https://www.figma.com/design/mock-sign-in-flow', name: 'Sign-in flow' },
+      ],
       created_at: nowIso,
       updated_at: nowIso,
     }),
@@ -2120,6 +2175,8 @@ export function initialTasks(): BoardTaskWire[] {
       pr_state: 'open',
       pr_merge_readiness: 'unknown',
       attachment_count: 2,
+      // The scale's lowest drawn level (protocol 0.28.0): a blue Low pill.
+      priority: 1,
       created_at: nowIso,
       updated_at: nowIso,
     }),
@@ -2156,8 +2213,9 @@ export function initialTasks(): BoardTaskWire[] {
       // title AND long description (both truncate), a PR (in a state we
       // haven't shown elsewhere - 'merged', not 'open'), more labels than
       // the 3-visible cap (exercises the "+N" overflow pill), attachments,
-      // and a priority (inert on the card today, ready for the future
-      // detail-view addition). The single comprehensive stress-test card.
+      // the top priority (protocol 0.28.0: the Urgent pill leads the labels
+      // row, which is why the old `p0` label went: the two would contradict
+      // each other) and one link. The single comprehensive stress-test card.
       title: 'Migrate the legacy card-on-file payment pipeline to the new vault-scoped token flow',
       description:
         'Replaces the old stored-card charge path with the new vault-scoped payment token, keeping backward compatibility for subscriptions still billing on the previous API version while the rollout completes across both regions.',
@@ -2177,7 +2235,7 @@ export function initialTasks(): BoardTaskWire[] {
       paused: true,
       paused_session_id: MOCK_PAUSED_SESSION_ID,
       branch_name: 'feature/vault-token-migration',
-      labels: ['backend', 'payments', 'migration', 'breaking-change', 'p0'],
+      labels: ['backend', 'payments', 'migration', 'breaking-change'],
       pr_number: 103,
       pr_url: 'https://github.com/Kangentic/kangentic-mobile/pull/103',
       pr_state: 'merged',
@@ -2188,7 +2246,9 @@ export function initialTasks(): BoardTaskWire[] {
       // escaped the open-only branch.
       pr_merge_readiness: 'ready',
       attachment_count: 3,
-      priority: 2,
+      priority: 4,
+      // One link: the long-press hub's row is the link itself.
+      artifacts: [{ url: 'https://www.notion.so/mock-vault-token-migration-spec', name: 'Vault token migration spec' }],
       created_at: nowIso,
       updated_at: nowIso,
     }),
@@ -2513,6 +2573,10 @@ export function initialTasks2(): BoardTaskWire[] {
       session_id: MOCK_QUEUED_SESSION_ID,
       branch_name: 'feature/low-stock-badge',
       labels: ['storefront'],
+      // Its place in line (protocol 0.28.0): waiting on the desktop's Max
+      // concurrent sessions, one task ahead, so the card reads "1 task
+      // ahead..." and the queued panel "Up to 4 agents run at a time".
+      queue_place: { kind: 'global', position: 2, total: 2, column_name: null, max_agents: 4 },
       created_at: nowIso,
       updated_at: nowIso,
     }),
@@ -2530,6 +2594,35 @@ export function initialTasks2(): BoardTaskWire[] {
       session_id: MOCK_QUEUED_RESUME_SESSION_ID,
       branch_name: 'fix/refund-webhook-retries',
       labels: ['payments'],
+      // Its place in line (protocol 0.28.0): first for Merge's one slot, so
+      // "Next in line..." and "Merge runs one agent at a time".
+      queue_place: { kind: 'column', position: 1, total: 1, column_name: 'Merge', max_agents: 1 },
+      created_at: nowIso,
+      updated_at: nowIso,
+    }),
+    boardTaskFixture({
+      id: MOCK_BLOCKED_START_TASK_ID,
+      display_id: 14,
+      // A start that never reached its agent (protocol 0.28.0): paused, with
+      // its worktree folder gone, so the card reads "Worktree missing" in the
+      // warning tone and the session view's Resume panel says why under the
+      // button. Paused the way a person's own Pause leaves a row (no session
+      // on it), so an open is answered `not-eligible` and the panel keeps its
+      // Resume button: the open-declined path, on purpose. A Resume picks the
+      // conversation back up (MOCK_BLOCKED_START_STATIC_SESSION) and clears
+      // the reason, as the desktop's Resume makes the worktree again.
+      title: 'Backfill refund reason codes',
+      description: 'Refunds issued before the reason-code column have none. Infer each from the support ticket that triggered it.',
+      swimlane_id: 'lane2-executing',
+      position: 1,
+      agent: 'claude',
+      session_id: null,
+      paused: true,
+      resumable: true,
+      paused_session_id: MOCK_BLOCKED_START_SESSION_ID,
+      branch_name: 'chore/refund-reason-backfill',
+      labels: ['payments'],
+      start_blocked_reason: 'worktree-missing',
       created_at: nowIso,
       updated_at: nowIso,
     }),
@@ -3345,6 +3438,8 @@ export function archivedTasksFor(projectId: string): BoardTaskWire[] {
       pr_number: 48,
       pr_url: 'https://github.com/Kangentic/kangentic-mobile/pull/48',
       pr_state: 'merged',
+      // One link (protocol 0.28.0): the completed strip's chip beside the PR.
+      artifacts: [{ url: 'https://www.notion.so/mock-grid-cache-notes', name: 'Grid cache notes' }],
       archived_at: '2026-07-20T18:30:00.000Z',
     }),
     boardTaskFixture({
@@ -3718,7 +3813,18 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
    * later Resume picks back up. Keyed by TASK, because a user's pause clears
    * the row's `session_id`, so nothing else still names the session.
    */
-  const userPausedStaticStates = new Map<string, MockStaticSessionState>();
+  const userPausedStaticStates = new Map<string, MockStaticSessionState>([
+    // The blocked start's conversation, waiting from the start (see MOCK_BLOCKED_START_TASK_ID).
+    [
+      MOCK_BLOCKED_START_TASK_ID,
+      {
+        spec: MOCK_BLOCKED_START_STATIC_SESSION,
+        transcript: staticSessionSeedTranscript(MOCK_BLOCKED_START_STATIC_SESSION),
+        revision: 1,
+        usageReported: true,
+      },
+    ],
+  ]);
   /**
    * Tasks whose pause was accepted while their agent is still shutting down.
    * The desktop records a pause before the shutdown runs, so a second
@@ -4266,7 +4372,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
             resuming: true,
             resumable: false,
             alreadyWaitingForMs: 0,
-            replyText: 'Picking the migration back up at the token schema.',
+            replyText: task.id === MOCK_PAUSED_TASK_ID ? 'Picking the migration back up at the token schema.' : pausedState.spec.replyText,
           },
           transcript: pausedState.transcript,
           revision: pausedState.revision,
@@ -4288,6 +4394,9 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       task.resumable = false;
       task.paused = false;
       task.paused_session_id = null;
+      // A start that reached its agent clears the blocked reason (protocol
+      // 0.28.0): the desktop sends one only while the task is paused or ended.
+      task.start_blocked_reason = null;
       announceTaskUpdated(task, projectId);
     });
   }
@@ -4857,6 +4966,10 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       // grant on a current desktop offers it.
       commandTerminals: commandTerminals.filter((terminal) => terminal.projectId === servedProjectId).map(mockCommandTerminalWire),
       commandTerminalsOffered: true,
+      // Protocol 0.28.0: the resume on open is offered (see start-session's
+      // `trigger: 'open'` below), and the desktop's default priority scale.
+      resumeOnOpenOffered: true,
+      priorities: MOCK_PRIORITY_SCALE,
     } as unknown as JsonValue;
   }
 
@@ -5139,6 +5252,14 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         if (staticChatState) {
           entryCounter += 1;
           appendStaticSessionEntry(staticChatState, { kind: 'user', uuid: `${payload.sessionId}-sent-${entryCounter}`, ts: Date.now(), text: payload.text });
+          // A new turn ends the board's stop (protocol 0.28.0), as the
+          // desktop's next turn does: the reply settles to a plain idle, and a
+          // re-subscribe no longer reads `stopped`. A copy, never the shared spec.
+          if (staticChatState.spec.stopped === true) {
+            const unstopped: MockStaticSessionSpec = { ...staticChatState.spec };
+            delete unstopped.stopped;
+            staticChatState.spec = unstopped;
+          }
           emitStaticSessionActivity(staticChatState.spec, 'thinking');
           const staticReplyCounter = entryCounter;
           later(2500, () => {
@@ -5452,6 +5573,23 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         const located = locateTask(payload.taskId);
         if (!located) return failWith(request, `No such task: ${payload.taskId}`);
         const startInFlight = hasSpawnLabel(located.task);
+        if (payload.trigger === 'open') {
+          // The resume on open (protocol 0.28.0), as the desktop's
+          // openTaskSession answers it: a live (or queued) session is `live`;
+          // a task the idle timeout paused resumes; everything else is
+          // `not-eligible`, never an error. The idle-timeout shape here is a
+          // row the desktop parked IN PLACE (it still names its session); a
+          // person's Pause clears the row's session, which is the shape the
+          // desktop declines. A blocked start is declined too: there is no
+          // plain resume of a task whose worktree has to be made again.
+          if (located.task.session_id !== null && located.task.resumable !== true) return ok(request, { ok: true, outcome: 'live' });
+          if (startInFlight) return ok(request, { ok: true, outcome: 'starting' });
+          const idlePaused =
+            located.task.resumable === true && located.task.session_id !== null && (located.task.start_blocked_reason ?? null) === null;
+          if (!idlePaused) return ok(request, { ok: true, outcome: 'not-eligible' });
+          resumePausedTask(located.task, located.projectId);
+          return ok(request, { ok: true, outcome: 'starting' });
+        }
         if (located.task.resumable === true && !startInFlight) {
           if (stallNextResume) {
             // Accepted, then nothing: see stallNextResume.

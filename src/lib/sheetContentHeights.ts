@@ -132,6 +132,13 @@ export const PICKER_SHEET_RESERVED_HEIGHT =
 export const WORKFLOWS_SHEET_RESERVED_HEIGHT = PICKER_SHEET_RESERVED_HEIGHT + SHEET_ERROR_ALLOWANCE + SHEET_STACK_GAP;
 
 /**
+ * TaskArtifactsScreen, around its list of links: the same title, gap and
+ * error-line allowance as the Workflows sheet (a link the OS refuses to open
+ * says so there).
+ */
+export const ARTIFACTS_SHEET_RESERVED_HEIGHT = PICKER_SHEET_RESERVED_HEIGHT + SHEET_ERROR_ALLOWANCE + SHEET_STACK_GAP;
+
+/**
  * What the picker's filter field adds when it shows (above SEARCH_THRESHOLD
  * projects): the field and its extra Stack gap. The keyboard allowance joins
  * at the call site in this case only, because only the filter can summon one.

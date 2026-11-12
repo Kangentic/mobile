@@ -16,6 +16,12 @@ export interface SheetActionRowProps {
   /** `danger` for a destructive action (Delete, Stop terminal). */
   color?: TextColorRole;
   caption?: string | null;
+  /** A glyph at the row's end, for a row that leaves the app (a link's open-in-browser mark). */
+  trailing?: React.ReactNode;
+  /** One line for the label, truncating: peer-supplied names (a link's) can run long. */
+  singleLineLabel?: boolean;
+  /** The role a screen reader announces: `link` for a row that opens a web page rather than acting on the task. */
+  accessibilityRole?: 'button' | 'link';
 }
 
 /**
@@ -24,11 +30,22 @@ export interface SheetActionRowProps {
  * Shared by the task actions hub and a Command Terminal's long-press sheet
  * (design change 19), so the two read as one family.
  */
-export function SheetActionRow({ label, glyph, onPress, disabled, testID, color = 'primary', caption = null }: SheetActionRowProps): React.JSX.Element {
+export function SheetActionRow({
+  label,
+  glyph,
+  onPress,
+  disabled,
+  testID,
+  color = 'primary',
+  caption = null,
+  trailing = null,
+  singleLineLabel = false,
+  accessibilityRole = 'button',
+}: SheetActionRowProps): React.JSX.Element {
   const theme = useTheme();
   return (
     <Pressable
-      accessibilityRole="button"
+      accessibilityRole={accessibilityRole}
       accessibilityState={{ disabled }}
       disabled={disabled}
       onPress={onPress}
@@ -46,15 +63,16 @@ export function SheetActionRow({ label, glyph, onPress, disabled, testID, color 
       <Row gap="sm" style={styles.actionRowContent}>
         {glyph}
         <Stack gap="xs" style={styles.flex}>
-          <Text variant="body" color={color}>
+          <Text variant="body" color={color} numberOfLines={singleLineLabel ? 1 : undefined}>
             {label}
           </Text>
           {caption ? (
-            <Text variant="caption" color="muted">
+            <Text variant="caption" color="muted" numberOfLines={singleLineLabel ? 1 : undefined}>
               {caption}
             </Text>
           ) : null}
         </Stack>
+        {trailing}
       </Row>
     </Pressable>
   );

@@ -84,6 +84,11 @@ export function boardTaskFixture(overrides: Partial<BoardTaskWire> = {}): BoardT
     paused_session_id: null,
     pausable: false,
     automations_disabled: false,
+    // Protocol 0.28.0: no queued session, no links, and a last start that
+    // reached its agent. An older desktop's row parses all three as null.
+    queue_place: null,
+    artifacts: [],
+    start_blocked_reason: null,
     ...overrides,
   };
 }

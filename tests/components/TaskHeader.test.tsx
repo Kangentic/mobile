@@ -21,7 +21,7 @@ jest.mock('expo-router', () => ({
   useRouter: () => ({ replace: jest.fn(), back: jest.fn(), push: mockPush }),
 }));
 
-const mockResumeTaskSession = jest.fn().mockResolvedValue({ phase: 'resuming', startedAt: 0 });
+const mockResumeTaskSession = jest.fn().mockResolvedValue({ phase: 'resuming', startedAt: 0, origin: 'button' });
 jest.mock('@/connection/actions', () => ({
   resumeTaskSession: (taskId: string, projectId: string) => mockResumeTaskSession(taskId, projectId),
 }));
@@ -48,6 +48,8 @@ function seedLocatedTask(swimlaneId: string = 'lane-todo', taskOverrides: Partia
         taskCountsByColumnId: {},
         commandTerminals: [],
         commandTerminalsOffered: false,
+        resumeOnOpenOffered: false,
+        priorities: null,
       },
     },
     pendingMoves: [],
@@ -442,7 +444,7 @@ describe('TaskHeader status glyph', () => {
 
   it('spins the muted spinner, and takes no second tap, while the resume runs', async () => {
     useResumeStore.setState({ byTaskId: {} });
-    useResumeStore.getState().markResuming('task-1', Date.now());
+    useResumeStore.getState().markResuming('task-1', Date.now(), 'button');
     seedPausedSession({ resumable: true });
 
     await renderTaskHeader({ sessionId: 'sess-1' });

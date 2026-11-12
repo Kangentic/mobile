@@ -41,6 +41,8 @@ export function seedCommandTerminalBoard({
         taskCountsByColumnId: {},
         commandTerminals: terminals,
         commandTerminalsOffered: offered,
+        resumeOnOpenOffered: false,
+        priorities: null,
       },
     },
     pendingMoves: [],

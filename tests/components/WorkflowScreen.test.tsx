@@ -122,6 +122,8 @@ function seedBoard(workflowState = 'running', swimlaneOf: Record<string, string>
         taskCountsByColumnId: {},
         commandTerminals: [],
         commandTerminalsOffered: false,
+        resumeOnOpenOffered: false,
+        priorities: null,
       },
     },
     pendingMoves: [],

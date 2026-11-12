@@ -3,6 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Linking from 'expo-linking';
+import { Link2, Shapes } from 'lucide-react-native';
 import { Icon, SheetActionRow, Stack, Text, useTheme, type TextColorRole } from '@/components';
 import { prStateSummary } from '@/components/board/prChipPresentation';
 import { CapabilityError } from '@/channel';
@@ -20,10 +21,14 @@ import { triggerHaptic } from '@/lib/haptics';
 import { httpsUrlOrNull } from '@/lib/httpsUrl';
 import { WorkflowGlyph } from '@/components/board/WorkflowGlyph';
 import { workflowBlocksArchive, workflowMoveTargetIds } from '@/workflow/workflowMove';
+import { artifactNamesCaption } from '@/lib/taskArtifacts';
 import { RESUME_FAILED_MESSAGE, useResumeOffer } from './task/useResumeOffer';
+import { ARTIFACT_OPEN_FAILED_MESSAGE, openArtifactLink, useTaskArtifactLinks } from './artifacts/taskArtifactLinks';
 
 /** The hub's glyph size (ActionRow's icons), for the workflow's own mark. */
 const WORKFLOW_GLYPH_SIZE = 20;
+/** The same size, for the links rows' lucide glyphs. */
+const ROW_GLYPH_SIZE = 20;
 
 /**
  * Every row here needs both route params. Missing one is a routing defect the
@@ -178,6 +183,24 @@ export function TaskActionsScreen(): React.JSX.Element {
       setErrorMessage(messageForActionError(error, 'Could not open the pull request')),
     );
   }, [prUrl]);
+
+  // The task's links (protocol 0.28.0). One opens in place, as View pull
+  // request does; several open the Artifacts sheet by REPLACING this one, as
+  // Move and Edit do, so dismissing it returns to where the hub was opened.
+  const artifactLinks = useTaskArtifactLinks(taskId ?? null);
+  const onOpenOnlyArtifact = useCallback(() => {
+    const link = artifactLinks[0];
+    if (link === undefined) return;
+    setErrorMessage(null);
+    openArtifactLink(link).catch(() => setErrorMessage(ARTIFACT_OPEN_FAILED_MESSAGE));
+  }, [artifactLinks]);
+  const onOpenArtifacts = useCallback(() => {
+    if (!taskId) {
+      setErrorMessage(MISSING_TASK_CONTEXT);
+      return;
+    }
+    router.replace({ pathname: '/task-artifacts', params: { taskId } });
+  }, [router, taskId]);
 
   /**
    * As the desktop's menu item does, closes and resumes, but only once the
@@ -404,6 +427,32 @@ export function TaskActionsScreen(): React.JSX.Element {
             disabled={busy}
             caption={prCaption}
             testID="task-action-view-pr"
+          />
+        ) : null}
+        {/* The task's links (protocol 0.28.0), beside the sheet's other row
+            that goes somewhere. One link is its own row; several are one
+            Artifacts row that opens their sheet, as the desktop's menu has a
+            single Artifacts item (design decision C1). */}
+        {artifactLinks.length === 1 ? (
+          <SheetActionRow
+            label={artifactLinks[0].name}
+            caption={artifactLinks[0].host}
+            glyph={<Link2 size={ROW_GLYPH_SIZE} color={theme.colors.textSecondary} />}
+            singleLineLabel
+            accessibilityRole="link"
+            onPress={onOpenOnlyArtifact}
+            disabled={busy}
+            testID="task-action-artifact"
+          />
+        ) : artifactLinks.length > 1 ? (
+          <SheetActionRow
+            label="Artifacts"
+            caption={artifactNamesCaption(artifactLinks)}
+            glyph={<Shapes size={ROW_GLYPH_SIZE} color={theme.colors.textSecondary} />}
+            singleLineLabel
+            onPress={onOpenArtifacts}
+            disabled={busy}
+            testID="task-action-artifacts"
           />
         ) : null}
         {/* Directly above View workflow: the desktop's menu puts the switch

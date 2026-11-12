@@ -262,6 +262,8 @@ describe('notificationReconciler', () => {
           taskCountsByColumnId: {},
           commandTerminals: [],
           commandTerminalsOffered: false,
+          resumeOnOpenOffered: false,
+          priorities: null,
         },
       },
     });

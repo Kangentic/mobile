@@ -169,6 +169,8 @@ function seedTaskWithSession(sessionId: string | null): void {
         taskCountsByColumnId: {},
         commandTerminals: [],
         commandTerminalsOffered: false,
+        resumeOnOpenOffered: false,
+        priorities: null,
       },
     },
     pendingMoves: [],

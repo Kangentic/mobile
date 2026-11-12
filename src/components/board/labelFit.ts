@@ -13,14 +13,28 @@ const BADGE_CHROME_PX = 18;
 /** `Row gap="sm"` between adjacent pills. */
 const ROW_GAP_PX = 8;
 
+/** The priority pill's flag (12) and the `Row gap="xs"` (4) after it, on top of a label pill's chrome. */
+const PRIORITY_FLAG_PX = 16;
+
 function estimateBadgeWidth(label: string): number {
   return label.length * AVG_CHAR_WIDTH_PX + BADGE_CHROME_PX;
 }
 
 /**
+ * The priority pill's width (`PriorityBadge`), plus the gap after it, which the
+ * labels row spends before its first label. Zero when no pill is drawn.
+ */
+export function priorityBadgeReserve(priorityLabel: string | null): number {
+  if (priorityLabel === null) return 0;
+  return estimateBadgeWidth(priorityLabel) + PRIORITY_FLAG_PX + ROW_GAP_PX;
+}
+
+/**
  * Greedily fits as many labels as possible into `availableWidth`, reserving
  * room for the "+N" overflow pill whenever not everything fits. Returns the
- * count to actually render (the rest become the overflow count).
+ * count to actually render (the rest become the overflow count). A priority
+ * pill leading the row is taken off `availableWidth` by the caller
+ * (`priorityBadgeReserve`).
  */
 export function computeVisibleLabelCount(labels: string[], availableWidth: number): number {
   if (labels.length === 0) return 0;

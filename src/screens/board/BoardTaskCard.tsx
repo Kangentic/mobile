@@ -6,7 +6,9 @@ import { collapseToSnippetText } from '@/conversation/pendingPromptSummary';
 import { TaskCard } from '@/components/board/TaskCard';
 import { cardSessionDisplay, toCardSession } from '@/components/board/cardSessionDisplay';
 import { buildJourneyTrack } from '@/components/board/columnTrack';
-import { sessionlessTaskStatus, useBoardStore } from '@/state/boardStore';
+import { noteTaskOpened } from '@/navigation/taskOpenIntent';
+import { priorityLevelFor } from '@/lib/priority';
+import { selectPriorityScale, sessionlessTaskStatus, useBoardStore } from '@/state/boardStore';
 import { useActivityStore, selectTaskRespawn, selectWaitingSince } from '@/state/activityStore';
 import { workflowStripLabel } from '@/workflow/workflowState';
 import { workflowWaitingFooter } from '@/workflow/workflowWaiting';
@@ -48,12 +50,15 @@ export function useOpenBoardTask(task: BoardTaskWire, projectId: string): () => 
     }
     if (task.session_id === null) {
       if (sessionlessStatus !== null) {
+        // An open of the task, for the resume on open (protocol 0.28.0).
+        noteTaskOpened(task.id);
         router.push({ pathname: '/task/[taskId]', params: { taskId: task.id, projectId } });
         return;
       }
       router.push({ pathname: '/edit-task', params: { taskId: task.id, projectId } });
       return;
     }
+    noteTaskOpened(task.id);
     router.push({
       pathname: '/task/[taskId]',
       params: { taskId: task.id, sessionId: task.session_id, projectId },
@@ -104,6 +109,8 @@ export const BoardTaskCard = React.memo(function BoardTaskCard({
   const showTicketNumbers = useBoardStore((state) => state.boardsByProjectId[projectId]?.showTicketNumbers ?? true);
   const boardColumns = useBoardStore((state) => state.boardsByProjectId[projectId]?.columns ?? NO_COLUMNS);
   const projectName = useBoardStore((state) => state.projects.find((project) => project.id === projectId)?.name ?? null);
+  const priorityScale = useBoardStore((state) => selectPriorityScale(state, projectId));
+  const priorityLevel = priorityLevelFor(task.priority, priorityScale);
 
   // Task-keyed, not session-keyed, and that is the entire point: during a
   // swap the task's session_id is null, so `activityEntry` above is null and
@@ -160,6 +167,7 @@ export const BoardTaskCard = React.memo(function BoardTaskCard({
       columnStrip={columnStrip}
       waiting={waiting}
       automationsDisabled={task.automations_disabled === true}
+      priorityLevel={priorityLevel}
       onPress={openTask}
       onLongPress={onLongPress}
     />

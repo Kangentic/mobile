@@ -13,6 +13,7 @@ import {
   isDoneRole,
   isTodoRole,
   selectBoardListsLiveSession,
+  selectTaskColumn,
   selectTaskRow,
   useBoardStore,
 } from '@/state/boardStore';
@@ -34,7 +35,10 @@ import {
 } from './SessionSwapVeil';
 import { SessionInputBar } from './SessionInputBar';
 import { ResumePanel } from './ResumePanel';
+import { QueuedPanel } from './QueuedPanel';
 import { RESUME_FAILED_MESSAGE, useResumeOffer } from './useResumeOffer';
+import { useResumeOnOpen } from './useResumeOnOpen';
+import { startBlockedCopy } from '@/lib/startBlocked';
 import { pausedComposerSessionId, resolveCurrentSessionId } from './sessionResolution';
 import type { SessionMode } from './SessionModeToggle';
 
@@ -872,9 +876,23 @@ export function SessionScreen(): React.JSX.Element {
   // quick keys go. A pause is not a swap (a respawn in flight carries a label,
   // which reads as preparing, never as paused), so the veil yields to it.
   const resumeOffer = useResumeOffer(taskId, displaySessionId);
+  // The resume on open (protocol 0.28.0): opening an idle-paused task resumes
+  // it, as opening it on the desktop does. The panel then reads "Resuming
+  // agent..." through the same attempt a Resume tap would make.
+  useResumeOnOpen({ taskId, projectId, offered: resumeOffer.offered });
   // A task of a paused workflow gets the same panel, holding View workflow in
   // place of the Resume the desktop would refuse (design screen 5).
   const resumePanelShown = (resumeOffer.offered || resumeOffer.pausedWorkflow !== null) && projectId !== null;
+  // A queued session (protocol 0.28.0): the desktop's queued window in the
+  // terminal lens, its place in line and what holds it. Keys and the terminal
+  // have nothing to show for a session with no PTY yet, so the quick keys go
+  // as they do for the Resume panel.
+  const queuedPanelShown = launchDisplayKind === 'queued' && !resumePanelShown;
+  const queuePlace = useBoardStore((state) => selectTaskRow(state, taskId)?.queue_place ?? null);
+  // Why the last start never reached its agent (protocol 0.28.0), under Resume.
+  const startBlockedReason = useBoardStore((state) => selectTaskRow(state, taskId)?.start_blocked_reason ?? null);
+  const startBlockedTip = startBlockedCopy(startBlockedReason)?.tip ?? null;
+  const taskColumn = useBoardStore((state) => selectTaskColumn(state, taskId));
   // A failed Resume's line, wherever the user is looking: the terminal lens
   // has it in the Resume panel, so the footer carries it in the other two (a
   // Resume pressed from the header while on Chat otherwise failed in silence).
@@ -887,6 +905,10 @@ export function SessionScreen(): React.JSX.Element {
     !leaveScreen &&
     !probeBaresSwap &&
     !resumePanelShown &&
+    // A successor that is QUEUED never paints (no PTY until a slot frees), so
+    // the window would hold the veil for as long as the queue does. Once the
+    // queued session is bound, its panel says why instead.
+    !queuedPanelShown &&
     (quietWindowCleared ? mode === 'terminal' : !overlaysYieldToChanges);
   // The launch face's veil (see launchFace above): its waiting face, in
   // terminal mode, as the cleared window is drawn.
@@ -998,7 +1020,7 @@ export function SessionScreen(): React.JSX.Element {
                 // The waiting phase and the Resume panel drop the quick-key
                 // row, so the pane is taller than the lens is ever read at:
                 // not a fit height.
-                fitLayoutIsReference={!footerSwitcherOnly && !resumePanelShown}
+                fitLayoutIsReference={!footerSwitcherOnly && !resumePanelShown && !queuedPanelShown}
               />
               {resumePanelShown && projectId !== null ? (
                 <ResumePanel
@@ -1006,7 +1028,10 @@ export function SessionScreen(): React.JSX.Element {
                   projectId={projectId}
                   attempt={resumeOffer.attempt}
                   pausedWorkflow={resumeOffer.pausedWorkflow}
+                  startBlockedTip={startBlockedTip}
                 />
+              ) : queuedPanelShown ? (
+                <QueuedPanel place={queuePlace} column={taskColumn} />
               ) : null}
             </View>
             <View
@@ -1051,7 +1076,7 @@ export function SessionScreen(): React.JSX.Element {
           chatAttention={chatAttention}
           suspended={footerSuspended && !pausedComposerLive}
           switcherOnly={footerSwitcherOnly && !pausedComposerLive}
-          quickKeysHidden={resumePanelShown}
+          quickKeysHidden={resumePanelShown || queuedPanelShown}
           notice={resumeFailureNotice}
         />
       </KeyboardAvoidingView>

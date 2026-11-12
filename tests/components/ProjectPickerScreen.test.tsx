@@ -186,6 +186,8 @@ describe('ProjectPickerScreen per-project agent counts', () => {
           taskCountsByColumnId: {},
           commandTerminals: [],
           commandTerminalsOffered: false,
+          resumeOnOpenOffered: false,
+          priorities: null,
         },
       },
     });

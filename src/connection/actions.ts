@@ -5,6 +5,7 @@ import {
   UNSUPPORTED_VERB_ERROR_CODE,
   type JsonValue,
   type ReadDiffScope,
+  type StartSessionOutcome,
 } from '@kangentic/protocol';
 import { CapabilityError, CapabilityTimeoutError, ChannelDisconnectedError } from '@/channel';
 import { collapseToSnippetText, findAwaitedToolUse, lastAssistantText, type AwaitedToolUse } from '@/conversation/pendingPromptSummary';
@@ -23,7 +24,7 @@ import {
 import { selectStartingSlots, useCommandTerminalStore } from '@/state/commandTerminalStore';
 import { diffKeyFor, useDiffStore, type DiffTarget } from '@/state/diffStore';
 import { useReadingViewStore } from '@/state/readingViewStore';
-import { resumeProgress, useResumeStore, type ResumeAttempt } from '@/state/resumeStore';
+import { resumeProgress, useResumeStore, type ResumeAttempt, type ResumeOrigin } from '@/state/resumeStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { useWorkflowStore } from '@/state/workflowStore';
@@ -134,7 +135,7 @@ export async function resumeTaskSession(taskId: string, projectId: string): Prom
   if (inFlight?.phase === 'resuming') return inFlight;
   const startedAt = Date.now();
   const pausedSessionId = selectTaskRow(useBoardStore.getState(), taskId)?.session_id ?? null;
-  useResumeStore.getState().markResuming(taskId, startedAt);
+  useResumeStore.getState().markResuming(taskId, startedAt, 'button');
   try {
     const response = await requireVerbClient().startSession({ taskId, projectId });
     // `live`: a session is already live (queued counts), so no successor event
@@ -148,8 +149,61 @@ export async function resumeTaskSession(taskId: string, projectId: string): Prom
     useResumeStore.getState().markFailed(taskId, failed.message);
     return failed;
   }
-  watchResumeAttempt(taskId, startedAt, pausedSessionId);
-  return { phase: 'resuming', startedAt };
+  watchResumeAttempt(taskId, startedAt, pausedSessionId, 'button');
+  return { phase: 'resuming', startedAt, origin: 'button' };
+}
+
+/**
+ * The resume on open (protocol 0.28.0): what the desktop does when a person
+ * opens a task there, asked for by the phone because the person opened the
+ * task here (a push tap, an Agents card, a Board or workflow card). The
+ * desktop resumes the task only when its idle timeout paused it and resuming
+ * sends the agent nothing; a person's own Pause, a paused workflow, a launch
+ * that still owes its prompt and a conversation that would start fresh all
+ * stay paused, answered `not-eligible`.
+ *
+ * NEVER the Resume button's path. A plain `start-session` resumes a person's
+ * own Pause and can deliver the column's message, a paid turn nobody asked
+ * for. That is why the caller sends this only on a desktop that advertises it
+ * (`resumeOnOpenOffered`): an older desktop drops the trigger and would take
+ * exactly that path.
+ *
+ * It runs through the same attempt as the button, so the session screen, the
+ * header and the long-press row all read "Resuming agent..." and none can be
+ * pressed while it is in flight, which is what keeps a Resume tap from going
+ * out on top of it. Unlike the button, it never fails: every outcome but a new
+ * session binding clears the attempt silently, leaving the plain Resume button
+ * with no error line, since an open is not a request the person can fail. That
+ * covers `not-eligible`, a `starting` that the desktop then leaves paused (it
+ * decides whether a resume would go fresh only after its git phase), the wait
+ * bound, and a refusal or a lost connection.
+ */
+export async function resumeTaskOnOpen(taskId: string, projectId: string): Promise<void> {
+  const inFlight = useResumeStore.getState().byTaskId[taskId];
+  if (inFlight?.phase === 'resuming') return;
+  const startedAt = Date.now();
+  const pausedSessionId = selectTaskRow(useBoardStore.getState(), taskId)?.session_id ?? null;
+  useResumeStore.getState().markResuming(taskId, startedAt, 'open');
+  let outcome: StartSessionOutcome;
+  try {
+    outcome = (await requireVerbClient().startSession({ taskId, projectId, trigger: 'open' })).outcome;
+  } catch {
+    clearResumeAttempt(taskId, startedAt);
+    return;
+  }
+  if (outcome === 'not-eligible') {
+    clearResumeAttempt(taskId, startedAt);
+    return;
+  }
+  // As for the button: `live` sends no event, so refresh rather than wait.
+  if (outcome === 'live') void refreshSnapshots().catch(() => undefined);
+  watchResumeAttempt(taskId, startedAt, pausedSessionId, 'open');
+}
+
+/** Clears an attempt only while it is still the one this caller started: a newer one is not this caller's to clear. */
+function clearResumeAttempt(taskId: string, startedAt: number): void {
+  const attempt = useResumeStore.getState().byTaskId[taskId];
+  if (attempt?.phase === 'resuming' && attempt.startedAt === startedAt) useResumeStore.getState().clear(taskId);
 }
 
 /**
@@ -166,8 +220,12 @@ export async function resumeTaskSession(taskId: string, projectId: string): Prom
  * Resume column, or no cached board holds it any more) settles nothing on its
  * own, so the next bound fails it rather than leave the attempt and this
  * subscription waiting forever.
+ *
+ * An `open` attempt (`resumeTaskOnOpen`) settles the same way but never fails:
+ * where a button's attempt would show "Session could not be resumed.", an
+ * open's clears, back to the plain Resume button.
  */
-function watchResumeAttempt(taskId: string, startedAt: number, pausedSessionId: string | null): void {
+function watchResumeAttempt(taskId: string, startedAt: number, pausedSessionId: string | null, origin: ResumeOrigin): void {
   let sawLabel = false;
   let unsubscribe: (() => void) | null = null;
   const stopWatching = (): void => {
@@ -177,6 +235,10 @@ function watchResumeAttempt(taskId: string, startedAt: number, pausedSessionId: 
   const isCurrentAttempt = (): boolean => {
     const attempt = useResumeStore.getState().byTaskId[taskId];
     return attempt?.phase === 'resuming' && attempt.startedAt === startedAt;
+  };
+  const settleUnresumed = (): void => {
+    if (origin === 'open') useResumeStore.getState().clear(taskId);
+    else useResumeStore.getState().markFailed(taskId, null);
   };
   const readProgress = (): void => {
     if (!isCurrentAttempt()) {
@@ -191,7 +253,7 @@ function watchResumeAttempt(taskId: string, startedAt: number, pausedSessionId: 
       useResumeStore.getState().clear(taskId);
     } else if (progress === 'spawn-failed') {
       stopWatching();
-      useResumeStore.getState().markFailed(taskId, null);
+      settleUnresumed();
     }
   };
   const checkWaitBound = (): void => {
@@ -203,7 +265,7 @@ function watchResumeAttempt(taskId: string, startedAt: number, pausedSessionId: 
       return;
     }
     stopWatching();
-    useResumeStore.getState().markFailed(taskId, null);
+    settleUnresumed();
   };
   unsubscribe = useBoardStore.subscribe(readProgress);
   readProgress();

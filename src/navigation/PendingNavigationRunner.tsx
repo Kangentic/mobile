@@ -7,6 +7,7 @@ import {
   subscribePendingNavigation,
   type PendingNavigation,
 } from './pendingNavigation';
+import { noteTaskOpened } from './taskOpenIntent';
 
 /**
  * Performs the navigation published to the pending slot, from INSIDE the
@@ -77,6 +78,11 @@ function performPendingNavigation(navigation: PendingNavigation): void {
   //
   // No `mode` param: the screen resolves the lens itself (the task's remembered
   // lens, else terminal), so a push tap lands where the user last worked.
+  //
+  // A push tap is an OPEN of the task (protocol 0.28.0's resume on open): noted
+  // here, where the navigation is performed, so the session screen claims it
+  // whether it mounts now or is already on top and only gets new params.
+  noteTaskOpened(navigation.taskId);
   router.navigate({
     pathname: '/task/[taskId]',
     params: {
