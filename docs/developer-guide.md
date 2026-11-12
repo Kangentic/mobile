@@ -3432,8 +3432,8 @@ Not implicated, and not ruled out in isolation: the 2.625 density. Inferred, not
 of first paint and the first size change arrives first is a race on a device, and the long chain
 needs first paint first, or a window landing under a feed that has already painted.
 
-**The fix is `scrollFeedToEnd`, the native scroll, and it has two traps that only a device showed.**
-All tests passed with both of these broken:
+**The fix is `scrollFeedToEnd`, the native scroll, and it has three traps that only a device showed.**
+All tests passed with each of these broken:
 
 - The walk had a useful side effect: it measured about two windows above the bottom. Without it the
   first drag runs into rows estimated far too tall, each collapses as it arrives, and the feed
@@ -3446,6 +3446,18 @@ All tests passed with both of these broken:
 - An animated native scroll to the end left the feed blank for good, with Jump to latest still
   showing. The list never heard where it stopped; a dropped last event under
   `scrollEventThrottle` is inferred from that symptom. Never animate it.
+- The scroll can run before the content it aims at is mounted. The 1.5.0 store capture found it on
+  the 7-inch shelf only (1080x1920 at 280 dpi): a session opened with its pending permission card
+  cut off under the composer, Approve and Deny out of sight, in three runs out of three, while the
+  phone and 10-inch shelves landed. One drag revealed the whole card. Logged on the dev client: the
+  feed scrolled to 1249 against content 2107, the content grew to 2254 two milliseconds later, and
+  the re-anchor that change triggered moved nothing, so the feed opened 147 points short. Read from
+  React Native's source: the size change reaches JS from the layout pass, Android's mounting layer
+  runs a view command ahead of the mount items it is dispatched with (`MountItemDispatcher.kt`), and
+  `scrollToEnd` reads the content view's height when it runs (`ReactScrollViewManager.kt`), so it
+  scrolled to the old bottom and no later change came to correct it. `useFeedEndAnchor` scrolls
+  again on the next frame unless the reader has dragged by then, and the same shelf then opened on
+  Approve. Not measured on a release build, and whether iOS does it is not known.
 
 **Known limit, kept on purpose.** The band is only measured before the first reveal. A window that
 lands later re-anchors at the resting distance, so the first drag there can still snap. That covers

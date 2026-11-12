@@ -9,7 +9,7 @@ import {
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import { MonoText, Text, useTheme } from '@/components';
 import { useReadingViewStore } from '@/state/readingViewStore';
-import { scrollFeedToEnd } from './scrollFeedToEnd';
+import { useFeedEndAnchor } from './scrollFeedToEnd';
 
 export interface ReadingViewFeedProps {
   sessionId: string;
@@ -69,17 +69,18 @@ export function ReadingViewFeed({ sessionId, agentLabel }: ReadingViewFeedProps)
   const onScrollBeginDrag = useCallback(() => {
     userTookOverScrollRef.current = true;
   }, []);
+  const anchorToEnd = useFeedEndAnchor(listRef, userTookOverScrollRef);
   const onContentSizeChange = useCallback(() => {
     if (userTookOverScrollRef.current || rows.length === 0) return;
-    scrollFeedToEnd(listRef.current);
-  }, [rows.length]);
+    anchorToEnd();
+  }, [anchorToEnd, rows.length]);
 
   // Hands the feed back to the anchor, as ConversationFeed's button does and for
   // the same reason: keep the two in step.
   const jumpToLatest = useCallback(() => {
     userTookOverScrollRef.current = false;
-    scrollFeedToEnd(listRef.current);
-  }, []);
+    anchorToEnd();
+  }, [anchorToEnd]);
 
   const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;

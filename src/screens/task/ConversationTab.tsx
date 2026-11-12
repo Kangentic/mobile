@@ -13,7 +13,7 @@ import { AskUserQuestionCard } from '@/components/conversation/AskUserQuestionCa
 import { LiveTailCell } from '@/components/conversation/LiveTailCell';
 import { MarkdownCell } from '@/components/conversation/MarkdownCell';
 import { PermissionPromptCard } from '@/components/conversation/PermissionPromptCard';
-import { scrollFeedToEnd } from '@/components/conversation/scrollFeedToEnd';
+import { useFeedEndAnchor } from '@/components/conversation/scrollFeedToEnd';
 import { SystemDividerCell } from '@/components/conversation/SystemDividerCell';
 import { ThinkingCell } from '@/components/conversation/ThinkingCell';
 import { ToolCallCard } from '@/components/conversation/ToolCallCard';
@@ -343,14 +343,16 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
    * heights get measured), so anchoring once at the first change anchors to a
    * list that is a fraction of its final height. Re-anchoring on every change
    * until the user drags is what actually keeps the newest message on screen,
-   * and it hands control over the instant they scroll. Native on purpose: see
-   * `scrollFeedToEnd`.
+   * and it hands control over the instant they scroll. Native on purpose, and
+   * repeated on the next frame so it lands after the mount: see
+   * `useFeedEndAnchor`.
    */
+  const anchorToEnd = useFeedEndAnchor(listRef, userTookOverScrollRef);
   const onContentSizeChange = useCallback(() => {
     if (userTookOverScrollRef.current || cells.length === 0) return;
-    scrollFeedToEnd(listRef.current);
+    anchorToEnd();
     scheduleReveal();
-  }, [cells.length, scheduleReveal]);
+  }, [anchorToEnd, cells.length, scheduleReveal]);
 
   // Hands the feed back to the anchor. The native scroll aims at the content
   // height as estimated, so it can land short of an unmeasured bottom, and only
@@ -358,8 +360,8 @@ function ConversationFeed({ sessionId }: { sessionId: string }): React.JSX.Eleme
   // ReadingViewFeed's button does the same: keep the two in step.
   const jumpToLatest = useCallback(() => {
     userTookOverScrollRef.current = false;
-    scrollFeedToEnd(listRef.current);
-  }, []);
+    anchorToEnd();
+  }, [anchorToEnd]);
 
   return (
     <View style={styles.flex}>
