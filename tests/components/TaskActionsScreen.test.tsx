@@ -820,9 +820,25 @@ describe('TaskActionsScreen', () => {
     });
 
     /**
+     * Desktop v0.55.0: a stopped card is the owner's to move, to any column but
+     * To Do, even when the desktop names no next column for it (a board with no
+     * Done). Mutation seen failing: deleting the stopped-card branch in
+     * `workflowAllowsMove` left only the (null) gate, so the hub disabled Move
+     * ("Expected: false, Received: true").
+     */
+    it('keeps Move for a stopped card on a v0.55.0 desktop that names no next column, and keeps Archive off', async () => {
+      seedWorkflowTask({ workflow: { state: 'running', lock_reason: null, gate_target_id: null, automations_pausable: false } });
+      await renderTaskActions();
+
+      expect(disabledOf('task-action-move')).toBe(false);
+      expect(disabledOf('task-action-archive')).toBe(true);
+    });
+
+    /**
      * Kangentic #923: a held card (its own automations paused) moves by hand
-     * while its workflow runs, so the row the locked card above loses comes
-     * back, and Archive still stays off. The desktop sends no lock for one.
+     * while its workflow runs on a desktop before v0.55.0, so the row the
+     * locked card above loses comes back, and Archive still stays off. That
+     * desktop sends no lock for one.
      */
     it('enables Move for a held card of a running workflow, and keeps Archive off', async () => {
       seedWorkflowTask({ workflow: { state: 'running', lock_reason: null, gate_target_id: null }, task: { automations_disabled: true } });

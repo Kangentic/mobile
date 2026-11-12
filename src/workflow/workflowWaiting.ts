@@ -20,7 +20,10 @@ export interface WorkflowWaitingFooter {
  * `held` is the task's own automations switch (`automations_disabled`): the
  * desktop's engine starts neither a paused workflow's task nor a held one, so
  * both read Paused (kangentic #923, `boardWaiting`'s `paused ||
- * !canTaskRunAutomations(task).ok`). A blocker wins over either pause. Only in
+ * !canTaskRunAutomations(task).ok`). That is a desktop before v0.55.0: a
+ * current one dropped the hold from this label (7aff391f1), refuses one on a
+ * running or paused workflow's task and cleared the old ones, so `held` never
+ * reaches here from it. A blocker wins over either pause. Only in
  * To Do, and only while the workflow is running or paused; the caller shows it
  * only when the card has no session footer of its own.
  */

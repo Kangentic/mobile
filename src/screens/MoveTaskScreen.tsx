@@ -66,13 +66,16 @@ export function MoveTaskScreen(): React.JSX.Element {
   const allowedColumnIds = useMemo(() => (task ? workflowMoveTargetIds(task, columns) : new Set<string>()), [task, columns]);
 
   const [chosenColumnId, setChosenColumnId] = useState<string | null>(null);
-  // A running workflow's human gate is chosen already (screen 4). Keyed on the
-  // gate itself, never on "one column open": a paused card on a three-column
-  // board has only Done open, and pre-choosing it would put the archive the
-  // hub refuses one tap away. A pick a newer row has since refused falls back
-  // to the gate, or to nothing. A held card (its own automations paused) gets
-  // no gate either: the desktop names no next step for one, since the person
-  // moves it on, and the optimistic hold can briefly leave a stale gate here.
+  // A running workflow's `gate_target_id` is chosen already (screen 4): on a
+  // current desktop the next column on a stopped card's route, the move a
+  // person is most likely waiting to make; before v0.55.0 a human gate's one
+  // open column. Keyed on that column itself, never on "one column open": a
+  // paused card on a three-column board has only Done open, and pre-choosing
+  // it would put the archive the hub refuses one tap away. A pick a newer row
+  // has since refused falls back to it, or to nothing. A held card (its own
+  // automations paused, which only a desktop before v0.55.0 sends) gets none
+  // either: that desktop names no next step for one, since the person moves
+  // it on, and the optimistic hold can briefly leave a stale gate here.
   const gateTargetId =
     task?.workflow && normalizeWorkflowState(task.workflow.state) === 'running' && task.automations_disabled !== true
       ? task.workflow.gate_target_id

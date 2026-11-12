@@ -9,9 +9,10 @@
  *    `dev:mock` shows both states;
  *  - `update_task`'s camelCase `automationsDisabled` flips it, and the change
  *    reaches the next read;
- *  - a workflow task takes it too (protocol 0.25.0, kangentic #923, payloads.ts
- *    `automations_pausable`, workflow-wire.ts): a held card loses its lock and
- *    its gate, and every workflow row says the desktop honours the hold;
+ *  - a running or paused workflow's task refuses a pause in the desktop's
+ *    words (v0.55.0, 7aff391f1, task-commands.ts `taskHoldRefusal`) and always
+ *    takes a resume, and no workflow card starts held, since that desktop's
+ *    migration cleared them;
  *  - a value that is not a boolean is refused before anything moves.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -24,10 +25,19 @@ const MOCK_PROJECT_ID = 'mock-project';
 const MOCK_PROJECT_2_ID = 'mock-project-relay';
 const HELD_TASK_ID = 'mock-task-merge-1';
 const ORDINARY_TASK_ID = 'mock-task-merge-2';
-/** #6, in Executing while Checkout hardening runs: locked until held. */
+/** #6, in Executing while Checkout hardening runs: in motion, so locked. */
 const WORKFLOW_TASK_ID = 'mock-task-wf-retry';
-/** #8, in To Do: the workflow card that starts held. */
-const HELD_WORKFLOW_TASK_ID = 'mock-task-wf-soak';
+/** #11, in To Do of the paused Multi-currency pricing rollout. */
+const PAUSED_WORKFLOW_TASK_ID = 'mock-task-wf-currency';
+
+/** The desktop's `taskHoldRefusal` sentence plus handleUpdateTask's tail, for one task of one workflow. */
+function holdRefusalText(label: string, workflowTitle: string): string {
+  return (
+    `${label} is in ${workflowTitle}, so its automations cannot be paused. To review its plan, set planApproval to manual. ` +
+    'To wait on something outside, end a turn on the "Needs owner:" line. If it must never start on its own, leave it out of the workflow. ' +
+    'To stop work, pause the workflow. The task was not updated.'
+  );
+}
 
 let mockDesktop: MockDesktop;
 let controller: ChannelController;
@@ -88,48 +98,41 @@ describe('mock desktop automations switch', () => {
     expect(await automationsDisabledOf(MOCK_PROJECT_ID, HELD_TASK_ID)).toBe(false);
   });
 
-  it('says on every workflow row that this desktop honours the hold', async () => {
+  it('starts no workflow card held, as the desktop migration cleared them', async () => {
     const workflowRows = (await boardRows(MOCK_PROJECT_2_ID)).filter((row) => (row.workflow ?? null) !== null);
     expect(workflowRows.length).toBeGreaterThan(0);
-    expect(workflowRows.every((row) => row.workflow?.automations_pausable === true)).toBe(true);
-  });
-
-  it('starts one checkout-api workflow card held, with no lock', async () => {
-    const row = (await boardRows(MOCK_PROJECT_2_ID)).find((candidate) => candidate.id === HELD_WORKFLOW_TASK_ID);
-    expect(row?.automations_disabled).toBe(true);
-    expect(row?.workflow?.state).toBe('running');
-    expect(row?.workflow?.lock_reason).toBeNull();
-    expect(row?.workflow?.gate_target_id).toBeNull();
+    expect(workflowRows.every((row) => row.automations_disabled === false)).toBe(true);
   });
 
   /**
-   * The desktop's workflow-wire.ts: a held card of a running workflow is the
-   * person's to move, so its lock sentence goes, and comes back on release.
-   * Mutation seen failing: dropping `!held` from mockWorkflowWire's lock_reason
-   * kept the sentence on the held row.
+   * A running or paused workflow's task cannot pause its automations: to stop
+   * work, pause the workflow. The row is left exactly as it was, lock included.
+   * Mutation seen failing: deleting the `mockTaskHoldRefusal` call from
+   * update_task, which held both tasks ("expected the desktop to refuse").
    */
-  it('holds a workflow task, which drops its lock, and releases it, which brings the lock back', async () => {
-    const lockOf = async (): Promise<string | null | undefined> =>
-      (await boardRows(MOCK_PROJECT_2_ID)).find((candidate) => candidate.id === WORKFLOW_TASK_ID)?.workflow?.lock_reason;
-    expect(await lockOf()).toBe('#6 is locked while Checkout hardening runs.');
+  it.each([
+    ['running', WORKFLOW_TASK_ID, '#6', 'Checkout hardening'],
+    ['paused', PAUSED_WORKFLOW_TASK_ID, '#11', 'Multi-currency pricing rollout'],
+  ])('refuses to pause a %s workflow task in the desktop words, and changes nothing', async (_state, taskId, label, workflowTitle) => {
+    const workflowOf = async () => (await boardRows(MOCK_PROJECT_2_ID)).find((candidate) => candidate.id === taskId)?.workflow;
+    const before = await workflowOf();
 
-    await controller.verbs.boardToolWrite('update_task', { project: MOCK_PROJECT_2_ID, taskId: WORKFLOW_TASK_ID, automationsDisabled: true });
-    expect(await automationsDisabledOf(MOCK_PROJECT_2_ID, WORKFLOW_TASK_ID)).toBe(true);
-    expect(await lockOf()).toBeNull();
+    const refusal = await refusalOf(
+      controller.verbs.boardToolWrite('update_task', { project: MOCK_PROJECT_2_ID, taskId, title: 'Renamed', automationsDisabled: true }),
+    );
 
-    await controller.verbs.boardToolWrite('update_task', { project: MOCK_PROJECT_2_ID, taskId: WORKFLOW_TASK_ID, automationsDisabled: false });
-    expect(await automationsDisabledOf(MOCK_PROJECT_2_ID, WORKFLOW_TASK_ID)).toBe(false);
-    expect(await lockOf()).toBe('#6 is locked while Checkout hardening runs.');
+    expect(refusal.message).toBe(holdRefusalText(label, workflowTitle));
+    expect(await automationsDisabledOf(MOCK_PROJECT_2_ID, taskId)).toBe(false);
+    expect((await boardRows(MOCK_PROJECT_2_ID)).find((candidate) => candidate.id === taskId)?.title).not.toBe('Renamed');
+    expect(await workflowOf()).toEqual(before);
   });
 
-  /** workflow-view-service.ts `humanGateExit`: no gate for a held card, which a hand may move anywhere but To Do. */
-  it('drops the human gate from a held card waiting in one', async () => {
-    const gateOf = async (): Promise<string | null | undefined> =>
-      (await boardRows(MOCK_PROJECT_2_ID)).find((candidate) => candidate.id === 'mock-task-wf-refunds')?.workflow?.gate_target_id;
-    expect(await gateOf()).toBe('lane2-merge');
-
-    await controller.verbs.boardToolWrite('update_task', { project: MOCK_PROJECT_2_ID, taskId: 'mock-task-wf-refunds', automationsDisabled: true });
-    expect(await gateOf()).toBeNull();
+  // Resuming is never refused, so a card left held on a workflow has a way back.
+  it('takes a resume for a workflow task', async () => {
+    await expect(
+      controller.verbs.boardToolWrite('update_task', { project: MOCK_PROJECT_2_ID, taskId: WORKFLOW_TASK_ID, automationsDisabled: false }),
+    ).resolves.toEqual({ updated: WORKFLOW_TASK_ID });
+    expect(await automationsDisabledOf(MOCK_PROJECT_2_ID, WORKFLOW_TASK_ID)).toBe(false);
   });
 
   it('refuses a value that is not a boolean, so a truthy string cannot hold a task', async () => {

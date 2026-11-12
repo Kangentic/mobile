@@ -23,9 +23,11 @@ export interface ResumeOffer {
    * screen 5), and no surface offers Resume session.
    *
    * Never set for a held task (its own automations paused, protocol 0.25.0):
-   * the workflow's Pause and Resume leave its agent alone (kangentic #923), so
-   * the workflow's Resume would not bring this one back, and it keeps its own
-   * Resume session.
+   * on a desktop before v0.55.0 the workflow's Pause and Resume leave its
+   * agent alone (kangentic #923), so the workflow's Resume would not bring
+   * this one back, and it keeps its own Resume session. A current desktop
+   * refuses a hold on a running or paused workflow's task and cleared the old
+   * ones (7aff391f1), so there this never applies.
    */
   pausedWorkflow: { workflowId: string; homeProjectId: string } | null;
 }
