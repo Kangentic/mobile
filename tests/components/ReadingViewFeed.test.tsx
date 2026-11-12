@@ -147,6 +147,61 @@ describe('ReadingViewFeed scrolling to the newest line', () => {
   });
 });
 
+/**
+ * The transcript feed's half of this is in tests/components/ConversationTab.test.tsx
+ * ("the end anchor lands after the mount"), with the shelf it was found on. The
+ * immediate scroll can run before the taller content is mounted, so the anchor
+ * scrolls once more on the next frame unless the reader has dragged by then.
+ *
+ * Mutations that redden these: drop the deferred `scrollFeedToEnd` from
+ * `useFeedEndAnchor` (the first), or its `userTookOverScrollRef` check (the
+ * second).
+ */
+describe('ReadingViewFeed end anchor after the mount', () => {
+  beforeEach(async () => {
+    jest.useFakeTimers();
+    useReadingViewStore.getState().reset();
+    await act(() => {
+      useReadingViewStore.getState().applyCleanLines('sess-1', ['npm run lint', 'All checks passed'], false);
+    });
+    await renderFeed();
+    await act(async () => {
+      jest.runOnlyPendingTimers();
+    });
+    mockNativeScrollToEnd.mockClear();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('scrolls to the end again on the next frame', async () => {
+    await act(() => {
+      mockCapturedProps.current.onContentSizeChange?.();
+    });
+    expect(mockNativeScrollToEnd).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      jest.advanceTimersByTime(32);
+    });
+    expect(mockNativeScrollToEnd).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves the feed where a drag in that frame put it', async () => {
+    await act(() => {
+      mockCapturedProps.current.onContentSizeChange?.();
+    });
+    await act(() => {
+      mockCapturedProps.current.onScrollBeginDrag?.();
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(32);
+    });
+
+    expect(mockNativeScrollToEnd).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('ReadingViewFeed list data identity', () => {
   beforeEach(() => {
     capturedData.length = 0;

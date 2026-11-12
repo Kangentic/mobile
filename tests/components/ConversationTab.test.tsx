@@ -318,6 +318,63 @@ describe('ConversationTab', () => {
 });
 
 /**
+ * The 7-inch store shelf opened a session 147 points short of its end, with the
+ * permission card's Approve and Deny under the composer, every run. A
+ * content-size change reaches JS before the taller content is mounted, and
+ * Android runs the scroll command ahead of that mount, so the immediate
+ * re-anchor scrolls to the old bottom. The anchor scrolls once more on the next
+ * frame, after the mount, unless the reader has dragged by then.
+ *
+ * Mutations that redden these: drop the deferred `scrollFeedToEnd` from
+ * `useFeedEndAnchor` (the first), or its `userTookOverScrollRef` check (the
+ * second).
+ */
+describe('ConversationTab - the end anchor lands after the mount', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    seedStores();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  async function settleRender(): Promise<void> {
+    await renderTab();
+    await act(async () => {
+      jest.runOnlyPendingTimers();
+    });
+    mockNativeScrollToEnd.mockClear();
+  }
+
+  it('scrolls to the end again on the next frame', async () => {
+    await settleRender();
+
+    await fireEvent(screen.getByTestId('conversation-list'), 'contentSizeChange', 617, 2254);
+    expect(mockNativeScrollToEnd).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      jest.advanceTimersByTime(32);
+    });
+    expect(mockNativeScrollToEnd).toHaveBeenCalledTimes(2);
+    expect(mockNativeScrollToEnd).toHaveBeenLastCalledWith({ animated: false });
+  });
+
+  it('leaves the feed where a drag in that frame put it', async () => {
+    await settleRender();
+    const list = screen.getByTestId('conversation-list');
+
+    await fireEvent(list, 'contentSizeChange', 617, 2254);
+    await fireEvent(list, 'scrollBeginDrag');
+    await act(async () => {
+      jest.advanceTimersByTime(32);
+    });
+
+    expect(mockNativeScrollToEnd).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
  * Stands in for expo-router's `<Try catch={ErrorBoundary}>`, which is what
  * app/_layout.tsx's `ErrorBoundary` export installs around the whole route
  * tree. Without a boundary of its own, a feed throw lands here.

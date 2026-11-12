@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useRef, type RefObject } from 'react';
 import type { FlashListRef } from '@shopify/flash-list';
 import type { ScrollViewInstance } from 'react-native';
 
@@ -21,7 +22,7 @@ import type { ScrollViewInstance } from 'react-native';
  *
  * What the native call gives up is landing exactly on an unmeasured bottom: it
  * goes to the content height as estimated right now. Keep calling it as the
- * size settles, which is what both feeds' `onContentSizeChange` does.
+ * size settles, which is what both feeds do through `useFeedEndAnchor`.
  *
  * Never animated. Animated, Jump to latest left the feed blank for good on a
  * release build, with the button still showing, so the list never heard where
@@ -38,4 +39,49 @@ export function scrollFeedToEnd<Item>(list: FlashListRef<Item> | null): void {
   // type RN exports for one. Drop the cast when flash-list adopts the split.
   const nativeScroll = list?.getNativeScrollRef() as unknown as ScrollViewInstance | null | undefined;
   nativeScroll?.scrollToEnd({ animated: false });
+}
+
+/**
+ * The end anchor both chat feeds share: scroll to the end now, and once more on
+ * the next frame unless the reader has taken over by then.
+ *
+ * The second scroll is the one that lands. On Android's new architecture a
+ * content-size change reaches JS from the layout pass, before the taller content
+ * is mounted, and the mounting layer runs a view command AHEAD of the mount items
+ * it is dispatched with (`MountItemDispatcher.kt`). `scrollToEnd` reads the
+ * content view's height when it executes (`ReactScrollViewManager.kt`), so the
+ * immediate call can scroll to the OLD bottom, and no later size change comes to
+ * correct it. Measured on the 7-inch store shelf (1080x1920 at 280 dpi, dev
+ * client, 2026-11-12): the feed scrolled to 1249 against content 2107, the
+ * content grew to 2254 two milliseconds later, the immediate re-anchor moved
+ * nothing, and the session opened 147 points short with the permission card's
+ * buttons under the composer, every run. The mechanism is read from React
+ * Native's source; that the next frame is late enough is what the same shelf
+ * showed once this landed.
+ *
+ * The immediate call stays: it is right whenever the mount is already in, and
+ * the feed is held invisible while it settles anyway.
+ */
+export function useFeedEndAnchor<Item>(
+  listRef: RefObject<FlashListRef<Item> | null>,
+  userTookOverScrollRef: RefObject<boolean>,
+): () => void {
+  const pendingFrameRef = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (pendingFrameRef.current !== null) cancelAnimationFrame(pendingFrameRef.current);
+    },
+    [],
+  );
+
+  return useCallback(() => {
+    scrollFeedToEnd(listRef.current);
+    if (pendingFrameRef.current !== null) cancelAnimationFrame(pendingFrameRef.current);
+    pendingFrameRef.current = requestAnimationFrame(() => {
+      pendingFrameRef.current = null;
+      if (userTookOverScrollRef.current) return;
+      scrollFeedToEnd(listRef.current);
+    });
+  }, [listRef, userTookOverScrollRef]);
 }
