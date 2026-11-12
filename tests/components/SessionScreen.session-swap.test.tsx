@@ -15,7 +15,7 @@ import { useBoardStore } from '@/state/boardStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { useTerminalUiStore } from '@/state/terminalUiStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
-import { boardColumnFixture, boardTaskFixture, userEntryFixture } from '@/devsupport/desktopFixtures';
+import { boardColumnFixture, boardTaskFixture, streamSnapshotFixture, userEntryFixture } from '@/devsupport/desktopFixtures';
 import type { RetentionProbeVariant } from '@/devsupport/retentionProbe';
 import { closeSessionScreen, loadArchivedTasks, openSessionScreen } from '@/connection/actions';
 
@@ -392,6 +392,46 @@ describe('SessionScreen session binding', () => {
       });
 
       expectNoSwapSurface();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  /**
+   * A successor that binds inside the quiet window as QUEUED never paints (no
+   * PTY until a slot frees), so the veil would otherwise hold for as long as
+   * the queue does. The veil yields to the queued panel instead (protocol 0.28.0).
+   *
+   * Mutation seen failing: removing `!queuedPanelShown &&` from `showQuietVeil`
+   * in SessionScreen.tsx leaves `session-swap-veil` mounted over the panel.
+   */
+  it('yields the quiet veil to the queued panel when the successor binds queued', async () => {
+    jest.useFakeTimers();
+    try {
+      mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
+      seedTaskWithSession('sess-a');
+      await renderSessionScreen();
+      await act(() => {
+        seedTaskWithSession(null);
+      });
+      expectQuietVeilOnly();
+
+      await act(() => {
+        seedTaskWithSession('sess-q');
+        useActivityStore.getState().registerSession('sess-q', 'task-1', 'project-1');
+        useActivityStore
+          .getState()
+          .applySnapshot(
+            'sess-q',
+            'task-1',
+            'project-1',
+            streamSnapshotFixture({ activity: { state: 'idle', reason: null }, sessionStatus: 'queued' }),
+          );
+      });
+
+      expect(openSessionScreenMock).toHaveBeenCalledWith('sess-q');
+      expectNoSwapSurface();
+      expect(screen.getByTestId('session-queued-panel')).toBeTruthy();
     } finally {
       jest.useRealTimers();
     }

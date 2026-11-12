@@ -25,9 +25,7 @@ import { artifactNamesCaption } from '@/lib/taskArtifacts';
 import { RESUME_FAILED_MESSAGE, useResumeOffer } from './task/useResumeOffer';
 import { ARTIFACT_OPEN_FAILED_MESSAGE, openArtifactLink, useTaskArtifactLinks } from './artifacts/taskArtifactLinks';
 
-/** The hub's glyph size (ActionRow's icons), for the workflow's own mark. */
-const WORKFLOW_GLYPH_SIZE = 20;
-/** The same size, for the links rows' lucide glyphs. */
+/** The hub's glyph size (SheetActionRow's icons): the workflow's own mark and the links rows' lucide glyphs. */
 const ROW_GLYPH_SIZE = 20;
 
 /**
@@ -192,7 +190,10 @@ export function TaskActionsScreen(): React.JSX.Element {
     const link = artifactLinks[0];
     if (link === undefined) return;
     setErrorMessage(null);
-    openArtifactLink(link).catch(() => setErrorMessage(ARTIFACT_OPEN_FAILED_MESSAGE));
+    openArtifactLink(link).catch((error: unknown) => {
+      reportHandledError('task-artifact-open', error);
+      setErrorMessage(ARTIFACT_OPEN_FAILED_MESSAGE);
+    });
   }, [artifactLinks]);
   const onOpenArtifacts = useCallback(() => {
     if (!taskId) {
@@ -470,7 +471,7 @@ export function TaskActionsScreen(): React.JSX.Element {
         {workflow !== null ? (
           <SheetActionRow
             label="View workflow"
-            glyph={<WorkflowGlyph colorSlot={workflow.color_slot} size={WORKFLOW_GLYPH_SIZE} />}
+            glyph={<WorkflowGlyph colorSlot={workflow.color_slot} size={ROW_GLYPH_SIZE} />}
             onPress={onViewWorkflow}
             disabled={busy}
             testID="task-action-view-workflow"

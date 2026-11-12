@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { BoardTaskArtifactWire } from '@kangentic/protocol';
+import { BOARD_TASK_ARTIFACTS_WIRE_MAX, type BoardTaskArtifactWire } from '@kangentic/protocol';
 import { ARTIFACT_NAME_MAX_LENGTH, artifactNamesCaption, openableArtifacts } from '../../src/lib/taskArtifacts';
 
 function artifact(url: string, name: string): BoardTaskArtifactWire {
@@ -28,13 +28,42 @@ describe('openableArtifacts', () => {
     expect(links.map((link) => link.name)).toEqual(['B', 'A']);
   });
 
-  it('strips www, port and userinfo from the host and lowercases it', () => {
+  it('strips www and port from the host and lowercases it', () => {
+    const links = openableArtifacts([artifact('https://WWW.Figma.com/file/1', 'a'), artifact('https://example.com:8443/x', 'b')]);
+    expect(links.map((link) => link.host)).toEqual(['figma.com', 'example.com']);
+  });
+
+  // The caption is the one line the phone derives itself, and a person taps on
+  // the strength of it. Each of these authorities is one the OS openers read
+  // differently from a string split (WHATWG reads `\` as `/`, so Chrome opens
+  // evil.example while the caption would say trusted.example), so the link is
+  // left out rather than drawn under a host it may not open.
+  it('drops a link whose authority an opener could read as another host', () => {
     const links = openableArtifacts([
-      artifact('https://WWW.Figma.com/file/1', 'a'),
-      artifact('https://example.com:8443/x', 'b'),
-      artifact('https://user:pw@Claude.AI/chat', 'c'),
+      artifact('https://evil.example\\@trusted.example/x', 'Backslash decoy'),
+      artifact('https://user:pw@claude.ai/chat', 'Userinfo'),
+      artifact('https://exa\tmple.com/x', 'Tab'),
+      artifact('https://exa mple.com/x', 'Space'),
+      artifact('https://example.com\u0000/x', 'Control'),
     ]);
-    expect(links.map((link) => link.host)).toEqual(['figma.com', 'example.com', 'claude.ai']);
+    expect(links).toEqual([]);
+  });
+
+  it('keeps an @ or a backslash that sits past the authority', () => {
+    const links = openableArtifacts([artifact('https://example.com/people/@someone', 'At'), artifact('https://example.com/a\\b', 'Slash')]);
+    expect(links.map((link) => link.host)).toEqual(['example.com', 'example.com']);
+  });
+
+  it('drops a link with no host to show', () => {
+    expect(openableArtifacts([artifact('https:///path', 'No host'), artifact('https://:8443/x', 'Port only')])).toEqual([]);
+  });
+
+  it('keeps at most the protocol limit of links, in order', () => {
+    const many = Array.from({ length: BOARD_TASK_ARTIFACTS_WIRE_MAX + 5 }, (_, index) => artifact(`https://example.com/${index}`, `Link ${index}`));
+    const links = openableArtifacts(many);
+    expect(links).toHaveLength(BOARD_TASK_ARTIFACTS_WIRE_MAX);
+    expect(links[0].name).toBe('Link 0');
+    expect(links[BOARD_TASK_ARTIFACTS_WIRE_MAX - 1].name).toBe(`Link ${BOARD_TASK_ARTIFACTS_WIRE_MAX - 1}`);
   });
 
   it('falls back to the host when the name is blank', () => {

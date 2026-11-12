@@ -4,16 +4,13 @@ import { Gauge } from 'lucide-react-native';
 import type { BoardColumnWire, BoardTaskQueuePlaceWire } from '@kangentic/protocol';
 import { Row, Stack, Text, useTheme } from '@/components';
 import { getColumnIcon } from '@/components/board/columnIcons';
-import { hexWithAlpha } from '@/components/theme/color';
+import { TINTED_PILL_EDGE_ALPHA, TINTED_PILL_FILL_ALPHA, hexWithAlpha } from '@/components/theme/color';
 import { queuedCount, queuedHeading, queuedReason } from '@/lib/queuePlace';
 
 /** The desktop's reason-line glyph size (QueueReason: Gauge / SwimlaneIcon at 16). */
 const REASON_GLYPH_SIZE = 16;
 /** The desktop's column dot (`w-2.5 h-2.5`), for a column with no icon. */
 const REASON_DOT_SIZE = 10;
-/** The desktop's tinted pill (TINTED_PILL_FILL / TINTED_PILL_EDGE): 14% fill, 35% edge, of the text color. */
-const COUNT_PILL_FILL_ALPHA = 0.14;
-const COUNT_PILL_EDGE_ALPHA = 0.35;
 /** Where the heading sits: the desktop puts it 14% down its window; on a phone's lens that is about 64 pt. */
 const PANEL_TOP_INSET = 64;
 
@@ -63,8 +60,9 @@ export function QueuedPanel({
                 {
                   borderRadius: theme.radii.full,
                   paddingHorizontal: theme.spacing.sm + 2,
-                  backgroundColor: hexWithAlpha(countColor, COUNT_PILL_FILL_ALPHA),
-                  borderColor: hexWithAlpha(countColor, COUNT_PILL_EDGE_ALPHA),
+                  // The desktop's tinted pill, of the text color.
+                  backgroundColor: hexWithAlpha(countColor, TINTED_PILL_FILL_ALPHA),
+                  borderColor: hexWithAlpha(countColor, TINTED_PILL_EDGE_ALPHA),
                 },
               ]}
             >

@@ -932,6 +932,40 @@ describe('TaskCard', () => {
     });
   });
 
+  /**
+   * The priority pill spends its share of the labels row, so a card with one
+   * shows fewer labels than the same card without. Mutations seen failing:
+   * `FALLBACK_LABEL_LIMIT - (priorityShown ? 1 : 0)` reverted to
+   * `FALLBACK_LABEL_LIMIT` (fallback test), and `labelsRowWidth -
+   * priorityBadgeReserve(...)` reverted to `labelsRowWidth` (measured test).
+   */
+  describe('label overflow beside the priority pill', () => {
+    const manyLabels = ['backend', 'notifications', 'migration', 'breaking-change', 'p0'];
+    const URGENT = { label: 'Urgent', color: '#ef4444' };
+
+    it('shows one label fewer than the fallback limit before the row is measured', async () => {
+      await renderTaskCard({ priorityLevel: URGENT, task: boardTaskFixture({ labels: manyLabels }) });
+
+      expect(screen.getByText('backend')).toBeTruthy();
+      expect(screen.getByText('notifications')).toBeTruthy();
+      expect(screen.queryByText('migration')).toBeNull();
+      expect(screen.getByText('+3')).toBeTruthy();
+    });
+
+    it('takes the pill reserve off the measured width', async () => {
+      await renderTaskCard({ priorityLevel: URGENT, task: boardTaskFixture({ labels: manyLabels }) });
+
+      const labelsRow = findAncestorWithLayoutHandler(screen.getByText('backend'));
+      // At 300px two labels fit without a priority (see 'label overflow'). The
+      // 84px reserve leaves 216px, which fits only the first.
+      await fireEvent(labelsRow, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 300, height: 24 } } });
+
+      expect(screen.getByText('backend')).toBeTruthy();
+      expect(screen.queryByText('notifications')).toBeNull();
+      expect(screen.getByText('+4')).toBeTruthy();
+    });
+  });
+
   describe('the elapsed-wait label (in the band, since the card-composition review)', () => {
     const MINUTE = 60_000;
     const BODY_HEIGHT = 32;

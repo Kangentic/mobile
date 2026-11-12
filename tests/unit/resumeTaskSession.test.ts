@@ -467,6 +467,81 @@ describe('resumeTaskOnOpen', () => {
     expect(attemptFor()).toMatchObject({ phase: 'resuming', origin: 'button' });
   });
 
+  /**
+   * The open's answer arrives after the person may already have pressed Resume.
+   * Clearing is guarded on the attempt still being the one this open started, so
+   * a newer button attempt survives a late not-eligible or rejection.
+   * Mutation seen failing: dropping `&& attempt.startedAt === startedAt` from
+   * isCurrentResumeAttempt, which cleared the newer button attempt.
+   */
+  describe('a newer attempt replacing the open while its request is pending', () => {
+    let settleRequest: { resolve: (value: { ok: true; outcome: 'not-eligible' }) => void; reject: (reason: Error) => void };
+
+    const startPendingOpen = (): Promise<void> => {
+      startSession.mockReturnValue(
+        new Promise((resolve, reject) => {
+          settleRequest = { resolve, reject };
+        }),
+      );
+      return resumeTaskOnOpen('task-1', 'project-1');
+    };
+
+    const replaceWithButtonAttempt = (): number => {
+      const laterTime = Date.now() + 5_000;
+      useResumeStore.getState().clear('task-1');
+      useResumeStore.getState().markResuming('task-1', laterTime, 'button');
+      return laterTime;
+    };
+
+    it('keeps the newer button attempt when the open answers not-eligible', async () => {
+      const pending = startPendingOpen();
+      const laterTime = replaceWithButtonAttempt();
+
+      settleRequest.resolve({ ok: true, outcome: 'not-eligible' });
+      await pending;
+
+      expect(attemptFor()).toEqual({ phase: 'resuming', startedAt: laterTime, origin: 'button' });
+    });
+
+    it('keeps the newer button attempt when the open request rejects', async () => {
+      const pending = startPendingOpen();
+      const laterTime = replaceWithButtonAttempt();
+
+      settleRequest.reject(new Error('Not connected'));
+      await pending;
+
+      expect(attemptFor()).toEqual({ phase: 'resuming', startedAt: laterTime, origin: 'button' });
+    });
+  });
+
+  describe('after the desktop answers live', () => {
+    const establishedConnection = { controller: { session: { isEstablished: true } }, verbs: { label: 'verb client' } };
+    const subscriptions = { label: 'subscription manager' };
+
+    /** The refresh is a no-op without an established connection, so connect one or "refreshed once" could never be true. */
+    beforeEach(() => {
+      getActiveConnection.mockReturnValue(establishedConnection);
+      requireSubscriptions.mockReturnValue(subscriptions);
+      runBootstrap.mockResolvedValue(undefined);
+      startSession.mockResolvedValue({ ok: true, outcome: 'live' });
+    });
+
+    /** Mutation seen failing: removing the `if (outcome === 'live') void refreshSnapshots()` line. */
+    it('refreshes the snapshots once, and clears (never fails) at the wait bound', async () => {
+      publishRow(PAUSED_ROW);
+
+      await resumeTaskOnOpen('task-1', 'project-1');
+
+      expect(runBootstrap).toHaveBeenCalledTimes(1);
+      expect(runBootstrap).toHaveBeenCalledWith(establishedConnection.verbs, subscriptions);
+      expect(attemptFor()).toMatchObject({ phase: 'resuming', origin: 'open' });
+
+      vi.advanceTimersByTime(RESUME_WAIT_MS);
+
+      expect(attemptFor()).toBeUndefined();
+    });
+  });
+
   describe('after the desktop answers starting', () => {
     beforeEach(() => {
       startSession.mockResolvedValue({ ok: true, outcome: 'starting' });

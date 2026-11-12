@@ -765,12 +765,17 @@ describe('TaskActionsScreen', () => {
 
       expect(mockOpenURL).toHaveBeenCalledWith('https://www.figma.com/file/abc');
       expect(screen.queryByTestId('task-action-error')).toBeNull();
+      expect(mockReportHandledError).not.toHaveBeenCalledWith('task-artifact-open', expect.anything());
     });
 
-    /** Mutation seen failing: the catch removed from onOpenOnlyArtifact (no error line). */
-    it('says "Could not open the link" and stays open when the OS refuses it', async () => {
+    /**
+     * Mutation seen failing: the catch removed from onOpenOnlyArtifact (no
+     * error line), and the door call removed (the refusal never reported).
+     */
+    it('says "Could not open the link", reports it, and stays open when the OS refuses it', async () => {
       seedBoard({ withDoneColumn: true, task: { artifacts: [FIGMA] } });
-      mockOpenURL.mockRejectedValueOnce(new Error('No app can handle this link'));
+      const refusal = new Error('No app can handle this link');
+      mockOpenURL.mockRejectedValueOnce(refusal);
       await renderTaskActions();
 
       await act(async () => {
@@ -779,6 +784,7 @@ describe('TaskActionsScreen', () => {
 
       expect(screen.getByTestId('task-action-error')).toHaveTextContent('Could not open the link');
       expect(mockBack).not.toHaveBeenCalled();
+      expect(mockReportHandledError).toHaveBeenCalledWith('task-artifact-open', refusal);
     });
 
     /** Mutation seen failing: the several-links arm replaced by the single-link arm (testID task-action-artifact where -artifacts was expected). */

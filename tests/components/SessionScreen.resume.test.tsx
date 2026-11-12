@@ -160,6 +160,7 @@ function seedBoard({
   snapshotAt = 0,
   resumeOnOpenOffered = false,
   queuePlace = null,
+  startBlockedReason = null,
 }: {
   sessionId?: string | null;
   resumable?: boolean;
@@ -170,6 +171,7 @@ function seedBoard({
   snapshotAt?: number;
   resumeOnOpenOffered?: boolean;
   queuePlace?: BoardTaskWire['queue_place'];
+  startBlockedReason?: BoardTaskWire['start_blocked_reason'];
 } = {}): void {
   useBoardStore.setState({
     projects: [{ id: 'project-1', name: 'Alpha' }],
@@ -187,6 +189,7 @@ function seedBoard({
             spawn_progress: spawnProgress,
             workflow,
             queue_place: queuePlace,
+            start_blocked_reason: startBlockedReason,
           }),
         },
         snapshotAt,
@@ -1490,6 +1493,43 @@ describe('SessionScreen resume on open', () => {
     expect(screen.getByText('Resume session')).toBeTruthy();
     expect(screen.queryByTestId('session-resume-error')).toBeNull();
     expect(screen.getByTestId('session-resume-button').props.accessibilityState).toEqual(expect.objectContaining({ disabled: false }));
+  });
+});
+
+/**
+ * The blocked-start tip (protocol 0.28.0): the board row's `start_blocked_reason`
+ * reaches the Resume panel through SessionScreen's selector and prop pass.
+ */
+describe('SessionScreen Resume blocked-start tip', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsFocused = true;
+    mockFocusListeners.clear();
+    useBoardStore.getState().reset();
+    useActivityStore.getState().reset();
+    useResumeStore.setState({ byTaskId: {} });
+    useSettingsStore.setState({ preferredSessionLensByTaskId: {} });
+  });
+
+  /**
+   * Mutation seen failing: `startBlockedTip={null}` on the ResumePanel in
+   * SessionScreen.tsx leaves `session-resume-start-blocked` absent.
+   */
+  it('shows the worktree tip under Resume for a worktree-missing start block', async () => {
+    seedBoard({ sessionId: null, resumable: true, paused: true, startBlockedReason: 'worktree-missing' });
+    await renderSessionScreen();
+
+    expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
+    expect(screen.getByTestId('session-resume-start-blocked')).toBeTruthy();
+    expect(screen.getByText('Its worktree folder is gone. Resume makes it again from the branch.')).toBeTruthy();
+  });
+
+  it('shows no tip for a reason this build does not know', async () => {
+    seedBoard({ sessionId: null, resumable: true, paused: true, startBlockedReason: 'something-new' as never });
+    await renderSessionScreen();
+
+    expect(screen.getByTestId('session-resume-panel')).toBeTruthy();
+    expect(screen.queryByTestId('session-resume-start-blocked')).toBeNull();
   });
 });
 

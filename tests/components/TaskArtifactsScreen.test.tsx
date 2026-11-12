@@ -24,6 +24,11 @@ jest.mock('expo-linking', () => ({
   openURL: (url: string) => mockOpenURL(url),
 }));
 
+const mockReportHandledError = jest.fn();
+jest.mock('@/observability/crashReporting', () => ({
+  reportHandledError: (site: string, error: unknown) => mockReportHandledError(site, error),
+}));
+
 const FIGMA: BoardTaskArtifactWire = { url: 'https://www.figma.com/file/abc', name: 'Checkout design' };
 const PLAN: BoardTaskArtifactWire = { url: 'https://claude.ai/chat/xyz', name: 'Plan' };
 const INSECURE: BoardTaskArtifactWire = { url: 'http://example.com/page', name: 'Insecure' };
@@ -116,18 +121,26 @@ describe('TaskArtifactsScreen', () => {
     expect(mockOpenURL).toHaveBeenCalledWith('https://claude.ai/chat/xyz');
     expect(mockBack).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId('task-artifacts-error')).toBeNull();
+    expect(mockReportHandledError).not.toHaveBeenCalled();
   });
 
-  /** Mutation seen failing: the rejection handler removed (no error line; back still called by a then-only chain). */
-  it('says "Could not open the link" and stays open when the OS refuses the link', async () => {
+  /**
+   * Mutation seen failing: the rejection handler removed (no error line; back
+   * still called by a then-only chain), and the door call removed (the
+   * refusal shown to the person never reported).
+   */
+  it('says "Could not open the link", reports it, and stays open when the OS refuses the link', async () => {
     seedLiveTask([FIGMA, PLAN]);
-    mockOpenURL.mockRejectedValueOnce(new Error('No app can handle this link'));
+    const refusal = new Error('No app can handle this link');
+    mockOpenURL.mockRejectedValueOnce(refusal);
     await renderSheet();
 
     await pressRow(0);
 
     expect(screen.getByTestId('task-artifacts-error')).toHaveTextContent('Could not open the link');
     expect(mockBack).not.toHaveBeenCalled();
+    expect(mockReportHandledError).toHaveBeenCalledTimes(1);
+    expect(mockReportHandledError).toHaveBeenCalledWith('task-artifact-open', refusal);
   });
 
   it('clears the error line when the next press is tried', async () => {
