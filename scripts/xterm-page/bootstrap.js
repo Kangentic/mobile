@@ -24,9 +24,13 @@
           historyDragAnchorY = touchEvent.touches[0].clientY;
           historyDragStartX = touchEvent.touches[0].clientX;
           historyDragAxis = null;
+          // A finger on a link tints it (links.js), so the user sees what a
+          // tap would open before lifting.
+          pressLinkAt(tapStartX, tapStartY);
         } else {
           tapDirty = true;
           historyDragAnchorY = null;
+          releaseLinkPress();
         }
       }, { passive: true });
       container.addEventListener('touchmove', function (touchEvent) {
@@ -37,11 +41,15 @@
         consumeHistoryDrag(touchEvent);
         if (tapDirty || touchEvent.touches.length !== 1) {
           tapDirty = true;
+          releaseLinkPress();
           return;
         }
         var deltaX = touchEvent.touches[0].clientX - tapStartX;
         var deltaY = touchEvent.touches[0].clientY - tapStartY;
-        if (deltaX * deltaX + deltaY * deltaY > TAP_SLOP_PX * TAP_SLOP_PX) tapDirty = true;
+        if (deltaX * deltaX + deltaY * deltaY > TAP_SLOP_PX * TAP_SLOP_PX) {
+          tapDirty = true;
+          releaseLinkPress();
+        }
       }, { passive: true });
       // A cancel is the browser TAKING the gesture (it decided the drag is a
       // native pan). Without a handler the anchor was left dangling, so the
@@ -53,7 +61,13 @@
         tapDirty = true;
         // A cancelled gesture is the browser or RN taking it - never a flick.
         dragSamples = [];
+        releaseLinkPress();
       }, { passive: true });
+      // NOT passive: a tap on a link cancels its touchend (postCleanTap), so
+      // no compatibility mouse event follows it into xterm or the focus click
+      // below. Not measured, read from the DOM's passive-listener model:
+      // touchend is not one of the events a browser waits on before it
+      // scrolls (touchstart, touchmove and wheel are), so this cannot delay a pan.
       container.addEventListener('touchend', function (touchEvent) {
         touchCounts.end += 1;
         if (touchEvent.touches.length > 0) return;
@@ -62,10 +76,11 @@
         maybeStartHistoryFling();
         historyDragAnchorY = null;
         if (!tapDirty && Date.now() - tapStartAt <= TAP_MAX_MS) {
-          postToHost({ type: 'tapped' });
+          postCleanTap(touchEvent);
         }
+        releaseLinkPress();
         tapDirty = true;
-      }, { passive: true });
+      }, { passive: false });
       container.addEventListener('click', function () {
         if (terminal) terminal.focus();
       });

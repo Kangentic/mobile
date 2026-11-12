@@ -24,6 +24,7 @@ describe('host -> terminal round-trip', () => {
       preservePinch: false,
       fitStrategy: 'computed',
       longPressMenuGuard: true,
+      terminalLinks: true,
     };
     expect(decodeHostMessage(encodeHostMessage(knownDims))).toEqual(knownDims);
 
@@ -41,8 +42,40 @@ describe('host -> terminal round-trip', () => {
       preservePinch: true,
       fitStrategy: 'measured',
       longPressMenuGuard: false,
+      terminalLinks: false,
     };
     expect(decodeHostMessage(encodeHostMessage(legacy))).toEqual(legacy);
+  });
+
+  /**
+   * Tappable links are on unless the host explicitly turns them off (the
+   * retention probe's control arm), read exactly as the page reads it
+   * (`initMessage.terminalLinks !== false` in lifecycle.js), so a host that
+   * predates the field still gets links.
+   *
+   * Mutation that reddens this: decode the field as `=== true`.
+   */
+  it('keeps terminal links on unless the init says false', () => {
+    const base = {
+      type: 'init',
+      seq: 9,
+      scrollback: '',
+      cols: 80,
+      rows: 24,
+      fitHeightPx: null,
+      theme: {},
+      cleanFeed: false,
+      holdFrame: false,
+      preservePinch: false,
+    };
+    const decodeLinks = (overrides: Record<string, unknown>): boolean | undefined => {
+      const decoded = decodeHostMessage(JSON.stringify({ ...base, ...overrides }));
+      return decoded?.type === 'init' ? decoded.terminalLinks : undefined;
+    };
+    expect(decodeLinks({})).toBe(true);
+    expect(decodeLinks({ terminalLinks: false })).toBe(false);
+    expect(decodeLinks({ terminalLinks: 0 })).toBe(true);
+    expect(decodeLinks({ terminalLinks: 'false' })).toBe(true);
   });
 
   /**
@@ -418,6 +451,21 @@ describe('terminal -> host round-trip', () => {
     expect(decodeTerminalMessage(encodeTerminalMessage(tapped))).toEqual(tapped);
   });
 
+  /**
+   * The link a tap opened crosses as the page found it. The decoder only
+   * checks it is a string: the scheme is the host's https check to refuse
+   * (TerminalPane), so a non-https URL still decodes and is dropped THERE,
+   * which the component test pins.
+   */
+  it('round-trips an open-link message, whatever URL the page found', () => {
+    const openLink: TerminalToHostMessage = { type: 'open-link', url: 'https://github.com/kangentic/kangentic-mobile/pull/146' };
+    expect(decodeTerminalMessage(encodeTerminalMessage(openLink))).toEqual(openLink);
+    expect(decodeTerminalMessage(JSON.stringify({ type: 'open-link', url: 'javascript:alert(1)' }))).toEqual({
+      type: 'open-link',
+      url: 'javascript:alert(1)',
+    });
+  });
+
   it('round-trips a painted report, with and without an init seq to attribute it to', () => {
     const attributed: TerminalToHostMessage = { type: 'painted', seq: 4, blank: false };
     expect(decodeTerminalMessage(encodeTerminalMessage(attributed))).toEqual(attributed);
@@ -464,6 +512,12 @@ describe('decodeTerminalMessage - malformed input', () => {
     expect(decodeTerminalMessage('{"type":"clean-lines","lines":["a",1],"reset":false}')).toBeNull();
     expect(decodeTerminalMessage('{"type":"clean-lines","lines":"a","reset":false}')).toBeNull();
     expect(decodeTerminalMessage('{"type":"clean-lines","lines":[]}')).toBeNull();
+  });
+
+  it('returns null for an open-link message with a missing or non-string url', () => {
+    expect(decodeTerminalMessage('{"type":"open-link"}')).toBeNull();
+    expect(decodeTerminalMessage('{"type":"open-link","url":7}')).toBeNull();
+    expect(decodeTerminalMessage('{"type":"open-link","url":{"href":"https://example.com"}}')).toBeNull();
   });
 
   it('returns null for a painted report whose blank flag is missing or not a boolean', () => {

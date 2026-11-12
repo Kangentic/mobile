@@ -105,6 +105,12 @@ export type HostToTerminalMessage =
        * 1Password). False only under the retention probe's control arm.
        */
       longPressMenuGuard: boolean;
+      /**
+       * True underlines the https links on screen and lets a tap open one
+       * (scripts/xterm-page/links.js, which posts 'open-link'). False only
+       * under the retention probe's control arm, for the scan's CPU A/B.
+       */
+      terminalLinks: boolean;
     }
   | { type: 'write'; data: string }
   | { type: 'set-font-size'; fontSizePx: number }
@@ -211,6 +217,13 @@ export type TerminalToHostMessage =
   | { type: 'clean-lines'; lines: string[]; reset: boolean }
   /** A clean tap on the terminal (no drag, no pinch): the host toggles the soft keyboard for direct typing. */
   | { type: 'tapped' }
+  /**
+   * A clean tap on a link the page found in the screen text (sent INSTEAD of
+   * 'tapped'). The URL is agent-printed text, so the host opens it only
+   * through its own https check; the page's matching rule is a courtesy, not
+   * the boundary.
+   */
+  | { type: 'open-link'; url: string }
   /**
    * The first PAINT after an init: reported once when the init's seed has
    * flushed (blank or not), then once more on the first write that leaves
@@ -344,6 +357,9 @@ export function decodeTerminalMessage(raw: string): TerminalToHostMessage | null
   if (parsedObject.type === 'tapped') {
     return { type: 'tapped' };
   }
+  if (parsedObject.type === 'open-link' && typeof parsedObject.url === 'string') {
+    return { type: 'open-link', url: parsedObject.url };
+  }
   if (parsedObject.type === 'painted' && typeof parsedObject.blank === 'boolean') {
     return {
       type: 'painted',
@@ -415,6 +431,8 @@ export function decodeHostMessage(raw: string): HostToTerminalMessage | null {
       fitStrategy: parsedObject.fitStrategy === 'measured' ? 'measured' : 'computed',
       // Likewise: only an explicit false turns the guard off.
       longPressMenuGuard: parsedObject.longPressMenuGuard !== false,
+      // And the links.
+      terminalLinks: parsedObject.terminalLinks !== false,
     };
   }
   return null;

@@ -2,6 +2,7 @@ import React from 'react';
 import {
   AppState,
   DeviceEventEmitter,
+  Linking,
   StyleSheet,
   type AppStateStatus,
   type NativeEventSubscription,
@@ -1222,6 +1223,33 @@ describe('TerminalPane (faithful mirror)', () => {
         expect(probedInit?.type === 'init' ? probedInit.longPressMenuGuard : 'no init').toBe(false);
         // The arm moves nothing else.
         expect(probedInit?.type === 'init' ? probedInit.fitStrategy : 'no init').toBe('computed');
+      } finally {
+        mockRetentionProbeVariant.current = 'off';
+      }
+    });
+
+    /**
+     * Tappable links (task #144) ship on, and only the probe's control arm
+     * turns the page's scan off, so the CPU A/B compares the scan alone.
+     *
+     * Mutation that reddens this: send the field as the probe check without
+     * the negation, or drop it.
+     */
+    it('inits with terminal links on, and off only under the probe arm', async () => {
+      retainTerminal('sess-1');
+      seedScrollback('sess-1', 'hello');
+      await renderPaneAndReady();
+      const shippedInit = decodedPosts().find((message) => message?.type === 'init');
+      expect(shippedInit?.type === 'init' ? shippedInit.terminalLinks : 'no init').toBe(true);
+
+      mockRetentionProbeVariant.current = 'no-terminal-links';
+      try {
+        webViewMock.__postMessageMock.mockClear();
+        await postFromWebView(JSON.stringify({ type: 'ready' }));
+        const probedInit = decodedPosts().find((message) => message?.type === 'init');
+        expect(probedInit?.type === 'init' ? probedInit.terminalLinks : 'no init').toBe(false);
+        // The arm moves nothing else.
+        expect(probedInit?.type === 'init' ? probedInit.longPressMenuGuard : 'no init').toBe(true);
       } finally {
         mockRetentionProbeVariant.current = 'off';
       }
@@ -2472,6 +2500,81 @@ describe('TerminalPane (faithful mirror)', () => {
 
       expect(directKeyInputMock.__toggleMock).not.toHaveBeenCalled();
       expect(directKeyInputMock.__focusMock).not.toHaveBeenCalled();
+    });
+
+    /**
+     * A tap on a link (task #144) opens it through the OS opener, and is
+     * nothing else: no keyboard, no write. It is NOT behind the input gate,
+     * because opening a link sends nothing to the PTY, so a Command Terminal
+     * whose agent is not classified yet still opens one.
+     *
+     * Mutation that reddens this: move the open-link branch below the
+     * `inputEnabledRef` check.
+     */
+    it.each([true, false])('opens a tapped https link with input %s, writing nothing', async (inputEnabled) => {
+      const openUrl = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+      try {
+        retainTerminal('sess-1');
+        await renderGatedPaneAndReady(inputEnabled);
+
+        await postFromWebView(
+          JSON.stringify({ type: 'open-link', url: 'https://github.com/kangentic/kangentic-mobile/pull/146' }),
+        );
+
+        expect(openUrl).toHaveBeenCalledTimes(1);
+        expect(openUrl).toHaveBeenCalledWith('https://github.com/kangentic/kangentic-mobile/pull/146');
+        expect(actionsMock.writeTerminal).not.toHaveBeenCalled();
+        expect(directKeyInputMock.__toggleMock).not.toHaveBeenCalled();
+      } finally {
+        openUrl.mockRestore();
+      }
+    });
+
+    /**
+     * The URL is agent-printed text, and the pane's https check is the
+     * boundary: the page's own rule is only there so it underlines nothing a
+     * tap would refuse. A page that posted anything else (a bug, or a page
+     * built from an older rule) opens nothing.
+     *
+     * Mutation that reddens this: drop the httpsUrlOrNull check.
+     */
+    it.each([
+      'http://localhost:5173/',
+      'javascript:alert(1)',
+      'intent://scan#Intent;end',
+      'file:///etc/hosts',
+      'kangentic-pair://demo',
+      'https://',
+    ])('refuses to open %s', async (url) => {
+      const openUrl = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+      try {
+        retainTerminal('sess-1');
+        await renderGatedPaneAndReady(true);
+
+        await postFromWebView(JSON.stringify({ type: 'open-link', url }));
+
+        expect(openUrl).not.toHaveBeenCalled();
+        expect(actionsMock.writeTerminal).not.toHaveBeenCalled();
+        expect(directKeyInputMock.__toggleMock).not.toHaveBeenCalled();
+      } finally {
+        openUrl.mockRestore();
+      }
+    });
+
+    it('swallows an opener refusal, since the terminal has no error surface', async () => {
+      const openUrl = jest.spyOn(Linking, 'openURL').mockRejectedValue(new Error('no handler'));
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        retainTerminal('sess-1');
+        await renderGatedPaneAndReady(true);
+
+        await postFromWebView(JSON.stringify({ type: 'open-link', url: 'https://example.com/a' }));
+
+        expect(openUrl).toHaveBeenCalledTimes(1);
+      } finally {
+        openUrl.mockRestore();
+        warn.mockRestore();
+      }
     });
 
     it('hands the gate to the direct-key field, enabled and held alike', async () => {

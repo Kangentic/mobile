@@ -120,6 +120,12 @@
       // cellFit.js): the black-pane fix's before/after, read in place.
       fitStrategy: fitStrategy,
       lastFitChain: lastFitChainStats === null ? null : JSON.parse(JSON.stringify(lastFitChainStats)),
+      // Tappable links (links.js): whether they are on, what the screen scan
+      // costs (the release-build A/B reads lastScanMs and totalScanMs against
+      // the probe arm with links off), how many show, and how many taps opened one.
+      terminalLinksEnabled: terminalLinksEnabled,
+      linkStats: JSON.parse(JSON.stringify(linkStats)),
+      linkPressed: pressedLink !== null,
     };
   }
 
@@ -151,6 +157,10 @@
     setFitStrategy: function (strategy) {
       fitStrategy = strategy === 'measured' ? 'measured' : 'computed';
       return terminalProbeState();
+    },
+    // The links on screen as the underline and the tap hit test see them.
+    links: function () {
+      return JSON.parse(JSON.stringify(visibleTerminalLinks()));
     },
     /**
      * What consumeHistoryDrag WOULD compute for a vertical delta, with no side

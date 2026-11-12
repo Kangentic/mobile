@@ -95,6 +95,11 @@
     // touches it directly; focus is always terminal.focus().
     longPressMenuGuard = initMessage.longPressMenuGuard !== false;
     document.body.classList.toggle('long-press-guard', longPressMenuGuard);
+    // Tappable links (links.js), off only for the retention probe's control
+    // arm. Every init starts with no underline and no press: the next render
+    // draws the new grid's links.
+    terminalLinksEnabled = initMessage.terminalLinks !== false;
+    clearTerminalLinks();
     // The page owns the font: the reference cell for this grid (or the cell
     // it already converged on), or the pinch. Capped either way, which on the
     // legacy no-dims path is the only guard between a wide grid and the GPU
@@ -189,11 +194,24 @@
       scrollback: 2000,
       convertEol: false,
       cursorBlink: false,
+      // An OSC 8 hyperlink does nothing. The desktop strips them from this
+      // feed, but an older desktop or a seed can still carry one, and xterm's
+      // default handler would confirm() and then window.open the URI INSIDE
+      // this WebView, past the host's https check and with a destination its
+      // label need not show. A printed URL is still a link (links.js).
+      linkHandler: { activate: function () {} },
     });
     resetWebglState();
     terminal.open(document.getElementById('terminal'));
     attachWebgl();
     reportRenderer();
+    // xterm renders at most once a frame (read from its RenderDebouncer, which
+    // batches every refresh into one requestAnimationFrame), and every change
+    // to what the screen shows (a write, a scroll, a resize, a reset) ends in
+    // a render, so this is when the link underlines are redrawn.
+    terminal.onRender(function () {
+      refreshTerminalLinks();
+    });
     // Android predictive keyboards buffer composition text against xterm's
     // hidden textarea, echoing late and breaking Backspace - turn every
     // assist off so keys route straight through.

@@ -54,6 +54,7 @@
       historyDragAnchorY = null;
       historyDragAxis = null;
       tapDirty = true;
+      releaseLinkPress();
       stopHistoryFling();
       applyVerticalOffset(0);
       // And it ALWAYS lands on the fitted view: the pinch goes, and so does
@@ -96,6 +97,8 @@
       else pinchMessageCounts.activeFalse += 1;
       pinchActive = message.active === true;
       if (pinchActive) stopHistoryFling();
+      // A pinch is never a tap, so a link the first finger landed on is not pressed.
+      releaseLinkPress();
       // A finished pinch leaves this page's touch bookkeeping unreliable (it
       // may never have seen touchend for the second finger), so drop the drag
       // state outright. The next move re-anchors on whichever finger is still
