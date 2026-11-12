@@ -24,8 +24,8 @@
  *    every Move to column target is a column that exists.
  * 7. Every Text match row's routing (type, target column, run cap) is pinned in one table, and the
  *    table must list exactly the rows that carry a finalLine, so a new or removed row fails by name.
- * 8. Executing ends on the unconditional Apply findings message, so the move that ends the group
- *    is checked before the message is sent.
+ * 8. Executing ends on the Apply findings message, so the move that ends the group is checked
+ *    before the message is sent, and its Condition skips a turn that ends on the design line.
  */
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
@@ -212,12 +212,15 @@ describe('board turn-end contracts: Executing', () => {
     expectTextIn(applyFindingsMessage, sourceName, 'final line, alone');
   });
 
-  it('ends on Apply findings, the unconditional catch-all checked after the On to Code Review move', () => {
+  // A Text match cannot say "unless", so the design-line skip is an Automation agent Condition until
+  // the desktop can negate one. Without it, a turn that ends on the design line both notifies and
+  // asks the agent to apply findings, and the user's design review queues behind that turn.
+  it('ends on Apply findings, the catch-all checked after the On to Code Review move, skipped on the design line', () => {
     const rows = turnEndRows('Executing');
     const applyFindings = turnEndRow('Executing', 'Apply findings');
     expect(applyFindings.type).toBe('send_message');
     expect(applyFindings.finalLine).toBeUndefined();
-    expect(applyFindings.condition).toBeUndefined();
+    expectTextIn(applyFindings.condition ?? '', 'the Apply findings condition', `"${finalLineOf('Executing', 'Design hold')}"`);
     expect(rows[rows.length - 1].name).toBe('Apply findings');
   });
 });
