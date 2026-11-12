@@ -161,6 +161,16 @@ const MOCK_PAUSED_TASK_ID = 'mock-task-paused';
  */
 const MOCK_QUEUED_SESSION_ID = 'mock-session-queued';
 const MOCK_QUEUED_TASK_ID = 'mock-task-queued';
+/**
+ * A queued RESUME, the queue's other shape since desktop d0aff06d4 (one agent
+ * per column): a running agent moved into a full column pauses, and the
+ * desktop queues a resume of the same conversation for its turn. Unlike the
+ * placeholder above, this one HAS a transcript, so the subscribe pushes its
+ * `message-preview` right behind the snapshot, which once read as proof the
+ * queue had promoted it (task #141).
+ */
+const MOCK_QUEUED_RESUME_SESSION_ID = 'mock-session-queued-resume';
+const MOCK_QUEUED_RESUME_TASK_ID = 'mock-task-queued-resume';
 const PERMISSION_TOOL_ID = 'mock-tool-2';
 const QUESTION_TOOL_ID = 'mock-tool-3';
 const PERMISSION_PROMPT_ID = `${MOCK_SESSION_ID}:${PERMISSION_TOOL_ID}`;
@@ -370,6 +380,14 @@ export interface MockStaticSessionSpec {
    * Resume for. Omitted means false.
    */
   resumable?: boolean;
+  /**
+   * The `message-preview` a subscribe pushes right behind this session's
+   * snapshot, as a real desktop does for every session with a transcript
+   * (read-stream.ts: "The list's one line, delivered at subscribe"). Only the
+   * queued resume sets it: the rest of the rig leaves the feed to its own
+   * transcript peek, which shows the same line.
+   */
+  previewAtSubscribe?: string;
 }
 
 export interface MockExtraThinkingSessionSpec extends MockStaticSessionSpec {
@@ -1728,7 +1746,35 @@ export const MOCK_QUEUED_STATIC_SESSION: MockStaticSessionSpec = {
   sessionStatus: 'queued',
 };
 
-/** Every session that answers from static content: the extras, codex, opencode, gemini, idle, paused, queued, and the archived pair. */
+const MOCK_QUEUED_RESUME_LAST_WORD =
+  'PR #214 is green on the commit I pushed. Moving it to Merge for the squash once the slot frees up.';
+
+/**
+ * A queued resume (see MOCK_QUEUED_RESUME_SESSION_ID): its agent ran in
+ * Testing, was moved into Merge while Merge's one slot was taken, and waits to
+ * resume the same conversation. The transcript is that earlier run. The
+ * scrollback is empty and no usage is served, because the placeholder holds no
+ * PTY and no agent has reported a model under this id yet.
+ */
+export const MOCK_QUEUED_RESUME_STATIC_SESSION: MockStaticSessionSpec = {
+  sessionId: MOCK_QUEUED_RESUME_SESSION_ID,
+  taskId: MOCK_QUEUED_RESUME_TASK_ID,
+  userText: 'Get the refund-webhook retries PR green, then hand it to Merge.',
+  assistantText: MOCK_QUEUED_RESUME_LAST_WORD,
+  replyText: 'Waiting for Merge to free up - I will pick the squash up from here.',
+  scrollback: '',
+  model: MOCK_MODEL_SONNET,
+  usedTokens: 0,
+  // What the placeholder reports: idle, with the queue carried by
+  // sessionStatus alone, exactly as on the never-run queued session above.
+  activityState: 'idle',
+  alreadyWaitingForMs: 6 * 60_000,
+  sessionStatus: 'queued',
+  resuming: true,
+  previewAtSubscribe: MOCK_QUEUED_RESUME_LAST_WORD,
+};
+
+/** Every session that answers from static content: the extras, codex, opencode, gemini, idle, paused, both queued, and the archived pair. */
 export const MOCK_STATIC_SESSIONS: MockStaticSessionSpec[] = [
   ...MOCK_EXTRA_THINKING_SESSIONS,
   MOCK_CODEX_STATIC_SESSION,
@@ -1737,6 +1783,7 @@ export const MOCK_STATIC_SESSIONS: MockStaticSessionSpec[] = [
   MOCK_IDLE_STATIC_SESSION,
   MOCK_PAUSED_STATIC_SESSION,
   MOCK_QUEUED_STATIC_SESSION,
+  MOCK_QUEUED_RESUME_STATIC_SESSION,
   ...MOCK_ARCHIVED_STATIC_SESSIONS,
 ];
 
@@ -2466,6 +2513,23 @@ export function initialTasks2(): BoardTaskWire[] {
       session_id: MOCK_QUEUED_SESSION_ID,
       branch_name: 'feature/low-stock-badge',
       labels: ['storefront'],
+      created_at: nowIso,
+      updated_at: nowIso,
+    }),
+    boardTaskFixture({
+      id: MOCK_QUEUED_RESUME_TASK_ID,
+      display_id: 13,
+      // A QUEUED RESUME - see MOCK_QUEUED_RESUME_STATIC_SESSION. In Merge, the
+      // column the report came from, on the second project so neither the
+      // Agents shot (the top of the feed) nor the Board shot (storefront-web's
+      // Executing) photographs it.
+      title: 'Retry refund webhooks with backoff',
+      description: 'A refund webhook that times out is dropped today. Retry it with exponential backoff and park it for review after the fifth failure.',
+      swimlane_id: 'lane2-merge',
+      agent: 'claude',
+      session_id: MOCK_QUEUED_RESUME_SESSION_ID,
+      branch_name: 'fix/refund-webhook-retries',
+      labels: ['payments'],
       created_at: nowIso,
       updated_at: nowIso,
     }),
@@ -3509,6 +3573,14 @@ const MOCK_COMMAND_TERMINAL_LIMIT = 4;
 /** How long a mock terminal's agent takes to "arrive" after a start: long enough to see the starting face. */
 const MOCK_COMMAND_TERMINAL_READY_MS = 900;
 
+/**
+ * How long after a subscribe's response the mock pushes that session's
+ * preview. A real desktop sends it when its transcript seed read finishes,
+ * always after the response; this only has to land after the phone has
+ * applied the snapshot.
+ */
+const MOCK_SUBSCRIBE_PREVIEW_DELAY_MS = 150;
+
 /** One live Command Terminal of the mock desktop (protocol 0.20.0). */
 interface MockCommandTerminal {
   sessionId: string;
@@ -3607,7 +3679,13 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
    * with the rest of the scenario.
    */
   const staticSessionStates = new Map<string, MockStaticSessionState>(
-    MOCK_STATIC_SESSIONS.map((spec) => [spec.sessionId, { spec, transcript: staticSessionSeedTranscript(spec), revision: 1, usageReported: true }]),
+    MOCK_STATIC_SESSIONS.map((spec) => [
+      spec.sessionId,
+      // A queued resume's placeholder has no agent under its id yet, so a real
+      // desktop serves it no usage: the face the report showed as "Resuming
+      // agent..." once a preview had wrongly promoted it.
+      { spec, transcript: staticSessionSeedTranscript(spec), revision: 1, usageReported: !(spec.sessionStatus === 'queued' && spec.resuming === true) },
+    ]),
   );
   /**
    * Static sessions a user paused through `pause-session`: the conversation a
@@ -4893,6 +4971,16 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
               scrollback: wantsTerminal ? geminiTuiFrame(0) : '',
             };
             return ok(request, geminiSnapshot as unknown as JsonValue);
+          }
+          // The preview a real desktop pushes once its seed read finishes,
+          // which is always after the response: deferred so the phone holds
+          // the snapshot before the preview reaches it, in the desktop's order.
+          const previewText = staticState.spec.previewAtSubscribe;
+          if (previewText !== undefined) {
+            const { sessionId, taskId } = staticState.spec;
+            later(MOCK_SUBSCRIBE_PREVIEW_DELAY_MS, () => {
+              emit({ kind: 'activity', sessionId, taskId, payload: { type: 'message-preview', text: previewText } });
+            });
           }
           return ok(request, staticSessionSnapshot(staticState.spec, wantsTerminal, staticState.usageReported) as unknown as JsonValue);
         }

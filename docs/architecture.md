@@ -886,6 +886,20 @@ the one exclusion: a session cancelled OUT of the queue never ran, so calling it
 be a lie. All of that is wider than the `'suspended'` clause above on purpose - a parked session's
 entry can legitimately carry a stale `'idle'`, so only positive proof of work retires that one.
 
+**Narrowed on a 0.16.0+ desktop (task #141, 2026-11-11).** The wide rule above now holds only for
+a desktop that pushes no `status` (0.12.0, the oldest that still pairs, through 0.15.x). Since
+desktop d0aff06d4 a running agent moved into a full column pauses and queues a RESUME of the same
+conversation, and the subscribe pushes that conversation's `message-preview` right behind the
+snapshot. Read as proof of promotion, it drew the queued card "Resuming agent..." in Idle. A
+desktop that pushes `status` (the entry's `statusPushed`, set from a snapshot carrying `resuming`
+or `resumable`) is the authority on promotion, and only positive proof of work stands in for its
+push: an `activity` reporting `thinking` or `permission`, or a pending `permission`. That fallback
+stays because an event dispatches at once while a response resolves a promise, so a `status:
+'running'` landing beside its snapshot can be applied first and overwritten by the older
+`'queued'`. A preview, a usage report, an event or an idle `activity` never promotes there
+(`retiresQueued` in `src/state/activityStore.ts`), so a resumed agent that loses that race and then
+sits idle reads Queued until its next snapshot, on a reconnect or a pull to refresh.
+
 ### Transitional states: the session swap and the queued session
 
 On most column moves the desktop suspends the task's session and spawns or resumes a successor: a
@@ -1051,12 +1065,16 @@ from the Resume gate `resumable`; a 0.16.0 row has only `resumable` to say it wi
 that way (`boardRowPaused`). Only a RUNNING card
 draws a status icon, the agent's message as its body, and a wait time. Every other state draws no
 icon, shows the task's description, and names itself in the footer (`CardStatusFooter`, a port of
-the desktop card's bottom-bar switch, strings verbatim): a spinner and "Queued...", a spinner and
-the desktop's own step ("Switching model...", "Creating worktree..."), a still pause circle and
+the desktop card's bottom-bar switch, strings verbatim): a still clock and "Queued...", a spinner
+and the desktop's own step ("Switching model...", "Creating worktree..."), a still pause circle and
 "Paused", or, for a running session that has not reported its model yet, a spinner and "Starting
 agent..." ("Resuming agent..." for a session the desktop spawned as a resume, the snapshot's
-`resuming`). An ended session has no footer. Against a pre-0.16.0 desktop every board field is
-null and no status push says `suspended`, which reduces this to the earlier precedence exactly.
+`resuming`). An ended session has no footer. None of these lines draws a track under it, as the
+desktop's status line has drawn none since d0aff06d4, so a card grows by the usage bar's track when
+its agent reports a model (task #141). The desktop's place in line ("Next in line...", "N tasks
+ahead...") needs protocol 0.28.0, so every queued card reads "Queued..." until the phone adopts
+it. Against a pre-0.16.0 desktop every board field is null and no status push says `suspended`,
+which reduces this to the earlier precedence exactly.
 A paused task the desktop offers no Resume for reads `paused: true, resumable: false`, so its card
 reads "Paused" with no Resume control, as the desktop card does. In practice that is a task sitting
 in Done UNARCHIVED (created straight into the column, say), because the desktop archives a task in

@@ -35,6 +35,7 @@ import {
   MOCK_EXTRA_THINKING_SESSIONS,
   MOCK_GEMINI_STATIC_SESSION,
   MOCK_OPENCODE_STATIC_SESSION,
+  MOCK_QUEUED_RESUME_STATIC_SESSION,
   MOCK_QUEUED_STATIC_SESSION,
   MOCK_STATIC_SESSIONS,
   MOCK_STREAM_CEILING_FOR_TEST,
@@ -927,8 +928,10 @@ describe('authored claude frames fill the grid with the live chrome', () => {
         // merely a different CLI's chrome: a QUEUED session has no PTY at all,
         // so there is no frame for the desktop to serialize and an empty
         // scrollback is the correct fixture. Asserted positively below rather
-        // than left as a silent hole in this guard.
+        // than left as a silent hole in this guard. The queued resume has a
+        // transcript but no PTY either, for the same reason.
         spec !== MOCK_QUEUED_STATIC_SESSION &&
+        spec !== MOCK_QUEUED_RESUME_STATIC_SESSION &&
         spec.model.id !== codexModelId,
     );
     // The expectation side is a LITERAL set of ids, not the same predicate
@@ -965,9 +968,12 @@ describe('authored claude frames fill the grid with the live chrome', () => {
    * with `pty: null` and started implying the state through content, which is
    * exactly the failure MOCK_QUEUED_STATIC_SESSION's own comment warns against.
    */
-  it('keeps the queued session frameless, because a placeholder has no PTY', () => {
-    expect(MOCK_QUEUED_STATIC_SESSION.scrollback).toBe('');
-    expect(MOCK_QUEUED_STATIC_SESSION.sessionStatus).toBe('queued');
+  it.each([
+    ['the never-run queued session', MOCK_QUEUED_STATIC_SESSION],
+    ['the queued resume', MOCK_QUEUED_RESUME_STATIC_SESSION],
+  ])('keeps %s frameless, because a placeholder has no PTY', (_name, spec) => {
+    expect(spec.scrollback).toBe('');
+    expect(spec.sessionStatus).toBe('queued');
   });
 });
 

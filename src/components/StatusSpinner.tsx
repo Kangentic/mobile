@@ -25,8 +25,9 @@ export interface StatusSpinnerProps {
 /**
  * The desktop's in-between-state spinner: lucide's Loader2 (LoaderCircle) turning
  * once per `statusSpinner.turnMs`, the desktop's own `animate-spin` rate. The
- * task card's footer draws it at 12 for Queued, Starting agent and a respawn's
- * step; the session header at 16 while a respawn is in flight.
+ * task card's footer draws it at 12 for Starting agent, Resuming agent and a
+ * respawn's step (Queued is a still clock, as on the desktop); the session
+ * header at 16 while a respawn is in flight.
  *
  * It spins only where motion is allowed (OS reduced motion off, the screen
  * focused), which the desktop's does not check, and holds still otherwise. The
@@ -35,8 +36,9 @@ export interface StatusSpinnerProps {
  * angle (motion-conventions.md).
  *
  * The spin is also BOUNDED (`statusSpinner.holdAfterMs`), which the desktop's is
- * not: a queued session can wait for minutes, and a turn that never ends keeps
- * the app drawing frames for as long as it is mounted. Past the bound this takes
+ * not: an agent that never reports a model reads "Starting agent..." for as long
+ * as it runs, and a turn that never ends keeps the app drawing frames for as
+ * long as it is mounted. Past the bound this takes
  * the same still branch as reduced motion. The expiry is keyed on `testID`
  * (which carries the session or task) rather than held as a plain flag, because
  * FlashList recycles this instance into another row, which must start its own

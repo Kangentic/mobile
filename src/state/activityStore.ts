@@ -212,7 +212,10 @@ export interface SessionActivityEntry {
    * current rather than a snapshot-time observation. `storeFeed` holds a push
    * INTO 'suspended' back until the end or the respawn label that explains it
    * arrives (see `SUSPEND_PUSH_HOLD_MS`), because the desktop suspends before
-   * every respawn and a bare 'suspended' would read "Paused" for the gap.
+   * every respawn and a bare 'suspended' would read "Paused" for the gap. On
+   * such a desktop (`statusPushed`) only the push, or the agent visibly
+   * working, retires 'queued' (`retiresQueued`); on an older one any payload
+   * does.
    *
    * THE PRE-0.16 FALLBACK IS A RESUME, and it is a liveness correction rather
    * than an endedness one. `applyActivityEvent` clears a stale 'suspended' when
@@ -271,6 +274,19 @@ export interface SessionActivityEntry {
    * than meaning something different from the desktop's.
    */
   resumable: boolean;
+  /**
+   * Whether this session's desktop pushes its lifecycle edges as the `status`
+   * activity payload (protocol 0.16.0+, desktop fd8c72acc). Set by a snapshot
+   * that carries `resuming` or `resumable` (both arrived with the push, and
+   * the protocol parser keeps them absent when a desktop sends neither), or by
+   * a `status` payload itself. False on a desktop from 0.12.0 (handshake v3,
+   * the oldest that still pairs) through 0.15.x, which pushes no status at all.
+   *
+   * It decides how a 'queued' status retires (see `applyActivityEvent`): on
+   * such a desktop the push is the authority, and only that or positive proof
+   * of work moves the entry on. Never read for anything else.
+   */
+  statusPushed: boolean;
 }
 
 interface ActivityStoreState {
@@ -416,6 +432,8 @@ function emptyEntry(sessionId: string, taskId: string, projectId: string, kind: 
     sessionStatus: null,
     resuming: false,
     resumable: false,
+    // Unknown until a snapshot or a status push says so.
+    statusPushed: false,
   };
 }
 
@@ -473,6 +491,57 @@ function successorEntry(
     usage: ghost.usage,
     unreadCount: ghost.unreadCount,
   };
+}
+
+/**
+ * Whether a payload reaching a 'queued' entry means the queue promoted it to
+ * running. `status` itself never does here: it is the desktop SAYING what the
+ * status is, so its own case applies it rather than this inference. Nor does
+ * `session-ended`: a session cancelled out of the queue ends without ever
+ * running, and calling that 'running' would be a lie the ended-state handling
+ * then has to work around.
+ *
+ * WHY AN INFERENCE AT ALL. No later snapshot corrects a stale status:
+ * `setDesiredStreams` skips a session that already has a stream, so a live
+ * channel re-snapshots nothing. A promotion keeps the placeholder's session id
+ * (desktop session-spawn-flow.ts: "For queue promotions, the ID was set on the
+ * input when the placeholder was created"), so a stale 'queued' would outlive
+ * the queue and badge a running agent as waiting for the whole connection.
+ *
+ * A desktop from 0.12.0 (the oldest that still pairs) through 0.15.x pushes no
+ * status, so there ANY payload stays the proof, the rule this was written
+ * with: a queued placeholder has `pty: null` (session-manager.ts's shouldQueue
+ * branch), so its agent can emit nothing before promotion. With no push to
+ * wait for, a rare early promotion there is the lesser error than a running
+ * agent badged Queued. Scoping it to `activity` once left a promoted session
+ * whose first push was a 'permission' hidden behind "Queued..." with its
+ * prompt unshown.
+ *
+ * A 0.16.0+ desktop (`statusPushed`) breaks that premise and makes it
+ * unnecessary. Since desktop d0aff06d4 (2026-11-01) a running agent moved into
+ * a full column pauses and queues a RESUME of the same conversation, and the
+ * subscribe pushes a `message-preview` for any session with a transcript
+ * (read-stream.ts: "The list's one line, delivered at subscribe"). Under the
+ * wide rule that preview promoted the card to "Resuming agent..." while the
+ * desktop said Queued. And that desktop pushes `status` on promotion. So there
+ * the push is the authority, and only positive proof of WORK stands in for it:
+ * the agent thinking, or asking. A placeholder with no PTY can do neither. The
+ * proof is kept, rather than trusting the push alone, because a response
+ * resolves a promise while an event dispatches at once (capabilityClient.ts),
+ * so a `status: 'running'` landing beside its snapshot can be applied first
+ * and then overwritten by the older 'queued'. Work heals that; a preview, a
+ * usage report, an event or an idle `activity` never promotes. The cost, taken
+ * knowingly: a resumed agent that loses that race and then sits idle reads
+ * Queued until its next snapshot (a reconnect or a pull to refresh). Retiring
+ * on a usage report too would close it, but only if a desktop never serves one
+ * to a placeholder.
+ */
+function retiresQueued(entry: SessionActivityEntry, payload: ActivityEventPayload): boolean {
+  if (payload.type === 'session-ended' || payload.type === 'status') return false;
+  if (!entry.statusPushed) return true;
+  if (payload.type === 'activity') return payload.state === 'thinking' || payload.state === 'permission';
+  if (payload.type === 'permission') return payload.pending;
+  return false;
 }
 
 /**
@@ -625,6 +694,9 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
         // read as false: no "Resuming agent...", and no Resume.
         resuming: snapshot.resuming ?? false,
         resumable: snapshot.resumable ?? false,
+        // Read before the two lines above collapse "absent" into false: a
+        // 0.16.0+ desktop sends both on every snapshot, an older one neither.
+        statusPushed: existing.statusPushed || snapshot.resuming !== undefined || snapshot.resumable !== undefined,
         lastEventAt: Date.now(),
         // The successor's own snapshot is where a borrowed preview is handed
         // back: null re-arms the Home row's peek of THIS session's transcript.
@@ -713,30 +785,7 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
         return { endedSessionIds, spawnProgressLabelBySessionId, respawnByTaskId, pendingSuccessorByTaskId };
       }
       const updated: SessionActivityEntry = { ...existing, lastEventAt: Date.now() };
-      // The 'queued' retirement, hoisted ABOVE the switch on purpose, because
-      // its justification is about the payload ARRIVING and not about what the
-      // payload says. A queued placeholder has `pty: null` (desktop
-      // session-manager.ts's shouldQueue branch), so it can emit nothing at
-      // all - any payload reaching this entry is proof the queue promoted it.
-      // Scoping it to `case 'activity'` would have left a promoted session
-      // whose first push happened to be a 'permission' badged "Waiting for a
-      // free slot" with its prompt hidden behind that caption, since `starting`
-      // outranks every other body source on the feed row.
-      //
-      // 'session-ended' is one exclusion: a session cancelled OUT of the
-      // queue ends without ever running, and calling that 'running' would be a
-      // lie the ended-state handling below then has to work around. 'status'
-      // is the other: it is the desktop SAYING what the status is (protocol
-      // 0.16.0), so it is the authority here, not evidence for an inference.
-      //
-      // This matters because no later snapshot would correct a stale status:
-      // `setDesiredStreams` skips a session that already has a stream, so a
-      // live channel re-snapshots nothing. The promotion REUSES the same
-      // session id (desktop session-spawn-flow.ts: "For queue promotions, the
-      // ID was set on the input when the placeholder was created"), which is
-      // exactly why the stale status would otherwise outlive the queue and
-      // leave a running agent badged as waiting for the life of the connection.
-      if (existing.sessionStatus === 'queued' && payload.type !== 'session-ended' && payload.type !== 'status') {
+      if (existing.sessionStatus === 'queued' && retiresQueued(existing, payload)) {
         updated.sessionStatus = 'running';
       }
       switch (payload.type) {
@@ -744,10 +793,11 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
           updated.activityObserved = true;
           updated.state = payload.state;
           updated.reason = payload.reason;
-          // The 'suspended' retirement, and deliberately much NARROWER than the
-          // 'queued' one above: a parked session's entry can legitimately carry
-          // a stale 'idle', so only positive proof of WORK retires it, where a
-          // queued placeholder's silence makes any payload proof enough.
+          // The 'suspended' retirement, and deliberately NARROWER than the
+          // pre-0.16 'queued' one in `retiresQueued`: a parked session's entry
+          // can legitimately carry a stale 'idle', so only positive proof of
+          // WORK retires it, where on a desktop that pushes no status a queued
+          // placeholder's silence makes any payload proof enough.
           // 'exited' and the null "never snapshotted" case are left exactly as
           // they were, and the snapshot stays the authority on everything else.
           if (payload.state === 'thinking' && existing.sessionStatus === 'suspended') {
@@ -808,6 +858,7 @@ export const useActivityStore = create<ActivityStoreState>((set) => ({
           updated.sessionStatus = payload.status;
           updated.resuming = payload.resuming;
           updated.resumable = payload.resumable;
+          updated.statusPushed = true;
           break;
         default: {
           // Exhaustiveness guard. `session-ended` survived two protocol bumps

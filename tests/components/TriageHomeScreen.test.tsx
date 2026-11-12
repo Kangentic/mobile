@@ -2091,6 +2091,52 @@ describe('TriageHomeScreen', () => {
     });
 
     /**
+     * The reported case (task #141): a running agent moved into a full column
+     * queues a RESUME of its conversation (desktop d0aff06d4), and the
+     * subscribe pushes that conversation's preview right behind the snapshot.
+     * The row stays in Queued with the desktop's queued card, where it used to
+     * land in Idle reading "Resuming agent..." with the envelope and the
+     * agent's last message.
+     *
+     * Seen failing against the unfixed store rule (any payload retires
+     * 'queued'): no `section-header-queued`, and the dump showed the reported
+     * card exactly, in Idle with the envelope, the preview as its body and a
+     * spinning "Resuming agent...".
+     */
+    it('keeps a queued resume in Queued after the subscribe pushes its preview', async () => {
+      setTaskOneDescription(DESCRIPTION);
+      useActivityStore.getState().applySnapshot(
+        'sess-1',
+        'task-1',
+        'project-1',
+        streamSnapshotFixture({
+          activity: { state: 'idle', reason: { kind: 'idle' } },
+          usage: null,
+          sessionStatus: 'queued',
+          resuming: true,
+          resumable: false,
+        }),
+      );
+      useActivityStore.getState().applyActivityEvent({
+        kind: 'activity',
+        sessionId: 'sess-1',
+        taskId: 'task-1',
+        payload: { type: 'message-preview', text: 'PR #782 is green and flake-free.' },
+      });
+
+      await renderHome();
+      await act(async () => {});
+
+      expect(screen.getByTestId('section-header-queued')).toBeTruthy();
+      expect(screen.queryByTestId('section-header-idle')).toBeNull();
+      expect(screen.getByTestId('activity-row-sess-1-status-bar-label')).toHaveTextContent('Queued...');
+      expect(screen.getByTestId('activity-row-sess-1-status-bar-queued')).toBeTruthy();
+      expect(screen.queryByTestId('activity-row-sess-1-status-bar-spinner')).toBeNull();
+      expect(screen.getByTestId('activity-row-sess-1-snippet')).toHaveTextContent(DESCRIPTION);
+      expect(screen.queryByTestId('activity-row-sess-1-status')).toBeNull();
+    });
+
+    /**
      * The control that keeps the test above honest: the SAME idle entry as
      * RUNNING keeps the envelope, the wait time and its usage, so none of what
      * the queued test removed can be coming from the idle state itself.

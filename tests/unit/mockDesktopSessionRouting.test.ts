@@ -25,6 +25,8 @@ import {
   MOCK_GEMINI_STATIC_SESSION,
   MOCK_IDLE_STATIC_SESSION,
   MOCK_PAUSED_STATIC_SESSION,
+  MOCK_QUEUED_RESUME_STATIC_SESSION,
+  MOCK_QUEUED_STATIC_SESSION,
   staticSessionSeedTranscriptForTest,
   type MockDesktop,
 } from '@/connection/mockDesktop';
@@ -190,6 +192,43 @@ describe('read-stream terminal gating', () => {
 
     const idle = await controller.verbs.readStreamSubscribe(MOCK_IDLE_STATIC_SESSION.sessionId, { terminal: false });
     expect(idle.sessionStatus).toBe('running');
+  });
+
+  /**
+   * The queued resume (task #141): a 0.16.0 snapshot that says queued and
+   * resuming, with no usage (no agent under the placeholder's id yet), then the
+   * conversation's preview pushed BEHIND it, in a real desktop's order. That
+   * pair is what drew the reported card "Resuming agent..." in Idle, so
+   * `dev:mock` has to produce it for the fix to be visible there.
+   */
+  it('answers the queued resume with a queued, resuming snapshot, then pushes its preview after it', async () => {
+    const snapshot = await controller.verbs.readStreamSubscribe(MOCK_QUEUED_RESUME_STATIC_SESSION.sessionId, { terminal: false });
+    expect(snapshot).toMatchObject({ sessionStatus: 'queued', resuming: true, resumable: false, usage: null });
+    // Nothing reaches the phone ahead of the snapshot it belongs behind.
+    expect(eventsFor('activity', MOCK_QUEUED_RESUME_STATIC_SESSION.sessionId)).toHaveLength(0);
+
+    await waitUntil(() => eventsFor('activity', MOCK_QUEUED_RESUME_STATIC_SESSION.sessionId).length > 0, {
+      label: 'the subscribe pushes the queued resume its preview',
+    });
+    const preview = eventsFor('activity', MOCK_QUEUED_RESUME_STATIC_SESSION.sessionId)[0];
+    expect(preview.kind === 'activity' && preview.payload).toEqual({
+      type: 'message-preview',
+      text: MOCK_QUEUED_RESUME_STATIC_SESSION.previewAtSubscribe,
+    });
+  });
+
+  it('leaves the never-run queued placeholder as it was: usage served, no preview pushed', async () => {
+    const snapshot = await controller.verbs.readStreamSubscribe(MOCK_QUEUED_STATIC_SESSION.sessionId, { terminal: false });
+    expect(snapshot).toMatchObject({ sessionStatus: 'queued', resuming: false });
+    expect(snapshot.usage).not.toBeNull();
+
+    // A positive control on the same clock: the resume's preview arriving
+    // proves the deferred push had time to fire for the placeholder too.
+    await controller.verbs.readStreamSubscribe(MOCK_QUEUED_RESUME_STATIC_SESSION.sessionId, { terminal: false });
+    await waitUntil(() => eventsFor('activity', MOCK_QUEUED_RESUME_STATIC_SESSION.sessionId).length > 0, {
+      label: 'the control preview arrives',
+    });
+    expect(eventsFor('activity', MOCK_QUEUED_STATIC_SESSION.sessionId)).toHaveLength(0);
   });
 
   it('refuses a subscribe to an unknown session with the typed unknown-session code', async () => {
