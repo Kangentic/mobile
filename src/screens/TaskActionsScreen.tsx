@@ -108,8 +108,13 @@ export function TaskActionsScreen(): React.JSX.Element {
   // refuses to hold one. `typeof` rather than a null check, because a row can
   // lack the key as well as carry null.
   const automationsDisabled = task?.automations_disabled;
+  // A held task always keeps the row, as the desktop menu's own rule does
+  // (`offersAutomationsSwitch`: held, or not in a running or paused workflow).
+  // No desktop refuses a resume, and v0.55.0, which refuses every pause on a
+  // running or paused workflow's task, can still carry a hold on one.
   const automationsOffered =
-    typeof automationsDisabled === 'boolean' && (workflow === null || workflow.automations_pausable === true);
+    typeof automationsDisabled === 'boolean' &&
+    (workflow === null || workflow.automations_pausable === true || automationsDisabled === true);
   // What a tap on the row writes, from the row as the store has it now.
   const tapPausesAutomations = automationsDisabled !== true;
   // The value a tap is writing, held until the desktop answers. The store
@@ -117,6 +122,16 @@ export function TaskActionsScreen(): React.JSX.Element {
   // this the row would relabel itself under the finger while the sheet waits.
   const [automationsWriteTarget, setAutomationsWriteTarget] = useState<boolean | null>(null);
   const offersPauseAutomations = automationsWriteTarget ?? tapPausesAutomations;
+  // The same flip takes a held workflow card on a v0.55.0 desktop out of the
+  // rule above, so the row stays while its write is in flight, as the Pause
+  // session row stays while a pause is pending (design decision A1, task #146).
+  const automationsRowShown = automationsOffered || automationsWriteTarget !== null;
+  // Resume session hangs on the hold too: a paused workflow's task offers it
+  // only while held (`useResumeOffer`), so the same flip would drop that row
+  // from above the one just tapped, or add it. Held at the tap, as the label
+  // is, so the rows stay put until the desktop answers.
+  const [resumeOfferedAtAutomationsTap, setResumeOfferedAtAutomationsTap] = useState(false);
+  const resumeRowShown = automationsWriteTarget !== null ? resumeOfferedAtAutomationsTap : resumeOffer.offered;
   const busy = actionInFlight || pausing || automationsWriteTarget !== null;
 
   /**
@@ -256,6 +271,7 @@ export function TaskActionsScreen(): React.JSX.Element {
     // The direction is fixed at the tap, so the failure line names what was
     // asked even after the optimistic flip has been rolled back.
     const pauseRequested = tapPausesAutomations;
+    setResumeOfferedAtAutomationsTap(resumeOffer.offered);
     setAutomationsWriteTarget(pauseRequested);
     setErrorMessage(null);
     void updateTaskFields({ projectId, taskId, automationsDisabled: pauseRequested })
@@ -267,7 +283,7 @@ export function TaskActionsScreen(): React.JSX.Element {
           messageForActionError(error, pauseRequested ? AUTOMATIONS_PAUSE_FAILED_MESSAGE : AUTOMATIONS_RESUME_FAILED_MESSAGE),
         );
       });
-  }, [taskId, projectId, tapPausesAutomations, closeIfStillOpen]);
+  }, [taskId, projectId, tapPausesAutomations, resumeOffer.offered, closeIfStillOpen]);
 
   const onMove = useCallback(() => {
     if (!taskId || !projectId) {
@@ -359,7 +375,7 @@ export function TaskActionsScreen(): React.JSX.Element {
         <Text variant="title" numberOfLines={2}>
           {task ? task.title : 'Task'}
         </Text>
-        {resumeOffer.offered ? (
+        {resumeRowShown ? (
           <ActionRow
             label="Resume session"
             iconName="resume"
@@ -393,7 +409,7 @@ export function TaskActionsScreen(): React.JSX.Element {
         {/* Directly above View workflow: the desktop's menu puts the switch
             just before the row that goes somewhere else (Open workflow), and
             a workflow task shows both (design change 1, task #133). */}
-        {automationsOffered ? (
+        {automationsRowShown ? (
           <ActionRow
             label={offersPauseAutomations ? 'Pause automations' : 'Resume automations'}
             iconName={offersPauseAutomations ? 'disable-automations' : 'enable-automations'}

@@ -704,7 +704,8 @@ resumes them. Planning, starting and deleting a workflow stay on the desktop.
   workflow's task offers View workflow where the desktop would refuse its Resume. The one
   exception is a held task (its own automations paused) on a desktop before v0.55.0: there the
   workflow's Pause and Resume leave a held task's agent alone (kangentic #923), so it keeps its
-  own Resume session. A current desktop sends no held workflow task (see Automations switch).
+  own Resume session. A current desktop can still carry a hold on a workflow task (see
+  Automations switch), and the phone keeps that card's Resume session too.
 - **Reading.** `list_workflows` (the Board header's Workflows button and sheet) and
   `get_workflow` (the workflow view) are board-tool reads asked of the workflow's HOME project,
   held in `useWorkflowStore` and re-read when a member task's row moves or changes state.
@@ -722,7 +723,8 @@ of its workflow while the rest runs: the workflow neither judges, moves nor star
 0.25.0, task #133, mirroring kangentic #923; the design was signed off on 2026-10-27). Desktop
 v0.55.0 took that back (7aff391f1): a running or paused workflow's task refuses a pause, a
 resume is always taken, and a migration cleared every hold on a workflow task outside Done. Its
-rows say so with `automations_pausable: false`, so the phone leaves the row out there. The phone
+rows say so with `automations_pausable: false`, so the phone offers no Pause there. A card that
+is still held keeps Resume automations, as the desktop's own menu does (task #146). The phone
 shows the switch and flips it. Editing a column's automations stays on the desktop
 (`set_automations` is not on the board-tool allowlist).
 
@@ -746,11 +748,20 @@ shows the switch and flips it. Editing a column's automations stays on the deskt
 - **The menu row.** The long-press hub (`TaskActionsScreen`, reached from the Board, the Agents
   feed and the session header) offers Pause automations (`Ban`) or Resume automations
   (`Columns3Cog`), directly above View workflow, as the desktop's menu puts it before Open
-  workflow. The row is LEFT OUT, not disabled, for a row whose field is not a boolean, and for a
-  workflow task unless its `workflow.automations_pausable` is `true`: a desktop older than
-  protocol 0.25.0 refuses `true` for a workflow task, and one from v0.55.0 refuses it for a
-  running or paused workflow's task. There is no Pause workflow row on a task:
-  the sheet acts on one task, and the workflow's own Pause stays in the workflow view.
+  workflow. The row is LEFT OUT, not disabled, for a row whose field is not a boolean, and for an
+  un-held workflow task unless its `workflow.automations_pausable` is `true`: a desktop older
+  than protocol 0.25.0 refuses `true` for a workflow task, and one from v0.55.0 refuses it for a
+  running or paused workflow's task. A HELD workflow task always keeps the row, which then reads
+  Resume automations. That is the desktop menu's rule (`offersAutomationsSwitch`: held, or not in
+  a running or paused workflow), and no desktop refuses a resume. On v0.55.0 a card can still be
+  held: one that sat in Done when the migration ran, or one held while its workflow was a draft
+  (joining a workflow clears a hold, and starting one does not, read from the desktop's
+  `task-repository.ts` and its migration). The tap releases the hold on the phone at once, and
+  that takes such a card out of the rule, so the row stays, disabled and with its label, until
+  the desktop answers. The Pause session row does the same while a pause is pending. Resume
+  session, which a paused workflow's task offers only while held, keeps the place it had at the
+  tap for the same wait. There is no Pause workflow row on a task: the sheet acts on one task,
+  and the workflow's own Pause stays in the workflow view.
 - **The write.** There is no verb: it is the existing `board-tool-write` `update_task` with the
   camelCase `automationsDisabled` param (the desktop ignores the row's snake_case spelling as an
   unknown key). It never restarts the session. `updateTaskFields` applies it optimistically
