@@ -15,6 +15,11 @@ kangentic.local.json
 # (.claude/rules/no-personal-info.md).
 .devrig-processes/
 
+# /upgrade-deps research cache: one JSON brief per dependency group, kept in the
+# root checkout so every worktree reaches it. Never committed (see
+# docs/dependency-upgrades.md).
+.upgrade-deps/
+
 # Node
 node_modules/
 npm-debug.log*

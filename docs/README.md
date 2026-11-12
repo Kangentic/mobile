@@ -17,6 +17,8 @@ in the desktop repo's
 ## Reference
 
 - [developer-guide.md](developer-guide.md) - setup, build system, testing tiers, EAS.
+- [dependency-upgrades.md](dependency-upgrades.md) - how `/upgrade-deps` decides what can move
+  under the Expo SDK mapping, researches it, and keeps one rolling board task.
 - [architecture.md](architecture.md) - pairing, secure channel, capability allowlist,
   transcript-terminal rendering, notifications.
 - [security.md](security.md) - threat model, the pairing ceremony's crypto detail, key storage,

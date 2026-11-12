@@ -173,6 +173,22 @@ describe('board turn-end contracts: Executing', () => {
   });
 });
 
+describe('board turn-end contracts: /upgrade-deps', () => {
+  // A task run of /upgrade-deps ends in Executing, so apply.md's Finish section is a producer of
+  // both Executing lines. Read from Finish only: the mid-run section names the same lines to say
+  // when NOT to write them, which would satisfy a whole-file check with Finish reworded.
+  it('has apply.md end a task run on exactly the lines the Executing rows match', () => {
+    const skillPath = '.claude/skills/upgrade-deps/apply.md';
+    const applyGuide = readRepositoryFile(skillPath);
+    const finishIndex = applyGuide.indexOf('## Finish');
+    expect(finishIndex, `${skillPath} lost its Finish section`).toBeGreaterThan(-1);
+    const finish = applyGuide.slice(finishIndex);
+    expectTextIn(finish, `${skillPath} Finish`, 'last line of the message, alone');
+    expectTextIn(finish, `${skillPath} Finish`, `\`${finalLineOf('Executing', 'On to Code Review')}\``);
+    expectTextIn(finish, `${skillPath} Finish`, `\`${finalLineOf('Executing', 'Design hold')}\``);
+  });
+});
+
 describe('board turn-end contracts: Merge', () => {
   it('has /merge-pull-request print the Finish line and name the row that reads it', () => {
     const finish = finalLineOf('Merge', 'Finish');

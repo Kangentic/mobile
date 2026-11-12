@@ -970,6 +970,8 @@ package in `node_modules/expo/bundledNativeModules.json` plus the SDK's `related
 SILENCES that gate for it (`.claude/rules/expo-cng.md`), so each entry is a deliberate, vetted hold
 and is recorded here with its reason. **`tests/unit/expoInstallExclude.test.ts` fails if an entry
 has no row below or a row has no entry**, so an exclude cannot outlive its reason unnoticed.
+`/upgrade-deps` reads this table and keeps it current: it flags a hold the mapping has caught up
+with, and a move past the mapping lands only with its row ([dependency-upgrades.md](dependency-upgrades.md)).
 
 SDK 58 (task #140) mapped `react-native-reanimated` 4.7.1, `react-native-webview` 14.0.1,
 `react-native-screens` ~4.30.1 and `react-native-safe-area-context` ~5.11.1, so those four holds

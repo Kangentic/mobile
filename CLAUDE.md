@@ -316,7 +316,11 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   that the code-review skill owns),
                   #   review-verdict.mjs (computes the pass's Ready or Blocked verdict and
                   #   the commit ledger from its findings JSON), lib/is-entrypoint.mjs
-                  #   (the real-path "run as a CLI?" guard review-verdict.mjs imports)
+                  #   (the real-path "run as a CLI?" guard review-verdict.mjs imports),
+                  #   upgrade-deps.mjs (/upgrade-deps' inventory: what can move under the
+                  #   Expo SDK mapping, research reuse, lockdiff, stale patches) and
+                  #   upgrade-researcher-guard.js (the read-only hook on the
+                  #   upgrade-researcher agent), both ported from the desktop repo
                   #   + repo scripts
 store/screenshots/            # Committed Play + App Store listing images, one set per shelf
 store/whatsnew/               # Release notes (whatsnew-<locale>, 500-char cap) that
@@ -752,6 +756,12 @@ in a gitignored `CLAUDE.local.md` at the project root.
   by filing the actionable issues as grouped, parallel-safe board tasks (grouped by the files the
   fix touches) and assigning them as the triage marker; a single-issue investigation files a
   task only when asked.
+- `/upgrade-deps` researches every npm dependency that can move, within the Expo SDK mapping (a
+  move past it is a hold research must earn, recorded in the developer guide's hold table), with
+  `upgrade-researcher` agents that may only read. In a task it does the upgrade there, following
+  its `apply.md`; from a Command Terminal it files one rolling task with the `dependencies` label
+  on the `Upgrade` Board Profile, which runs Testing on Opus. See
+  [docs/dependency-upgrades.md](docs/dependency-upgrades.md).
 - `/profile` measures Android runtime performance on a release build: idle CPU, frame timing,
   view retention, and the `simpleperf` sample that names the hot code. Reach for it on any lag,
   jank, battery or leak report - it carries the measurement discipline (two meminfo samples,

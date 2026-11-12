@@ -19,6 +19,7 @@ Each doc file and the source files that are its authority:
 | `architecture.md` | `src/channel/**`, `src/state/**`, `src/screens/**`, `app.config.*`, the pinned `@kangentic/protocol` version |
 | `security.md` | `src/pairing/**`, `src/channel/**`, `src/notifications/**` |
 | `developer-guide.md` | `package.json` (scripts), `eas.json`, `.maestro/`, `tests/` |
+| `dependency-upgrades.md` | `.claude/skills/upgrade-deps/**`, `.claude/agents/upgrade-researcher.md`, `scripts/upgrade-deps.mjs`, `scripts/upgrade-researcher-guard.js` |
 | `docs/README.md` | All other docs (index) |
 
 ## Doc Conventions
