@@ -46,6 +46,7 @@ import { render, screen } from '@testing-library/react-native';
 import * as Reanimated from 'react-native-reanimated';
 import type { ActivityReasonWire } from '@kangentic/protocol';
 import { AgentStatusIcon, ThemeProvider, agentStatusKindFor, darkTerminalTheme } from '@/components';
+import { STOPPED_ACCESSIBILITY_LABEL } from '@/components/AgentStatusIcon';
 import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
 import {
   ACTIVITY_STROKE_LINECAP,
@@ -749,5 +750,45 @@ describe('agentStatusKindFor', () => {
   it('ignores an approval reason lingering past the wait: a settled session is the envelope', () => {
     expect(agentStatusKindFor('idle', permissionWith('approval'), false)).toBe('idle');
     expect(agentStatusKindFor('idle', permissionWith('approval'), true)).toBe('idle-unread');
+  });
+
+  /**
+   * Protocol 0.28.0: the board stopped this finished turn (`stopped: true` on
+   * the idle reason). Mutation seen failing: dropping the `stopped` branch from
+   * agentStatusKindFor, so both assertions read 'idle' / 'idle-unread'.
+   */
+  describe('a stopped finished turn (protocol 0.28.0)', () => {
+    const stoppedIdle: ActivityReasonWire = { kind: 'idle', since: 1, stopped: true };
+
+    it('maps to the stopped pennant, with or without unread output', () => {
+      expect(agentStatusKindFor('idle', stoppedIdle, false)).toBe('stopped');
+      expect(agentStatusKindFor('idle', stoppedIdle, true)).toBe('stopped');
+    });
+
+    it('does not map an idle reason without the stopped flag to the pennant', () => {
+      expect(agentStatusKindFor('idle', { kind: 'idle', since: 1 }, false)).toBe('idle');
+    });
+
+    it('lets an open permission wait win over a stopped reason', () => {
+      expect(agentStatusKindFor('permission', stoppedIdle, false)).toBe('question');
+    });
+  });
+});
+
+describe('the stopped pennant', () => {
+  /**
+   * Mutation seen failing: dropping the `accessibilityLabel` argument from the
+   * static renderMarkSvg call in AgentStatusIcon (no label on the node).
+   */
+  it('renders under agent-status-stopped and says "Stopped" to a screen reader', async () => {
+    await renderIcon({ kind: 'stopped' });
+    const pennant = screen.getByTestId('agent-status-stopped');
+    expect(pennant.props.accessibilityLabel).toBe(STOPPED_ACCESSIBILITY_LABEL);
+    expect(pennant.props.accessibilityLabel).toBe('Stopped');
+  });
+
+  it('leaves the idle envelope unlabelled: only the pennant carries the name', async () => {
+    await renderIcon({ kind: 'idle' });
+    expect(screen.getByTestId('agent-status-idle').props.accessibilityLabel).toBeUndefined();
   });
 });

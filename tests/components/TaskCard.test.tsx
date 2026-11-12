@@ -2,9 +2,11 @@ import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import type { TestInstance } from 'test-renderer';
+import type { BoardTaskWire } from '@kangentic/protocol';
 import * as Reanimated from 'react-native-reanimated';
 import {
   Ban,
+  CircleExclamationPoint,
   CirclePause,
   Clock,
   GitMerge,
@@ -250,6 +252,108 @@ describe('TaskCard', () => {
         .getByTestId(STATUS_BAR)
         .queryAll((node) => typeof node.type === 'string' && StyleSheet.flatten(node.props.style as StyleProp<ViewStyle>)?.height === 4).length;
     }
+
+    /**
+     * Protocol 0.28.0: the row's `queue_place` words the queued footer, and the
+     * desktop's hover tip becomes the status bar's accessibility label.
+     *
+     * Mutations seen failing: `queuedCardLabel` ignoring the position (every
+     * case read "Queued..."), and the card passing `queuePlace: null` (same).
+     */
+    describe('the queued footer\'s place in line', () => {
+      const columnPlace = (position: number): NonNullable<BoardTaskWire['queue_place']> => ({
+        kind: 'column',
+        position,
+        total: 5,
+        column_name: 'Merge',
+        max_agents: 1,
+      });
+
+      it.each([
+        [1, 'Next in line...'],
+        [2, '1 task ahead...'],
+        [4, '3 tasks ahead...'],
+      ])('reads position %i as "%s"', async (position, expectedLabel) => {
+        await renderTaskCard({
+          task: boardTaskFixture({ queue_place: columnPlace(position) }),
+          sessionDisplay: { kind: 'queued' },
+        });
+        expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent(expectedLabel);
+      });
+
+      it('reads "Queued..." and carries no accessibility label when the row has no place', async () => {
+        await renderTaskCard({ task: boardTaskFixture({ queue_place: null }), sessionDisplay: { kind: 'queued' } });
+        expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Queued...');
+        expect(screen.getByTestId(STATUS_BAR).props.accessibilityLabel).toBeUndefined();
+      });
+
+      it('labels a column place with the column it waits on', async () => {
+        await renderTaskCard({ task: boardTaskFixture({ queue_place: columnPlace(2) }), sessionDisplay: { kind: 'queued' } });
+        expect(screen.getByTestId(STATUS_BAR).props.accessibilityLabel).toBe('1 task ahead... Waiting for a slot in Merge.');
+      });
+
+      it('labels a global place as waiting for a free agent slot', async () => {
+        await renderTaskCard({
+          task: boardTaskFixture({ queue_place: { kind: 'global', position: 1, total: 2, column_name: null, max_agents: 3 } }),
+          sessionDisplay: { kind: 'queued' },
+        });
+        expect(screen.getByTestId(STATUS_BAR).props.accessibilityLabel).toBe('Next in line... Waiting for a free agent slot.');
+      });
+    });
+
+    /**
+     * Protocol 0.28.0: a start that never reached an agent. The reason words the
+     * footer in its warning tone in place of "Paused".
+     *
+     * Mutations seen failing: the suspended arm ignoring `startBlockedReason`
+     * ("Paused" where "Worktree missing" was expected), the none/exited arm
+     * ignoring it, and the none/exited arm checking `waiting` first.
+     */
+    describe('a blocked start', () => {
+      const WORKTREE_MISSING_LABEL = 'Worktree missing. Its worktree folder is gone. Resume makes it again from the branch.';
+
+      it('shows "Worktree missing" in place of "Paused" for a suspended session', async () => {
+        await renderTaskCard({
+          task: boardTaskFixture({ start_blocked_reason: 'worktree-missing' }),
+          sessionDisplay: { kind: 'suspended' },
+        });
+        expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Worktree missing');
+        expect(screen.queryByText('Paused')).toBeNull();
+        expect(getLucideGlyph(screen.getByTestId(`${STATUS_BAR}-start-blocked`), CircleExclamationPoint)).toBeTruthy();
+        expect(screen.queryByTestId(`${STATUS_BAR}-paused`)).toBeNull();
+        expect(screen.getByTestId(STATUS_BAR).props.accessibilityLabel).toBe(WORKTREE_MISSING_LABEL);
+      });
+
+      it('still says "Paused" for a reason this phone does not know', async () => {
+        await renderTaskCard({
+          task: boardTaskFixture({ start_blocked_reason: 'a-reason-from-a-newer-desktop' }),
+          sessionDisplay: { kind: 'suspended' },
+        });
+        expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Paused');
+        expect(screen.queryByTestId(`${STATUS_BAR}-start-blocked`)).toBeNull();
+      });
+
+      it.each([['none' as const], ['exited' as const]])('shows the reason on a %s card too', async (kind) => {
+        await renderTaskCard({ task: boardTaskFixture({ start_blocked_reason: 'worktree-missing' }), sessionDisplay: { kind } });
+        expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Worktree missing');
+        expect(screen.getByTestId(STATUS_BAR).props.accessibilityLabel).toBe(WORKTREE_MISSING_LABEL);
+      });
+
+      it.each([['none' as const], ['exited' as const]])('draws no footer for a %s card with no reason and no wait', async (kind) => {
+        await renderTaskCard({ task: boardTaskFixture({ start_blocked_reason: null }), sessionDisplay: { kind }, waiting: null });
+        expect(screen.queryByTestId(STATUS_BAR)).toBeNull();
+      });
+
+      it('lets the reason beat a workflow task\'s waiting footer', async () => {
+        await renderTaskCard({
+          task: boardTaskFixture({ start_blocked_reason: 'worktree-missing' }),
+          sessionDisplay: { kind: 'none' },
+          waiting: { label: 'Blocked by #14...', paused: false },
+        });
+        expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Worktree missing');
+        expect(screen.queryByText('Blocked by #14...')).toBeNull();
+      });
+    });
 
     it('shows "Paused" with a still pause circle for a suspended session', async () => {
       await renderTaskCard({ sessionDisplay: { kind: 'suspended' }, usage: usageFixture() });
@@ -757,6 +861,46 @@ describe('TaskCard', () => {
       });
 
       expect(screen.getByLabelText(new RegExp(PR_READINESS_FRESHNESS_CAVEAT))).toBeTruthy();
+    });
+  });
+
+  /**
+   * Protocol 0.28.0: the priority pill leads the labels row. Mutations seen
+   * failing: dropping `priorityShown` from `hasMetaRow` (the no-labels card lost
+   * its pill), and rendering the badge after the labels (order test).
+   */
+  describe('the priority pill', () => {
+    const URGENT = { label: 'Urgent', color: '#ef4444' };
+
+    it('draws the pill with its name for a screen reader', async () => {
+      await renderTaskCard({ priorityLevel: URGENT });
+      const pill = screen.getByTestId(`${BASE_TEST_ID}-priority`);
+      expect(pill.props.accessibilityLabel).toBe('Priority: Urgent');
+      expect(pill).toHaveTextContent('Urgent');
+    });
+
+    it('draws no pill when the level is null', async () => {
+      await renderTaskCard({ priorityLevel: null, task: boardTaskFixture({ labels: ['backend'] }) });
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-priority`)).toBeNull();
+    });
+
+    it('still draws the labels row for a card with a priority and no labels', async () => {
+      await renderTaskCard({ priorityLevel: URGENT, task: boardTaskFixture({ labels: [] }) });
+      expect(screen.getByTestId(`${BASE_TEST_ID}-priority`)).toBeTruthy();
+    });
+
+    it('draws the pill first in the row, ahead of the labels', async () => {
+      await renderTaskCard({ priorityLevel: URGENT, task: boardTaskFixture({ labels: ['backend'] }) });
+      const renderOrder = screen.container.queryAll(() => true);
+      const pillIndex = renderOrder.indexOf(screen.getByTestId(`${BASE_TEST_ID}-priority`));
+      const labelIndex = renderOrder.indexOf(screen.getByText('backend'));
+      expect(pillIndex).toBeGreaterThanOrEqual(0);
+      expect(labelIndex).toBeGreaterThan(pillIndex);
+    });
+
+    it('is hidden with the rest of the meta row when showMetaRow is false', async () => {
+      await renderTaskCard({ priorityLevel: URGENT, showMetaRow: false });
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-priority`)).toBeNull();
     });
   });
 

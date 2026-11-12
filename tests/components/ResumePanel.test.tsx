@@ -77,6 +77,45 @@ describe('ResumePanel', () => {
     });
   });
 
+  /**
+   * Protocol 0.28.0: the desktop's words for why the last start never reached
+   * an agent sit under the Resume button.
+   *
+   * Mutations seen failing: the tip's conditional removed so it never draws
+   * ("Unable to find an element with testID: session-resume-start-blocked"),
+   * and drawn unconditionally (the null case found the node).
+   */
+  describe('the start-blocked tip', () => {
+    const TIP = 'Its worktree folder is gone. Resume makes it again from the branch.';
+
+    it('draws the tip under the Resume button when given one', async () => {
+      await render(
+        <ThemeProvider>
+          <ResumePanel taskId="task-1" projectId={BOARD_PROJECT_ID} attempt={null} startBlockedTip={TIP} />
+        </ThemeProvider>,
+      );
+
+      expect(screen.getByTestId('session-resume-start-blocked')).toHaveTextContent(TIP);
+      expect(screen.getByTestId('session-resume-button')).toBeTruthy();
+    });
+
+    it('draws nothing when the tip is null', async () => {
+      await render(
+        <ThemeProvider>
+          <ResumePanel taskId="task-1" projectId={BOARD_PROJECT_ID} attempt={null} startBlockedTip={null} />
+        </ThemeProvider>,
+      );
+
+      expect(screen.queryByTestId('session-resume-start-blocked')).toBeNull();
+    });
+
+    it('draws nothing when the prop is omitted', async () => {
+      await renderPanel();
+
+      expect(screen.queryByTestId('session-resume-start-blocked')).toBeNull();
+    });
+  });
+
   describe('for any other paused task', () => {
     it('keeps the Resume session button, with no View workflow beside it', async () => {
       await renderPanel();

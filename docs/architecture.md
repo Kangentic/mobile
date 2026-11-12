@@ -129,7 +129,7 @@ decides *what* it may do:
 | `board-tool-read` | The allowlisted read half of the desktop's task/backlog command registry (search, stats, transcripts, ...). A completed task's Summary reads `get_task_report` (protocol 0.24.0: its route, span, commits and per-file changes) and falls back to `find_task` when an older desktop refuses it |
 | `board-tool-write` | The allowlisted mutate half (create/update/delete task, backlog CRUD, link PR, ...) |
 | `register-push` | Register/unregister this device's Expo push token plus its 32-byte notification-decrypt key with the desktop's push notifier (it only lets the desktop send the device ciphertext) |
-| `start-session` | Ask the desktop to start or resume a task's agent session (protocol 0.15.0). The desktop answers when the start is ACCEPTED, `outcome: 'starting'` or `'live'`, not when the agent is up; the successor then arrives as the same board and stream events a column move produces. The phone sends it only for Resume on a paused task, gated on the board row's `resumable` flag (protocol 0.16.0, see Resume below), so no earlier desktop ever receives it. The session screen's "Start again" for an ended session is a follow-up (a button on the swap veil during the waiting phase) |
+| `start-session` | Ask the desktop to start or resume a task's agent session (protocol 0.15.0). The desktop answers when the start is ACCEPTED, `outcome: 'starting'` or `'live'`, not when the agent is up; the successor then arrives as the same board and stream events a column move produces. The phone sends it for Resume on a paused task, gated on the board row's `resumable` flag (protocol 0.16.0, see Resume below), so no earlier desktop ever receives it, and with `trigger: 'open'` for the resume on open, gated on the snapshot's `resumeOnOpenOffered` (protocol 0.28.0, answered `not-eligible` when the desktop does nothing; see Resume on open below). The session screen's "Start again" for an ended session is a follow-up (a button on the swap veil during the waiting phase) |
 | `pause-session` | Ask the desktop to pause a task's LIVE session exactly as its Pause button does (protocol 0.18.0): keyed by task, the conversation kept for a later Resume, and the pause sticks on an auto-spawn column. The desktop answers `{ ok }` when the pause is ACCEPTED (recorded), while the agent shuts down behind it; the paused row then arrives as a board event. The phone sends it only from the long-press hub's Pause, gated on the board row's `pausable` (see Pause below) |
 | `command-terminal` | Start or stop a Command Terminal (protocol 0.20.0): the AGENT CLI the desktop's Ctrl+Shift+P layer runs at a project's root, with no task. `start` names only the project (no command, branch, model or effort); the desktop runs its own New terminal path unattended and answers `{ ok, sessionId, slot, name }` once the session exists. `stop` names the session and ends only a Command Terminal. Refusals carry typed codes (`command-terminal-limit`, `unknown-project`, `agent-unavailable`, `command-terminal-start-failed`, `not-command-terminal`, `unknown-session`). The phone shows Terminals only where a snapshot's `commandTerminalsOffered` says the desktop serves it AND this device holds it (see Command Terminals below) |
 
@@ -1172,10 +1172,31 @@ and the desktop's own step ("Switching model...", "Creating worktree..."), a sti
 agent..." ("Resuming agent..." for a session the desktop spawned as a resume, the snapshot's
 `resuming`). An ended session has no footer. None of these lines draws a track under it, as the
 desktop's status line has drawn none since d0aff06d4, so a card grows by the usage bar's track when
-its agent reports a model (task #141). The desktop's place in line ("Next in line...", "N tasks
-ahead...") needs protocol 0.28.0, so every queued card reads "Queued..." until the phone adopts
-it. Against a pre-0.16.0 desktop every board field is null and no status push says `suspended`,
-which reduces this to the earlier precedence exactly.
+its agent reports a model (task #141). A queued card says its place in line from the row's
+`queue_place` (protocol 0.28.0, `src/lib/queuePlace.ts`): "Next in line...", "1 task ahead...",
+"N tasks ahead...", or "Queued..." when no place is known (an older desktop, or a `kind` the phone
+does not know); the desktop's hover tip ("Waiting for a slot in Merge.", "Waiting for a free agent
+slot.") is the footer's accessibility label. A row whose last start never reached its agent
+(`start_blocked_reason`, protocol 0.28.0, `src/lib/startBlocked.ts`) draws the desktop's words in
+place of "Paused", in its warning tone with a still `CircleExclamationPoint`: "Worktree missing",
+"Folder missing" or "Didn't start", with the reason as the accessibility label. It draws on an
+ended card's empty footer as well, and on one the phone reads as `none`, since the phone often holds
+no entry for an ended session and the row carries a reason only while the task has a paused or
+ended session; an unknown reason reads as plain "Paused". Against a pre-0.16.0 desktop every board
+field is null and no status push says `suspended`, which reduces this to the earlier precedence
+exactly.
+A card's labels row leads with the task's priority (protocol 0.28.0, `PriorityBadge`): the
+snapshot's `priorities` scale names and colors each level, a task's `priority` is an index into it,
+the bottom entry draws nothing whatever it is called, and an index past the end draws `P<n>` in the
+protocol's gray (`priorityLevelFor`). The pill is the desktop's flag and label in the level's color
+over a 14% tint with a 35% edge, square-cornered like the phone's label pills rather than round like
+the desktop's, and `labelFit` reserves its width before it fits the labels. An older desktop sends
+no scale, so no pill draws. A running card whose idle reason carries `stopped` (protocol 0.28.0:
+the board stopped it, by its column's turn-end rows or a reply ending on "Needs owner:") wears the
+desktop's `agent-stopped` pennant in place of the envelope (`AgentStatusIcon`'s `stopped` kind,
+accessibility label "Stopped"), in the header too, and shows no wait time, since the desktop's
+pennant has no tip and no clock. The counting envelope stays where marks are counted (the project
+picker, the section legend).
 A paused task the desktop offers no Resume for reads `paused: true, resumable: false`, so its card
 reads "Paused" with no Resume control, as the desktop card does. In practice that is a task sitting
 in Done UNARCHIVED (created straight into the column, say), because the desktop archives a task in
@@ -1202,6 +1223,23 @@ for each state (`TaskDetailHeader.tsx`): the agent icon while running, a still c
 the spinner while a step label is in flight, the Resume control for a paused task the desktop
 offers Resume for (with or without a session the phone holds), nothing once the session has ended.
 No surface draws an agent icon for a session that is not running.
+
+A **queued** session's terminal lens shows the desktop's queued task window (`QueuedPanel`, after
+`QueuedPlaceholder.tsx`, protocol 0.28.0) over the pane, as the Resume panel does, with the quick
+keys hidden: a heading in the card's words without the dots ("Next in line", "2 tasks ahead",
+"Queued"), the "{position} of {total}" pill, and what holds it, "{column} runs one agent at a time"
+with the column's icon or "Up to N agents run at a time" with a gauge, in the desktop code's plural
+forms. The desktop's numbered line of the tasks ahead is not on the wire, and the reason line opens
+nothing (the desktop's opens the column manager or Settings). A swap's quiet veil yields to it, since
+a queued successor never paints.
+
+A task's **artifacts** (protocol 0.28.0's `BoardTaskWire.artifacts`, the links the desktop chips
+show) appear where the phone shows the task: the long-press hub (one link is its own row, several are
+one "Artifacts" row, as the desktop's menu has one item), a new form sheet (`task-artifacts`, the
+desktop's Artifacts menu: each link's name and its host where the desktop names the tool), and the
+completed task's header strip beside its PR chip. Archived rows carry them too. Only https links are
+shown and opened, through `Linking.openURL` as Chat's links are (`openableArtifacts`); the wire
+carries no platform, so there are no vendor logos, and the card itself carries no links chip.
 
 **Resume** is the desktop task view's, from the phone, on three surfaces: the session screen's
 terminal lens shows the desktop's "Resume session" button in place of the terminal (`ResumePanel`,
@@ -1238,6 +1276,39 @@ one, and the phone deliberately does not. A screen with no session keeps that sw
 is the switcher alone unless the desktop names a paused session to hold for, below), so a paused
 task opened on a remembered Chat lens, which has no session to read and says so, can still reach
 its Resume panel and its diff.
+
+**Resume on open** (protocol 0.28.0, desktop #1069). Opening a task the desktop's idle timeout
+paused resumes it, as opening it on the desktop does (30 minutes, on by default since desktop
+0b9005758, so most push taps land on one). The phone sends `start-session` with `trigger: 'open'`
+(`resumeTaskOnOpen`), never the Resume button's plain start, which resumes a person's own Pause and
+can deliver the column's message, a paid turn. The desktop resumes only an idle-timeout pause whose
+resume sends the agent nothing, and answers everything else `not-eligible`. It is sent only when the
+board snapshot's `resumeOnOpenOffered` is true: an older desktop drops the trigger and would take
+the paid path, so it gets nothing and keeps its Resume button. (The read-stream response carries
+the same flag for a client that reads a stream first; this phone reads boards first at bootstrap
+and needs the row to decide, so only the board's copy is kept.)
+Once per OPEN, never on a reconnect, a re-subscribe, a return from a sheet or a pause that lands on
+a screen already open, because the desktop guards the same loop (a focused window would otherwise
+resume, idle and pause all night). Nothing on the session screen can tell those apart: a push tap
+onto the screen already on top keeps its route key and does not remount, and its effects re-run on
+every rebind and focus. So the open is noted where the navigation is performed
+(`src/navigation/taskOpenIntent.ts`: `PendingNavigationRunner`'s open-task, both Agents card kinds,
+`useOpenBoardTask` for the Board and the workflow view), in a one-slot, in-memory intent that must
+be claimed within 10 s, so a restored route never replays one and a lost navigation's intent is
+never picked up by a later remount. The session screen is its one consumer (`useResumeOnOpen`): it
+claims the open on mount or when a note lands while it is on top, and decides ONCE, as soon as the
+task's row is in a board read on THIS connection (`snapshotAt` at or after the channel store's
+`establishedAt`; a push tap into a warm app otherwise reads the row cached from before the pause and
+drops the open). It sends only where `useResumeOffer` offers Resume. The open is spent on that look
+whatever it decides.
+The attempt is the shared `resumeStore` one (`origin: 'open'`), so the panel, the header and the
+long-press row all read "Resuming agent..." from the moment the screen opens and none can be
+pressed, which is what keeps a Resume tap from sending the paid start on top of the free one
+(design decision B1). It never fails: `not-eligible`, a refusal, a lost connection, a `starting`
+the desktop then leaves paused (it decides whether a resume would start fresh only after its git
+phase) and the 20 s bound all clear it to the plain Resume button with no error line, since an
+open is not a request the person can fail. A task whose last start never reached its agent shows the
+desktop's reason under the Resume button (`start_blocked_reason`, above).
 
 **Chat on a paused task** (protocol 0.26.0, named by 0.27.0). A `send-user-message` to a task's
 session with no running agent (paused, queued or exited) is HELD by the desktop for the task's next

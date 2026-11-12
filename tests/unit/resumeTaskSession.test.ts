@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BoardTaskWire } from '@kangentic/protocol';
 import { CapabilityError } from '@/channel/verbClient';
-import { RESUME_WAIT_MS, resumeTaskSession } from '@/connection/actions';
+import { RESUME_WAIT_MS, resumeTaskOnOpen, resumeTaskSession } from '@/connection/actions';
 import { boardSnapshotFixture, boardTaskFixture } from '@/devsupport/desktopFixtures';
 import { useBoardStore } from '@/state/boardStore';
 import { resumeProgress, useResumeStore } from '@/state/resumeStore';
@@ -397,6 +397,137 @@ describe('resumeTaskSession - following the board row', () => {
 
     vi.advanceTimersByTime(RESUME_WAIT_MS);
     expect(attemptFor()).toEqual({ phase: 'failed', message: null });
+  });
+});
+
+/**
+ * The resume on open (protocol 0.28.0): the same attempt as the button, but an
+ * open is not a request the person can fail, so every outcome except a new
+ * session binding CLEARS the attempt instead of marking it failed.
+ */
+describe('resumeTaskOnOpen', () => {
+  const RESUME_LABEL = 'Resuming session...';
+  const PAUSED_ROW: Partial<BoardTaskWire> = { session_id: null, resumable: true, spawn_progress: null };
+
+  const publishRow = (row: Partial<BoardTaskWire>): void => {
+    useBoardStore
+      .getState()
+      .applyBoardSnapshot(boardSnapshotFixture({ projectId: 'project-1', view: 'sessions', tasks: [boardTaskFixture({ id: 'task-1', ...row })] }));
+  };
+  const attemptFor = (): unknown => useResumeStore.getState().byTaskId['task-1'];
+
+  it('sends start-session with the open trigger', async () => {
+    startSession.mockResolvedValue({ ok: true, outcome: 'starting' });
+
+    await resumeTaskOnOpen('task-1', 'project-1');
+
+    expect(startSession).toHaveBeenCalledWith({ taskId: 'task-1', projectId: 'project-1', trigger: 'open' });
+  });
+
+  it('marks the attempt resuming with the open origin before the request resolves', async () => {
+    let resolveRequest: (value: { ok: true; outcome: 'starting' }) => void = () => undefined;
+    startSession.mockReturnValue(
+      new Promise((resolve) => {
+        resolveRequest = resolve;
+      }),
+    );
+
+    const pending = resumeTaskOnOpen('task-1', 'project-1');
+
+    expect(attemptFor()).toMatchObject({ phase: 'resuming', origin: 'open' });
+    resolveRequest({ ok: true, outcome: 'starting' });
+    await pending;
+  });
+
+  it('clears the attempt on not-eligible, with no failed entry', async () => {
+    startSession.mockResolvedValue({ ok: true, outcome: 'not-eligible' });
+
+    await resumeTaskOnOpen('task-1', 'project-1');
+
+    expect(attemptFor()).toBeUndefined();
+  });
+
+  it.each([
+    ['a desktop refusal', new CapabilityError('start-session', 'Cannot resume a task in To Do')],
+    ['a plain error', new Error('Not connected')],
+  ])('clears silently when the request rejects with %s', async (_description, rejection) => {
+    startSession.mockRejectedValue(rejection);
+
+    await resumeTaskOnOpen('task-1', 'project-1');
+
+    expect(attemptFor()).toBeUndefined();
+  });
+
+  it('sends nothing while an attempt is already resuming (a button press)', async () => {
+    useResumeStore.getState().markResuming('task-1', Date.now(), 'button');
+
+    await resumeTaskOnOpen('task-1', 'project-1');
+
+    expect(startSession).not.toHaveBeenCalled();
+    expect(attemptFor()).toMatchObject({ phase: 'resuming', origin: 'button' });
+  });
+
+  describe('after the desktop answers starting', () => {
+    beforeEach(() => {
+      startSession.mockResolvedValue({ ok: true, outcome: 'starting' });
+    });
+
+    it('clears, not fails, when the label comes and the row goes back to paused with no new session', async () => {
+      publishRow(PAUSED_ROW);
+      await resumeTaskOnOpen('task-1', 'project-1');
+      publishRow({ ...PAUSED_ROW, spawn_progress: RESUME_LABEL });
+      expect(attemptFor()).toMatchObject({ phase: 'resuming' });
+
+      publishRow(PAUSED_ROW);
+
+      expect(attemptFor()).toBeUndefined();
+    });
+
+    it('clears, not fails, at the wait bound when no label ever appeared', async () => {
+      publishRow(PAUSED_ROW);
+      await resumeTaskOnOpen('task-1', 'project-1');
+
+      vi.advanceTimersByTime(RESUME_WAIT_MS - 1);
+      expect(attemptFor()).toMatchObject({ phase: 'resuming' });
+      vi.advanceTimersByTime(1);
+
+      expect(attemptFor()).toBeUndefined();
+    });
+
+    it('clears when a new session binds', async () => {
+      publishRow(PAUSED_ROW);
+      await resumeTaskOnOpen('task-1', 'project-1');
+      publishRow({ ...PAUSED_ROW, spawn_progress: RESUME_LABEL });
+
+      publishRow({ session_id: 'sess-new', resumable: false, spawn_progress: null });
+
+      expect(attemptFor()).toBeUndefined();
+    });
+  });
+
+  describe('regression pair: the button path in the same situations still fails', () => {
+    beforeEach(() => {
+      startSession.mockResolvedValue({ ok: true, outcome: 'starting' });
+    });
+
+    it('fails the button attempt when the label clears onto a paused row', async () => {
+      publishRow(PAUSED_ROW);
+      await resumeTaskSession('task-1', 'project-1');
+      publishRow({ ...PAUSED_ROW, spawn_progress: RESUME_LABEL });
+
+      publishRow(PAUSED_ROW);
+
+      expect(attemptFor()).toEqual({ phase: 'failed', message: null });
+    });
+
+    it('fails the button attempt at the wait bound', async () => {
+      publishRow(PAUSED_ROW);
+      await resumeTaskSession('task-1', 'project-1');
+
+      vi.advanceTimersByTime(RESUME_WAIT_MS);
+
+      expect(attemptFor()).toEqual({ phase: 'failed', message: null });
+    });
   });
 });
 

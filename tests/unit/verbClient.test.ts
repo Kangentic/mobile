@@ -342,7 +342,7 @@ describe('VerbClient', () => {
    * of two accepted shapes it was. Both outcomes parse; the caller decides what
    * each means.
    */
-  it.each(['starting', 'live'] as const)('startSession sends the task-keyed payload and parses the "%s" outcome', async (outcome) => {
+  it.each(['starting', 'live', 'not-eligible'] as const)('startSession sends the task-keyed payload and parses the "%s" outcome', async (outcome) => {
     const { verbs, requests } = await establishedHarness((request) => okResponse(request, { ok: true, outcome }));
 
     await expect(verbs.startSession({ taskId: 'task-1', projectId: 'project-1' })).resolves.toEqual({ ok: true, outcome });
@@ -350,6 +350,15 @@ describe('VerbClient', () => {
     expect(requests).toHaveLength(1);
     expect(requests[0].verb).toBe('start-session');
     expect(requests[0].payload).toEqual({ taskId: 'task-1', projectId: 'project-1' });
+  });
+
+  /** The resume on open (protocol 0.28.0): the trigger must reach the wire, or the desktop takes the Resume button's path. */
+  it('startSession forwards the open trigger in the request payload', async () => {
+    const { verbs, requests } = await establishedHarness((request) => okResponse(request, { ok: true, outcome: 'starting' }));
+
+    await verbs.startSession({ taskId: 'task-1', projectId: 'project-1', trigger: 'open' });
+
+    expect(requests[0].payload).toEqual({ taskId: 'task-1', projectId: 'project-1', trigger: 'open' });
   });
 
   it('startSession throws CapabilityError carrying the desktop\'s own refusal on ok:false', async () => {
