@@ -677,9 +677,18 @@ jobs:
   # macOS minutes are billable on private repositories; this one is public, so
   # they are free. It compiles four small files with swiftc and needs no Xcode
   # project, no simulator, and no signing.
+  #
+  # It runs on the Intel pool, not `macos-latest`, on purpose. `macos-latest` is
+  # the arm64 pool, which GitHub flags as capacity constrained: on 2026-11-17 this
+  # job waited about 16 minutes twice for a runner and was cancelled with "The job
+  # was not acquired by Runner of type hosted even after multiple attempts". A
+  # cancelled required check reports as a failure and blocks the merge. The job
+  # compiles plain Swift with `swiftc` and tests byte-level crypto, so which CPU it
+  # runs on changes nothing it proves. If this label is ever retired, use
+  # `macos-latest` again.
   nse-crypto:
     name: NSE crypto (swiftc)
-    runs-on: macos-latest
+    runs-on: macos-15-intel
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
