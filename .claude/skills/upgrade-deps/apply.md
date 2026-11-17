@@ -125,8 +125,8 @@ all of this work. Only a phase that cannot land gets recorded, and a later run p
 
 **A message that arrives mid-run does not end the run.** The Executing column's Apply findings row can
 fire while you wait on a background command, and it asks you to end on `Findings: applied` or
-`Design: waiting on you`. If phases remain, say so in one line and keep working. Either line moves or
-holds the card, so write one only when the whole plan is done.
+`Design: waiting on you`. If phases remain, say so in one line and keep working. Either line moves the
+card (on to Code Review, or back to Design), so write one only when the whole plan is done.
 
 ## Last phase: lockfile refresh
 
@@ -267,8 +267,9 @@ Make the last line of the message, alone, one of the Executing column's two line
 `kangentic.json` match the whole line, and `tests/unit/boardTurnEndContracts.test.ts` pins both
 here):
 
-- `Design: waiting on you`, when a phase changed what a person sees. The card waits for the user to
-  look, and once they say it is ready ("ship it"), end every later turn on the other line.
+- `Design: waiting on you`, when a phase changed what a person sees. It moves the card back to
+  Design, and only the owner moves it on from there, by typing "signed off" or dragging it. The card
+  then returns through Planning to Executing, where you end on the other line once the rest is done.
 - `Findings: applied` otherwise. It moves the card on to Code Review, and the board's Code Review,
   Testing and Merge columns do the rest.
 

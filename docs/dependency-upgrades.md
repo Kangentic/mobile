@@ -176,7 +176,8 @@ the one waiting in To Do, and while one is past To Do a run reports and stops.
 A new feature a person would see is never a phase. It gets one line in the report, and you decide
 whether it is worth a task. A bump that changes what a screen draws anyway (an icon set, text
 metrics) is shown with before and after screenshots, and the agent ends on
-`Design: waiting on you` instead of `Findings: applied`, which is the Executing column's own contract.
+`Design: waiting on you` instead of `Findings: applied`, which is the Executing column's own contract:
+it sends the card back to Design, and only the owner's sign-off moves it on.
 
 ## The release build gate
 

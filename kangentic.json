@@ -9,6 +9,69 @@
       "color": "#6b7280"
     },
     {
+      "id": "c8bd0a05-b7a8-4db2-973f-963cd785f4c8",
+      "name": "Design",
+      "description": "Publishes a design review page and revises it until the owner signs it off, by typing \"signed off\" or moving the card. For work whose result someone looks at: a screen, motion, user-facing copy, store frames. Executing sends a card back here on \"Design: waiting on you\". Only a person moves a card on from it.",
+      "icon": "brush",
+      "color": "#ec4899",
+      "autoSpawn": true,
+      "modelOverride": "opus",
+      "effortOverride": "xhigh",
+      "automations": {
+        "onEnter": [
+          {
+            "name": "Design contract",
+            "type": "send_message",
+            "message": "Design phase. Publish the design review page for this task as a Claude artifact (numbered Today | Proposed cards, open choices as lettered decisions), render-check it, and revise it from the owner's feedback. Write no feature code and make no commits. Before you write to the worktree, call kangentic_get_current_task: while the card is in Design, write only the review page and any temporary capture flow. A card sent back from Executing already holds its built change: show what was built, and leave that work as it is. End each turn with the open decisions by number, the review page link, then the line \"To sign off, type signed off or move the card to Planning.\" The owner signs off by typing \"signed off\" or by moving this card to Planning. A mode switch, or a reply that answers every open item, is not sign-off. When the owner's message signs off, record the picks on the review page, take your recommendation on any decision still open, delete any temporary capture flow, append the signed-off design to the task description with kangentic_update_task, and end your turn. The board moves the card. Never move this card yourself. If the owner asks to shelve the design, append the review page link to the task description with kangentic_update_task, then end your turn with the line \"Design: shelved\", and leave the sign-off line off that turn. Shelving moves the card to To Do, which removes the worktree, so if it holds built work, say so and shelve only once the owner confirms.",
+            "mode": "immediate"
+          }
+        ],
+        "onTurnEnd": [
+          {
+            "name": "Shelved",
+            "type": "move_to_column",
+            "condition": {
+              "text": "Design: shelved"
+            },
+            "targetColumn": "To Do"
+          },
+          {
+            "name": "On to Planning",
+            "type": "move_to_column",
+            "condition": {
+              "text": {
+                "from": "user",
+                "patterns": [
+                  "*signed off*",
+                  "*design approved*",
+                  "*design is approved*",
+                  "!*not signed off*",
+                  "!*not approved*",
+                  "!*type signed off*",
+                  "!*typing signed off*",
+                  "!*signed off except*",
+                  "!*not yet signed off*",
+                  "!*n't signed off*",
+                  "!*n't yet signed off*",
+                  "!*not been signed off*",
+                  "!*n't been signed off*"
+                ]
+              }
+            },
+            "targetColumn": "Planning"
+          }
+        ],
+        "onExit": [
+          {
+            "name": "Signed off",
+            "type": "send_message",
+            "message": "This card left Design for {{toColumn}}. In Planning, call EnterPlanMode and write the implementation plan against the design the owner approved, covering only what is left when the change is already built. In Executing, build it against that design. In any other column, this message needs no action.",
+            "mode": "immediate"
+          }
+        ]
+      }
+    },
+    {
       "id": "ed873612-be49-4071-94d2-c221fe4413ba",
       "name": "Planning",
       "icon": "map",
@@ -32,22 +95,24 @@
           {
             "name": "On to Code Review",
             "type": "move_to_column",
-            "finalLine": "Findings: applied",
+            "condition": {
+              "text": "Findings: applied"
+            },
             "maxRuns": 4,
             "targetColumn": "Code Review"
           },
           {
-            "name": "Design hold",
-            "type": "notify",
-            "finalLine": "Design: waiting on you",
-            "title": "{{title}}",
-            "body": "Waiting on your design review. Say \"ship it\" to send it on to Code Review."
+            "name": "Design review",
+            "type": "move_to_column",
+            "condition": {
+              "text": "Design: waiting on you"
+            },
+            "targetColumn": "Design"
           },
           {
             "name": "Apply findings",
             "type": "send_message",
-            "condition": "The last line of the agent's final message is anything other than \"Design: waiting on you\" (ignore case, punctuation and markdown). A reply whose last line is \"Design: waiting on you\" is waiting on the user's design review and does not count.",
-            "message": "Check your last message for findings, recommendations or follow-up changes you have not applied yet, and apply them here in this task, not as follow-up tasks. Where one needs a decision, take your recommended option and name the alternative, unless it is a design choice you laid out for the user, which stays theirs. If there are none, say so. Then end your turn with a short summary and one final line, alone.\n\nWrite \"Design: waiting on you\" when the user should see this before it ships: a visible change to a screen, layout, styling, motion, haptics, user-facing copy or store frames, a design choice you laid out for the user, or a task where the user has given design feedback. Keep ending every turn on that line until the user says the design is ready, for example \"ship it\". Once they have, write \"Findings: applied\", on this visit and any later one.\n\nOtherwise write \"Findings: applied\"."
+            "message": "Check your last message for findings, recommendations or follow-up changes you have not applied yet, and apply them here in this task, not as follow-up tasks. Skip anything already filed as a task on the board, and never delete or move one. Where one needs a decision, take your recommended option and name the alternative, unless it is a design choice you laid out for the owner, which stays theirs. If there are none, say so. Then end your turn with a short summary and one final line, alone.\n\nWrite \"Design: waiting on you\" when this task changed something a person sees that the owner has not signed off: a screen, layout, styling, motion, haptics, user-facing copy or store frames, or a design choice you laid out for them. That line moves the card to Design, where only the owner moves it on. Work that matches a design the owner already signed off does not count.\n\nOtherwise write \"Findings: applied\"."
           }
         ]
       }
@@ -75,7 +140,9 @@
           {
             "name": "Back for revisions",
             "type": "move_to_column",
-            "finalLine": "Verdict: Blocked",
+            "condition": {
+              "text": "Verdict: Blocked"
+            },
             "maxRuns": 3,
             "targetColumn": "Executing",
             "message": "Code Review sent this back. Do the numbered steps above its verdict, commit (never with the review scope), then end your turn.\n\n{{agentReply}}"
@@ -83,7 +150,9 @@
           {
             "name": "On to Testing",
             "type": "move_to_column",
-            "finalLine": "Verdict: Ready",
+            "condition": {
+              "text": "Verdict: Ready"
+            },
             "maxRuns": 1,
             "targetColumn": "Testing"
           }
@@ -111,7 +180,9 @@
           {
             "name": "On to Merge",
             "type": "move_to_column",
-            "finalLine": "PR: ready to merge",
+            "condition": {
+              "text": "PR: ready to merge"
+            },
             "maxRuns": 1,
             "targetColumn": "Merge"
           }
@@ -139,7 +210,9 @@
           {
             "name": "Finish",
             "type": "move_to_column",
-            "finalLine": "PR: merged",
+            "condition": {
+              "text": "PR: merged"
+            },
             "maxRuns": 1,
             "targetColumn": "Done"
           }
