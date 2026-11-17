@@ -719,14 +719,18 @@ in a gitignored `CLAUDE.local.md` at the project root.
   runs `/pull-request` (commit, conventional branch, push, create the PR, drive its CI checks to
   green), and the **Merge** column runs `/merge-pull-request` (merge the green PR, pull back to
   local `main`). The board also moves the card itself, through On agent turn end rows in
-  `kangentic.json`, and every move keys on the last line of the agent's final message (a Text
-  match: the whole line, ignoring case, punctuation and markdown, checked in code at no cost).
-  **Executing** moves on to Code Review on `Findings: applied`, holds on
-  `Design: waiting on you` until the user approves a visible change ("ship it"), and at the
-  first turn end of a visit that ends on neither line, asks the agent once to apply its own
-  findings and end on one of the two. A turn that ends on the design line only notifies: Apply
-  findings carries an Automation agent Condition that skips it, because a Text match cannot say
-  "unless" and a notification does not stop the rows below it. **Code
+  `kangentic.json` (`condition.text`, never the legacy `finalLine`), and every move but one keys
+  on the last line of the agent's final message (a Text match: the whole line, ignoring case,
+  punctuation and markdown, checked in code at no cost). **Design** is the one exception and a
+  person's gate: its agent publishes the review page and ends each turn on the sign-off hint, and
+  On to Planning moves the card when the OWNER's message says "signed off" (Kangentic #1078),
+  never on a line the agent writes. A drag is a sign-off too; `Design: shelved` sends it back to To
+  Do. **Executing** moves on to Code Review on `Findings: applied`, and sends the card BACK to
+  Design on `Design: waiting on you` when the work changed something a person sees that the owner
+  has not signed off. So the agent can ask for the owner's look but never give it. At the first
+  turn end of a visit that ends on neither line, it asks the agent once to apply its own findings
+  and end on one of the two. Executing must never get a row on the owner's message: a forward
+  one makes its column a person's gate for every workflow. **Code
   Review** moves to Testing on `Verdict: Ready` and back to Executing on `Verdict: Blocked`,
   except that a `Needs owner:` line below the verdict (a step only a person can do) matches
   neither row, so the card stops in Code Review for the user.
