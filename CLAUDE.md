@@ -207,7 +207,9 @@ src/
                   #   screenTracking: the root layout's ScreenTracker and the lens hook, which
                   #   tell the crash reporter which screen is showing. It reads useSegments(),
                   #   NEVER usePathname(): segments are the route template, the pathname has a
-                  #   task ID in it. Mounted AFTER the root Stack, which is load-bearing
+                  #   task ID in it. The tracker and a screen's lens hook report in NO
+                  #   guaranteed order (a device showed the opposite of the assumed one), so
+                  #   never reason from effect order there; the door handles both
   conversation/   # Pure transcript-cell flattener, prompt keystrokes, pending-prompt summary
   demo/           # The permanent reviewer/demo pairing: fixed non-expiring code, in-process
                   #   IKpsk0 ceremony against StubPairingResponder, the isDemoAnchor

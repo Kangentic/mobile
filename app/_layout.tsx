@@ -194,11 +194,11 @@ function RootStack(): React.JSX.Element {
           name and never by task, so an event can say where the app was (Sentry
           MOBILE-H's could not).
 
-          AFTER the Stack as well, and here the position decides what gets
-          recorded rather than whether a call is safe: a screen that owns a
-          lens reports it from its own focus effect, which runs before a later
-          sibling's effect, so the one breadcrumb this records per navigation
-          already carries the right lens. See src/navigation/screenTracking.tsx. */}
+          Unlike the runner above, where this sits relative to the Stack does
+          not matter: a screen that owns a lens reports it separately, and the
+          reporting door gives the same result whichever of the two speaks
+          first. It only has to be mounted once, and not as a child of the
+          Stack. See src/navigation/screenTracking.tsx. */}
       <ScreenTracker />
     </>
   );
