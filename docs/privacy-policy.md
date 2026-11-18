@@ -55,8 +55,9 @@ task you had open or anything shown on it:
 - which screen was open when the app failed, and the screens you opened before it, in order. Each
   is a fixed name the app gives one of its screens, such as the task screen, with the view it was
   on (terminal, chat or changes). It is never which task, project or session the screen was
-  showing, and nothing that was on it. Knowing where a failure happened, and how the app got
-  there, is often the only way to reproduce it
+  showing, and nothing that was on it. The pairing screens are left out of the list of earlier
+  screens, so a report does not record when you paired. Knowing where a failure happened, and
+  how the app got there, is often the only way to reproduce it
 - what the app's connection to your desktop was doing in the lead-up: connecting, connected, a
   secure session established, reconnecting, closed, and that the first board update of a session
   had arrived. Each is one fixed word. No address, no project, and nothing your desktop sent

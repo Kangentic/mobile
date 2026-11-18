@@ -4,6 +4,7 @@ import {
   isConnectionBreadcrumbState,
   isLensScreenName,
   isScreenLens,
+  isTrailSilentScreen,
   screenNameFromSegments,
   type ConnectionBreadcrumbState,
   type LensScreenName,
@@ -127,6 +128,9 @@ function writeScreenTags(screen: ScreenName, lens: ScreenLens): void {
 }
 
 function recordScreenBreadcrumb(screen: ScreenName, lens: ScreenLens): void {
+  // The pairing screens set the tag (written by the caller) and stay off the
+  // trail: when a pairing was attempted is not something a report records.
+  if (isTrailSilentScreen(screen)) return;
   Sentry.addBreadcrumb({
     category: NAVIGATION_BREADCRUMB_CATEGORY,
     level: 'info',

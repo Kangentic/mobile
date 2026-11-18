@@ -102,6 +102,32 @@ export function screenNameFromSegments(segments: readonly string[]): ScreenName 
 }
 
 /**
+ * The screens that set the `screen` tag and leave NO entry on the trail: the
+ * two steps of the pairing ceremony.
+ *
+ * Pairing's convention in this app is silence. The handled-error door may not
+ * be called for a pairing failure even from a screen, because "a ceremony
+ * failure's existence and timing is itself information about a pairing
+ * attempt" (.claude/rules/crash-reporting-scope.md). A trail entry for `/pair`
+ * followed by one for `/pair-confirm`, each with its timestamp, is that same
+ * information arriving by another route: the first delivered event of task
+ * #152 showed exactly those two entries, eight seconds apart, ahead of the
+ * connection coming up.
+ *
+ * The TAG still names them. A crash on the scan screen has to say where it
+ * was, the stack trace says as much on its own, and a tag is the state at the
+ * moment of failure rather than a record of what the user did before it.
+ */
+const TRAIL_SILENT_SCREEN_NAMES = {
+  '/pair': true,
+  '/pair-confirm': true,
+} as const satisfies Partial<Record<RouteScreenName, true>>;
+
+export function isTrailSilentScreen(candidate: ScreenName): boolean {
+  return Object.prototype.hasOwnProperty.call(TRAIL_SILENT_SCREEN_NAMES, candidate);
+}
+
+/**
  * The surface showing on a screen that has more than one. A task's session is
  * terminal, chat or changes; a Command Terminal the same; a completed task is
  * conversation, summary or description. `none` is every other screen.
