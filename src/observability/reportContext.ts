@@ -46,8 +46,10 @@ import { CONNECTION_BREADCRUMB_CATEGORY, NAVIGATION_BREADCRUMB_CATEGORY } from '
  * On the native side, read from sentry-cocoa 9.33.0: an app hang has the
  * scope applied when it is detected, and a watchdog-termination event is built
  * on the next launch from tags and a breadcrumb trail persisted to disk as
- * they were set. A delivered native crash on each platform is the proof, and
- * docs/developer-guide.md records what each one carried.
+ * they were set. Delivered events are the proof: a native crash on each
+ * platform, and two iOS app hangs, each carried the tags and the trail
+ * (2026-11-18). docs/developer-guide.md records what each one held, and what
+ * is still unobserved (a watchdog termination, and real iOS hardware).
  *
  * ONE LIMIT THAT FOLLOWS FROM THE BRIDGE, read from RNSentry.mm: on iOS the
  * native module's method queue is the MAIN queue, so a tag or breadcrumb

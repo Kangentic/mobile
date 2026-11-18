@@ -77,7 +77,10 @@ appId: com.kangentic.mobile
       # it as a gesture, which store-capture.yaml already avoids, so Return is
       # pressed instead: a single-line TextInput blurs on submit, which takes
       # the keyboard with it. The field has no onSubmitEditing, so Return does
-      # not start the pairing; the tap below does.
+      # not start the pairing; the tap below does. Both halves have run: the
+      # Android one locally and the iOS one on the CI simulator (run
+      # 44410731965, 2026-11-18, the first time the demo pairing was typed on
+      # iOS).
       - runFlow:
           when:
             platform: Android
