@@ -1,4 +1,5 @@
 import React from 'react';
+import { Platform } from 'react-native';
 import { render, screen } from '@testing-library/react-native';
 import { ThemeProvider, MarkdownBlock } from '@/components';
 
@@ -58,5 +59,35 @@ describe('MarkdownBlock', () => {
     expect(markdownStyle.paragraph.fontSize).toBe(14);
     expect(markdownStyle.codeBlock.fontFamily).toBe('monospace');
     expect(markdownStyle.link.color).toBeDefined();
+  });
+
+  // enriched-markdown 1.2.0 drew every 600-weight heading at body weight on
+  // Android (seen on a release build). A rendered heading cannot be read at
+  // this tier, so this pins the mechanism: an empty font family is what keeps
+  // the weight off React Native's by-family lookup, which rounds 600 down.
+  it('names no font family on an Android heading, so its weight survives', async () => {
+    await render(
+      <ThemeProvider>
+        <MarkdownBlock markdown="## Done when" testID="heading-markdown" />
+      </ThemeProvider>,
+    );
+
+    const { markdownStyle } = screen.getByTestId('heading-markdown').props;
+    const expectedFontFamily = Platform.OS === 'android' ? '' : undefined;
+    for (const level of ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'] as const) {
+      expect(markdownStyle[level].fontWeight).toMatch(/^[67]00$/);
+      expect(markdownStyle[level].fontFamily).toBe(expectedFontFamily);
+    }
+  });
+
+  it('keeps the code block header as it was: no line wrap toggle', async () => {
+    await render(
+      <ThemeProvider>
+        <MarkdownBlock markdown={'```ts\nconst ttl = 60;\n```'} flavor="github" testID="code-markdown" />
+      </ThemeProvider>,
+    );
+
+    // On by default since 1.2.0, and only the GitHub flavor draws it.
+    expect(screen.getByTestId('code-markdown').props.enableCodeBlockWrapToggle).toBe(false);
   });
 });

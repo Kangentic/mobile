@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo } from 'react';
+import { Platform } from 'react-native';
 import * as Linking from 'expo-linking';
 import { EnrichedMarkdownText, type LinkPressEvent, type MarkdownStyle } from 'react-native-enriched-markdown';
 import { getRetentionProbeVariant } from '@/devsupport/retentionProbe';
@@ -89,9 +90,35 @@ export function MarkdownBlock({ markdown, testID, flavor = 'commonmark' }: Markd
       // A checkbox here is read-only: a local toggle would never reach the
       // desktop's description. Only the GitHub flavor draws one.
       enableTaskListItemToggle={false}
+      // 1.2.0 adds a line wrap toggle to a GitHub-flavor code block's header,
+      // on by default. Off, so an upgrade does not add a control: a code block
+      // scrolls sideways, as it did. Turning it on is a design decision.
+      enableCodeBlockWrapToggle={false}
     />
   );
 }
+
+/**
+ * What keeps a heading's weight on Android since enriched-markdown 1.2.0.
+ *
+ * 1.2.0 applies its heading span before the spans of the text inside it, so
+ * the text run's own span now decides the typeface (`HeadingRenderer.kt`,
+ * `TextSpan.kt`). That span asks React Native for a typeface by family name
+ * and weight, and with a family name React Native rounds every weight under
+ * 700 down to regular (`ReactFontManager.getTypeface`, `nearestStyle`). The
+ * library's default heading family is `sans-serif`, so a 600 heading drew at
+ * body weight: seen on a release build, where "Done when" matched the
+ * paragraph above it. By the same rule a 700 heading keeps its bold, which is
+ * read from that source and was not on screen to see.
+ *
+ * An empty family skips the by-name lookup, and the weight is applied to the
+ * default typeface at its real value (`ReactTypefaceUtils.applyStyles`). That
+ * typeface is the same sans-serif face, so nothing else moves.
+ *
+ * iOS keeps the library's default family: its renderer is separate and was
+ * not checked on 1.2.0.
+ */
+const headingFont: { fontFamily?: string } = Platform.OS === 'android' ? { fontFamily: '' } : {};
 
 function markdownStyleFromTheme(theme: Theme): MarkdownStyle {
   const bodyText = {
@@ -107,26 +134,29 @@ function markdownStyleFromTheme(theme: Theme): MarkdownStyle {
       marginBottom: theme.spacing.xs,
     },
     h1: {
+      ...headingFont,
       fontSize: theme.typography.heading.fontSize,
       lineHeight: theme.typography.heading.lineHeight,
       fontWeight: theme.typography.heading.fontWeight,
       color: theme.colors.textPrimary,
     },
     h2: {
+      ...headingFont,
       fontSize: theme.typography.title.fontSize,
       lineHeight: theme.typography.title.lineHeight,
       fontWeight: theme.typography.title.fontWeight,
       color: theme.colors.textPrimary,
     },
     h3: {
+      ...headingFont,
       fontSize: theme.typography.bodyStrong.fontSize,
       lineHeight: theme.typography.bodyStrong.lineHeight,
       fontWeight: theme.typography.bodyStrong.fontWeight,
       color: theme.colors.textPrimary,
     },
-    h4: { ...bodyText, fontWeight: theme.typography.bodyStrong.fontWeight },
-    h5: { ...bodyText, fontWeight: theme.typography.bodyStrong.fontWeight },
-    h6: { ...bodyText, fontWeight: theme.typography.bodyStrong.fontWeight },
+    h4: { ...headingFont, ...bodyText, fontWeight: theme.typography.bodyStrong.fontWeight },
+    h5: { ...headingFont, ...bodyText, fontWeight: theme.typography.bodyStrong.fontWeight },
+    h6: { ...headingFont, ...bodyText, fontWeight: theme.typography.bodyStrong.fontWeight },
     blockquote: {
       ...bodyText,
       color: theme.colors.textSecondary,
