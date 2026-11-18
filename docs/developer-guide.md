@@ -3482,7 +3482,12 @@ Three things that event settles, and one it corrected:
   later, ahead of the connection coming up: the flow had just demo-paired. That is a record of
   when a pairing was attempted, which the crash-reporting rule keeps out of Sentry on purpose
   and which the connection trail had been written to avoid; the screen trail carried it anyway.
-  The two pairing screens now set the tag and leave no trail entry.
+  The two pairing screens now set the tag and leave no trail entry. Checked the same way, on a
+  third build (run 44411365844, commit `1d7eb7a`) with the app's data cleared so the flow paired
+  from scratch: the canary's event at 22:37:05Z has `/`, then `connected`, `established`,
+  `board-snapshot`, then `/` again and on into the task, with nothing between the first `/` and
+  the connection. Its exception value is still the fixed `handled at crash-test`, so the door's
+  redaction holds alongside the new tags (`screen: /settings`, `lens: none`, `site`).
 
 *Not observed, and why.* A hang and a watchdog termination cannot be produced by any Settings
 row, so for those two event kinds the tags and trail rest on sentry-cocoa 9.33.0's source (the
