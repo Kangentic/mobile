@@ -48,6 +48,15 @@ import { CONNECTION_BREADCRUMB_CATEGORY, NAVIGATION_BREADCRUMB_CATEGORY } from '
  * they were set. A delivered native crash on each platform is the proof, and
  * docs/developer-guide.md records what each one carried.
  *
+ * ONE LIMIT THAT FOLLOWS FROM THE BRIDGE, read from RNSentry.mm: on iOS the
+ * native module's method queue is the MAIN queue, so a tag or breadcrumb
+ * recorded here reaches the native scope through the same thread an app hang
+ * blocks. A hang event therefore carries the state from when the hang began,
+ * not anything recorded while it lasted. The ordering still works in the
+ * report's favour: a store update queues its breadcrumb before React commits
+ * the re-render that update causes, so a board snapshot that caused a hang is
+ * already on the scope when the hang starts.
+ *
  * NOTHING HERE IS CONTENT, and the callers cannot make it so. Every value is a
  * member of a closed set in reportVocabulary.ts and is checked against that
  * set HERE, at runtime, whatever the type system was told: a screen name is a
