@@ -166,6 +166,21 @@ describe('initializeCrashReporting', () => {
     expect('tracesSampleRate' in options).toBe(false);
   });
 
+  it('keeps the Android scope synced into the NDK layer, so a native crash still says where the app was', async () => {
+    // The one option here pinned ON. It is the SDK's default, and it is what
+    // carries the `screen` and `lens` tags and the app-owned breadcrumbs onto a
+    // crash the NDK signal handler catches. A default that flipped off would
+    // strip those events of their context with nothing else failing.
+    setSentryDsn(testDsn);
+    setE2eFlag(undefined);
+    vi.stubGlobal('__DEV__', false);
+
+    const crashReporting = await loadFreshCrashReporting();
+    crashReporting.initializeCrashReporting();
+
+    expect(requireCapturedInitOptions().enableNdkScopeSync).toBe(true);
+  });
+
   it('drops the default Breadcrumbs integration and replaces it with a hardened, allowlisted one', async () => {
     setSentryDsn(testDsn);
     setE2eFlag(undefined);
@@ -258,7 +273,7 @@ describe('initializeCrashReporting', () => {
     },
   );
 
-  it('ignores exactly the three known transport-noise patterns, and caps breadcrumbs at 20', async () => {
+  it('ignores exactly the three known transport-noise patterns, and keeps a trail of 100 breadcrumbs', async () => {
     setSentryDsn(testDsn);
     setE2eFlag(undefined);
     vi.stubGlobal('__DEV__', false);
@@ -267,7 +282,13 @@ describe('initializeCrashReporting', () => {
     crashReporting.initializeCrashReporting();
 
     const options = requireCapturedInitOptions();
-    expect(options.maxBreadcrumbs).toBe(20);
+    // 100, the SDK's own default, pinned so it cannot drift back down. It was
+    // 20, and Sentry MOBILE-H's trail was exactly 20 entries long: every one
+    // spent on sentry-cocoa's background battery and clock crumbs, with nothing
+    // left of what the app did before it hung. This value reaches both native
+    // SDKs, and it is also the bound on the trail iOS persists for a
+    // watchdog-termination event.
+    expect(options.maxBreadcrumbs).toBe(100);
 
     const ignoreErrors = options.ignoreErrors;
     if (ignoreErrors === undefined) {

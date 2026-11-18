@@ -379,6 +379,27 @@ const config: ExpoConfig = {
             'NSPrivacyCollectedDataTypePurposeAnalytics',
           ],
         },
+        {
+          // Added 2026-11-18 (task #152). A crash report now names the screen
+          // that was open and the screens opened before it, each by its fixed
+          // route name and never by task (src/observability/reportContext.ts).
+          // The app sends nothing while it is working, so this is not
+          // analytics; but Apple defines this type by the KIND of data ("...or
+          // other information about how the user interacts with the app") and
+          // gives no exemption for data that only rides a crash report, so a
+          // screen trail is declared. The maintainer's decision, on the
+          // standing rule that over-declaring is allowed and under-declaring
+          // is the violation. App Store Connect's App Privacy answers must
+          // carry the same entry (docs/store-listing.md), since Apple
+          // cross-checks the questionnaire against this manifest.
+          NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeProductInteraction',
+          NSPrivacyCollectedDataTypeLinked: false,
+          NSPrivacyCollectedDataTypeTracking: false,
+          NSPrivacyCollectedDataTypePurposes: [
+            'NSPrivacyCollectedDataTypePurposeAppFunctionality',
+            'NSPrivacyCollectedDataTypePurposeAnalytics',
+          ],
+        },
       ],
       // Required-reason APIs the Sentry SDK calls with no opt-out. Reason
       // codes per Sentry's documented guidance.

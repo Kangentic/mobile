@@ -9,9 +9,12 @@ import { shedUnwatchedTerminalRings } from './terminalFeed';
  * The stores own their own shedding policy (`shedBackgroundTranscripts`,
  * `shedUnwatchedTerminalRings`); this module only says WHEN. It lives in
  * `src/state/` rather than in `src/observability/` so the reporting layer does
- * not acquire a dependency on application state, and rather than in
- * `src/connection/` because that directory may not import the observability
- * door at all (`.claude/rules/crash-reporting-scope.md`).
+ * not acquire a dependency on application state, and beside the stores it
+ * drives rather than in `src/connection/`, which composes a connection and has
+ * no business deciding what memory the stores hold. (An earlier version of
+ * this comment said `src/connection/` may not import the observability door.
+ * It may, and does, for `reportHandledError`; the directories that may not are
+ * listed in `.claude/rules/crash-reporting-scope.md`.)
  *
  * Everything shed here is reconstructible from the desktop - a transcript
  * window refetches on mount - so the cost is a round trip, never content and

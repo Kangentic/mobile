@@ -229,7 +229,17 @@ describe('eslint.config.mjs: handled-error door reachability (crash-reporting-sc
   const doorImport = "import { reportHandledError } from '@/observability/crashReporting';\n";
   const TS_NO_RESTRICTED_IMPORTS = '@typescript-eslint/no-restricted-imports';
 
-  it.each(['src/screens/probe.tsx', 'src/components/probe.tsx', 'src/connection/probe.ts', 'src/state/probe.ts'])(
+  // src/navigation is here since task #152: screenTracking.tsx reads the router
+  // and reports the screen through the door. It sits in the LAST
+  // no-restricted-imports entry (the one that permits the imperative router),
+  // so it is the directory a reordered zone would most easily ban by accident.
+  it.each([
+    'src/screens/probe.tsx',
+    'src/components/probe.tsx',
+    'src/connection/probe.ts',
+    'src/state/probe.ts',
+    'src/navigation/probe.tsx',
+  ])(
     'lets %s import the door',
     async (filePath) => {
       expect(await ruleFired(filePath, doorImport, NO_RESTRICTED_IMPORTS)).toBe(false);

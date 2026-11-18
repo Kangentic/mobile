@@ -28,6 +28,128 @@ appId: com.kangentic.mobile
     visible:
       text: "Agents"
     timeout: 45000
+# GIVE THE REPORT SOMETHING TO SAY ABOUT WHERE THE APP WAS (task #152).
+#
+# A crash report carries the open screen and lens as tags and a trail of the
+# screens and connection states before it (src/observability/reportContext.ts),
+# added because Sentry MOBILE-H's event could say none of that. The only proof
+# that they reach a NATIVE event is a delivered one, and an unpaired install
+# that goes straight to Settings would deliver a trail of two screens and no
+# connection at all. So before the crash this pairs with the in-process demo
+# desktop, opens a task, and moves between its lenses. The delivered events
+# should then show app.connection crumbs (connected, established,
+# board-snapshot) and app.navigation crumbs for "/", "/task/[taskId]" on
+# terminal then chat, and "/settings", with `screen: /settings` on the tags.
+# This block is repeated in crash-test-native.yaml, inline in both: the
+# workflow's step runs exactly these two flows and
+# tests/unit/buildWorkflow.test.ts pins that sequence.
+#
+# THE PAIRING IS CONDITIONAL because the second probe flow starts already
+# paired (the demo writes a real trust anchor that survives the relaunch).
+# The CTA renders only once the trust anchor has been read, so a bare
+# `when: visible` could race it on a cold simulator: the optional wait gives it
+# its window and never fails the flow, the form store-capture.yaml uses.
+- extendedWaitUntil:
+    visible:
+      id: "triage-pair-cta"
+    timeout: 15000
+    optional: true
+- runFlow:
+    when:
+      visible:
+        id: "triage-pair-cta"
+    commands:
+      - tapOn:
+          id: "triage-pair-cta"
+      - extendedWaitUntil:
+          visible:
+            id: "pairing-paste-link-input"
+          timeout: 20000
+      - tapOn:
+          id: "pairing-paste-link-input"
+      # The bare word, exactly what the App Review notes tell a reviewer to
+      # type (see .maestro/demo-pairing.yaml). No relay, no stub: the ceremony
+      # runs against an in-process responder.
+      - inputText: "demo"
+      # The keyboard has to go before the Pair button can be tapped, and the
+      # two platforms need different ways. Android's hideKeyboard is proven on
+      # CI (.maestro/setup/pairing-bootstrap.yaml). On iOS Maestro implements
+      # it as a gesture, which store-capture.yaml already avoids, so Return is
+      # pressed instead: a single-line TextInput blurs on submit, which takes
+      # the keyboard with it. The field has no onSubmitEditing, so Return does
+      # not start the pairing; the tap below does.
+      - runFlow:
+          when:
+            platform: Android
+          commands:
+            - hideKeyboard
+      - runFlow:
+          when:
+            platform: iOS
+          commands:
+            - pressKey: Enter
+      - extendedWaitUntil:
+          visible:
+            id: "pairing-paste-link-submit"
+          timeout: 10000
+      - tapOn:
+          id: "pairing-paste-link-submit"
+      - extendedWaitUntil:
+          visible:
+            id: "sas-accept"
+          timeout: 30000
+      - tapOn:
+          id: "sas-accept"
+# Content has arrived: this id renders only with rows and a ready feed. 60s
+# covers the confirm hold, the connect, the handshake and the first bootstrap.
+- extendedWaitUntil:
+    visible:
+      id: "triage-home-list"
+    timeout: 60000
+# Open the mock session the way store-capture.yaml does, and for its reasons:
+# wait for the "Approve:" teaser (the prompt the mock raises at tick 20, which
+# moves the row to its resting place at the top of the feed), then tap the row
+# by id with no scroll. A text selector on our own UI, deliberately: see the
+# long comment in store-capture.yaml.
+- extendedWaitUntil:
+    visible:
+      text: "Approve:.*"
+    timeout: 90000
+- tapOn:
+    id: "activity-row-mock-session-1"
+# 45s: this screen mounts all three panes at once, terminal WebView included.
+- extendedWaitUntil:
+    visible:
+      id: "session-screen"
+    timeout: 45000
+# Two lens changes, so the trail holds a real one in each direction. A
+# prompt-pending row opens on Chat, so Terminal first, then back to Chat, which
+# is the lens the task asked to be crashed from. Each tap is guarded on its
+# own pane, the dispatched-but-ignored guard store-capture.yaml uses.
+- tapOn:
+    id: "session-mode-terminal"
+- runFlow:
+    when:
+      notVisible:
+        id: "terminal-webview"
+    commands:
+      - tapOn:
+          id: "session-mode-terminal"
+- tapOn:
+    id: "session-mode-chat"
+- runFlow:
+    when:
+      notVisible:
+        id: "conversation-list"
+    commands:
+      - tapOn:
+          id: "session-mode-chat"
+- tapOn:
+    id: "task-back-button"
+- extendedWaitUntil:
+    visible:
+      id: "triage-home-list"
+    timeout: 30000
 - tapOn:
     id: "header-settings-button"
 - extendedWaitUntil:

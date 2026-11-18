@@ -8,6 +8,7 @@ import { CommandTerminalPill } from '@/components/board/CommandTerminalPill';
 import { useScreenMotionActive } from '@/components/motion/ScreenMotion';
 import { WaitCursor } from '@/components/motion/WaitCursor';
 import { closeSessionScreen, openSessionScreen, stopCommandTerminal } from '@/connection/actions';
+import { useReportedLens } from '@/navigation/screenTracking';
 import { openNotificationSurface } from '@/notifications/notificationSignals';
 import { selectSessionEnded, useActivityStore } from '@/state/activityStore';
 import { COMMAND_TERMINAL_FALLBACK_NAME, selectCommandTerminal, useBoardStore } from '@/state/boardStore';
@@ -184,6 +185,8 @@ export function CommandTerminalScreen(): React.JSX.Element {
   const chatFallbackActive = useTranscriptStore((state) => selectChatLens(state, boundSessionId) === 'reading-view');
 
   const [mode, setMode] = useState<SessionMode>('terminal');
+  // Which lens a crash report says this screen was on (see SessionScreen).
+  useReportedLens('/command-terminal', mode);
   const title = terminal?.name ?? launch?.name ?? COMMAND_TERMINAL_FALLBACK_NAME;
   const named = terminal?.named === true;
   const startingFaceShown = !startFailed && mode === 'terminal' && (boundSessionId === null || !painted);

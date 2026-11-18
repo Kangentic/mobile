@@ -130,6 +130,32 @@ describe('app/_layout.tsx wiring', () => {
     expect(runnerIndex).toBeGreaterThan(0);
     expect(runnerIndex).toBeGreaterThan(stackCloseIndex);
   });
+
+  /**
+   * `<ScreenTracker />` is what puts the current screen on every crash report
+   * (task #152, from Sentry MOBILE-H). Two ways to lose it leave every other
+   * test green, because tests/components/ScreenTracker.test.tsx renders the
+   * component directly:
+   *
+   * - not rendering it at all, after which every event says `screen: none`;
+   * - rendering it BEFORE the Stack. Effects run in sibling order, and a screen
+   *   that owns a lens reports it from its own focus effect. After the Stack,
+   *   that lands first and the tracker's one breadcrumb carries it. Before the
+   *   Stack, every arrival on a lens screen records two crumbs, the first with
+   *   a stale lens.
+   */
+  it('renders ScreenTracker exactly once', () => {
+    const occurrences = strippedSource.match(/<ScreenTracker\b/g) ?? [];
+    expect(occurrences).toHaveLength(1);
+  });
+
+  it('renders ScreenTracker as a sibling AFTER the root Stack closes, so a screen reports its lens first', () => {
+    const stackCloseIndex = strippedSource.indexOf('</Stack>');
+    const trackerIndex = strippedSource.indexOf('<ScreenTracker');
+    expect(stackCloseIndex).toBeGreaterThan(0);
+    expect(trackerIndex).toBeGreaterThan(0);
+    expect(trackerIndex).toBeGreaterThan(stackCloseIndex);
+  });
 });
 
 describe('app/_layout.tsx defers the settings hydrate through runWhenFirstActive', () => {

@@ -19,6 +19,27 @@ import type { Breadcrumb, ErrorEvent } from '@sentry/react-native';
 export const MEMORY_PRESSURE_BREADCRUMB_CATEGORY = 'app.memory';
 
 /**
+ * The category `reportContext.ts` writes its screen breadcrumb under: which
+ * screen the app moved to, as a member of the closed `ScreenName` set, and the
+ * lens showing on it. Never a resolved path, so never a task ID.
+ *
+ * App-owned rather than the SDK's `navigation`, for the reason `app.memory` is
+ * not `device.event`: the SDK's own navigation integration writes `navigation`
+ * breadcrumbs whose contents an upgrade can widen, and admitting that category
+ * would admit whatever it carries next. The two native bridges also treat a
+ * `navigation` breadcrumb specially (they copy its `data.to` into the native
+ * scope's current screen), which is a second field leaving that nobody chose.
+ */
+export const NAVIGATION_BREADCRUMB_CATEGORY = 'app.navigation';
+
+/**
+ * The category `reportContext.ts` writes its connection breadcrumb under: one
+ * member of the closed `ConnectionBreadcrumbState` union and nothing else. No
+ * relay address, no project, nothing the desktop sent.
+ */
+export const CONNECTION_BREADCRUMB_CATEGORY = 'app.connection';
+
+/**
  * Breadcrumb categories this app allows through to Sentry, default-deny
  * rather than default-allow: an unanticipated category (a native SDK
  * breadcrumb this list did not plan for) must be dropped, not silently
@@ -26,18 +47,33 @@ export const MEMORY_PRESSURE_BREADCRUMB_CATEGORY = 'app.memory';
  * breadcrumb, the one category the app's breadcrumbsIntegration options
  * leave enabled.
  *
- * The second entry is this app's own, written only by
- * `memoryPressure.ts`: a bare "the OS warned us about memory" signal plus a
- * count, no user content. It is allowlisted because `beforeBreadcrumb` runs
- * BEFORE a JS breadcrumb is synced into the native scope, so without an entry
- * here the breadcrumb would be dropped and would never reach the persisted
- * buffer a watchdog-termination event is built from - which is the entire
- * point of recording it. Note it is deliberately NOT the platform's own
- * `device.event`: allowlisting that would also let sentry-cocoa's and
- * sentry-android's battery, keyboard and screen-state breadcrumbs through
- * wherever they ride a JS-captured event.
+ * The other three are this app's own, and each has exactly one writer behind
+ * the door. `app.memory` is written only by `memoryPressure.ts`: a bare "the
+ * OS warned us about memory" signal plus a count, no user content.
+ * `app.navigation` and `app.connection` are written only by
+ * `reportContext.ts`, and carry members of closed sets (see the two constants
+ * above). They exist because a report that cannot say where the app was or
+ * what it was doing cannot be acted on (Sentry MOBILE-H and MOBILE-8).
+ *
+ * All three are allowlisted because `beforeBreadcrumb` runs BEFORE a JS
+ * breadcrumb is synced into the native scope, so without an entry here the
+ * breadcrumb would be dropped and would never reach a native crash, an app
+ * hang, or the persisted buffer a watchdog-termination event is built from -
+ * which is the entire point of recording it. Note `app.memory` is
+ * deliberately NOT the platform's own `device.event`: allowlisting that would
+ * also let sentry-cocoa's and sentry-android's battery, keyboard and
+ * screen-state breadcrumbs through wherever they ride a JS-captured event.
+ *
+ * Adding an entry changes what leaves a device, so it also edits
+ * docs/privacy-policy.md, docs/security.md and the canonical list in
+ * .claude/rules/crash-reporting-scope.md.
  */
-const ALLOWED_BREADCRUMB_CATEGORIES = new Set<string>(['sentry.event', MEMORY_PRESSURE_BREADCRUMB_CATEGORY]);
+const ALLOWED_BREADCRUMB_CATEGORIES = new Set<string>([
+  'sentry.event',
+  MEMORY_PRESSURE_BREADCRUMB_CATEGORY,
+  NAVIGATION_BREADCRUMB_CATEGORY,
+  CONNECTION_BREADCRUMB_CATEGORY,
+]);
 
 export function allowlistBreadcrumb(breadcrumb: Breadcrumb): Breadcrumb | null {
   if (breadcrumb.category !== undefined && ALLOWED_BREADCRUMB_CATEGORIES.has(breadcrumb.category)) {

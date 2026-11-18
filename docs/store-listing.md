@@ -319,14 +319,30 @@ Google, because `Send app for review` stays disabled until the app dashboard rea
 Publishing overview before repeating a claim from this file: the Play API cannot see any of these
 declarations, so the Console is the only source of truth for them.
 
-The app collects two kinds of thing - crash
-diagnostics and a per-install device identifier the crash SDK attaches on its own - so the
+> **PENDING, both consoles: add the screen-trail entry before the first release that carries
+> task #152 (2026-11-18).** A crash report now names the screens opened before a failure, and
+> that is declared as app-interaction data on both stores (the two entries are below, marked
+> PENDING). Only the maintainer can change a store console. Until both are done the store
+> answers are behind what the next build collects, and on iOS the build's own privacy manifest
+> will already say Product Interaction, so the App Privacy answers must change no later than the
+> submission. Remove this block, and the two PENDING markers, in the change that confirms them.
+>
+> 1. **App Store Connect > App Privacy:** add *Usage Data > Product Interaction*. Not linked to
+>    the user, not used for tracking, purposes App Functionality and Analytics.
+> 2. **Play Console > Data safety:** add *App activity > App interactions*. Collected, not
+>    shared, purposes App functionality and Analytics, required (no in-app toggle), encrypted in
+>    transit, not processed ephemerally.
+
+The app collects three kinds of thing - crash
+diagnostics, a per-install device identifier the crash SDK attaches on its own, and (from task
+#152) the names of the screens opened before a failure, which ride the crash report - so the
 declarations stay short. The two stores slice those into a different number of boxes: Play takes
-two entries, App Store Connect takes four, because Apple splits Diagnostics into three types and
+three entries, App Store Connect takes five, because Apple splits Diagnostics into three types and
 `app.config.ts`'s iOS privacy manifest declares all three. Source of truth for the wording is
 [privacy-policy.md](privacy-policy.md).
 
-**Play Console - Data safety.** Declare two collected types:
+**Play Console - Data safety.** Declare three collected types (the third is PENDING, see the
+block above):
 
 - **Crash logs** (under *App info and performance*). Collected: **yes**.
   Purpose: **App functionality** and **Analytics**. Not advertising, not personalisation, not
@@ -362,6 +378,29 @@ two entries, App Store Connect takes four, because Apple splits Diagnostics into
   Crash logs and for the same reason. Not linked to any other collected data, because there is
   none to link it to: no account, and no analytics or product-usage telemetry beyond the crash
   payload itself. Same transit/retention/required answers as Crash logs above.
+- **App interactions** (under *App activity*). **PENDING, added by task #152 on 2026-11-18.**
+  Collected: **yes**. Purpose: **App functionality** and **Analytics**, the same pair as Crash
+  logs. Same transit, retention and required answers as Crash logs above.
+
+  What it covers: a crash report now carries the fixed name of the screen that was open and the
+  names of the screens opened before it (`screen` and `lens` tags and `app.navigation`
+  breadcrumbs, `src/observability/reportContext.ts`). Never which task, and nothing on a screen.
+  Nothing is sent while the app works, and there is still no analytics product.
+
+  Why it is declared and not folded into Crash logs. Both stores' definitions were read on
+  2026-11-18 rather than assumed. Play defines this type as "Information about how a user
+  interacts with the app", with the example "the number of times they visit a page, screenshots
+  taken, or sections they tap on", and defines collection as "transmitting data from your app
+  off a user's device" with no exemption for data that only rides a crash report. Crash logs is
+  "Crash log data from your app", with the example "other information directly related to a
+  crash", and a trail leading up to a crash can be read into that. That reading was considered
+  and set aside by the maintainer: a list of screens visited matches the App interactions
+  example more closely than anything in Crash logs, and the standing rule here is that
+  over-declaring is allowed and under-declaring is the violation.
+
+  The connection-state trail (`app.connection`: connecting, connected, reconnecting and so on)
+  needs no entry of its own. It is technical state, not user activity, and sits inside Crash
+  logs for the reason the memory breadcrumb above does.
 - **The "shared with third parties" answer needs a deliberate read, not a guess.** Play defines
   sharing as transfer to a third party, but explicitly **excludes** transfer to a service
   provider processing data on the developer's behalf. Sentry is that kind of processor here, so
@@ -383,7 +422,8 @@ two entries, App Store Connect takes four, because Apple splits Diagnostics into
   before the next submission rather than relying on this note. The alternative is Sentry's
   project setting that stops storing IP addresses, which removes the location at the source.
 - Declare **no** other type. In particular: no personal info, no precise location, no photos,
-  no audio, no contacts, no app-usage analytics, and no "Diagnostics" beyond the two types above
+  no audio, no contacts, no in-app search history or other user actions beyond the screen names
+  in the App interactions entry above, and no "Diagnostics" beyond the crash types above
   (performance tracing and session tracking are disabled). Note this is a statement
   about collected TYPES and does not contradict the Analytics PURPOSE above: the app ships no
   analytics product and gathers no usage telemetry, but Play models "why crash data is
@@ -410,8 +450,23 @@ two entries, App Store Connect takes four, because Apple splits Diagnostics into
   for tracking. Same finding as the Play entry above: an OS-caught crash carries a per-install
   identifier sentry-android/sentry-cocoa attach independently of `sendDefaultPii`. Declared as
   Data Not Linked to You because there is no account or other data to link it to.
-- Answer **No** to the tracking question for both (the app runs no ATT-relevant tracking and
-  should not prompt for ATT).
+- **Usage Data -> Product Interaction**, used for **App Functionality** and **Analytics**, and
+  **not** used for tracking. **PENDING, added by task #152 on 2026-11-18**; the manifest half
+  (`NSPrivacyCollectedDataTypeProductInteraction` in `app.config.ts`, pinned by
+  `tests/unit/appConfigBrand.test.ts`) landed with that task, so this answer must be in App
+  Store Connect no later than the first submission built from it. It covers the same thing as
+  Play's App interactions entry above: the fixed names of the screens opened before a failure,
+  inside the crash report and nowhere else. Apple's definition, read 2026-11-18: "Such as app
+  launches, taps, clicks, scrolling information, music listening data, video views, saved place
+  in a game, video, or song, or other information about how the user interacts with the app".
+  Apple also says "even if you collect the data for reasons other than analytics or
+  advertising, it still needs to be declared", and its conditions for an optional disclosure
+  require the user to choose to provide the data each time, which an automatic crash report
+  does not meet. Sentry's own privacy-manifest guidance lists only the three Diagnostics types,
+  but that page covers the SDK's own data and says the app's manifest "covers all data usages
+  ... for the whole application"; the screen names are supplied by this app, not by the SDK.
+- Answer **No** to the tracking question for all of them (the app runs no ATT-relevant tracking
+  and should not prompt for ATT).
 - Declare nothing under "Data Linked to You" and nothing under "Data Used to Track You".
 - Note for the encryption question: the existing `ITSAppUsesNonExemptEncryption: false` in
   `app.config.ts` carries its own caveat comment; that is a separate declaration from privacy and
@@ -425,6 +480,9 @@ documented device-context behavior, so the ASC declaration above assumes parity 
 absence. If a future iOS verification finds otherwise, narrow the declaration then, cited to
 that finding.
 
-Neither store's answer changes as long as the `Sentry.init()` options stay as configured. Turning
+Neither store's answer changes as long as the `Sentry.init()` options stay as configured AND the
+app-added list in `.claude/rules/crash-reporting-scope.md` stays at its four items. Turning
 on session tracking, tracing, or Session Replay would each widen the Play answer beyond crash logs
-and the Apple answer beyond Crash Data - see `.claude/rules/crash-reporting-scope.md`.
+and the Apple answer beyond Crash Data, and so would a fifth thing the app chose to record: the
+screen trail above is the worked example of an addition that needed a new entry, and the memory
+breadcrumb is the example of one that did not.

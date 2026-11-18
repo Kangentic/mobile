@@ -1,6 +1,6 @@
 # Kangentic Privacy Policy
 
-Last updated: 2026-10-06
+Last updated: 2026-11-18
 
 Kangentic Mobile is a remote-control companion for agent sessions running in the desktop
 Kangentic app. This policy explains what the app accesses and why.
@@ -23,11 +23,12 @@ Kangentic app. This policy explains what the app accesses and why.
 
 When the app crashes or hits an unexpected error, official builds send a crash report to
 [Sentry](https://sentry.io), a third-party error-monitoring service, so the fault can be found
-and fixed. This is diagnostics, not analytics: it is about the app breaking, not about you using
-it.
+and fixed. This is diagnostics, not analytics: a report is sent only when the app breaks, and
+nothing is sent while it is working.
 
-A crash report contains the technical details of the failure, and nothing about what you were
-doing in the app:
+A crash report contains the technical details of the failure and the state the app itself was
+in. It says which screen was open, by the fixed name the app gives that screen, and never which
+task you had open or anything shown on it:
 
 - the error type, message, and the stack trace showing where in the app's code it happened (when
   the app catches a failure and shows you an error instead of crashing, the message is replaced
@@ -51,6 +52,14 @@ doing in the app:
   longer send a low-memory notice of this kind, and the app deliberately does not count the
   notice they do send when you switch away, so this never records how often you moved between
   apps
+- which screen was open when the app failed, and the screens you opened before it, in order. Each
+  is a fixed name the app gives one of its screens, such as the task screen, with the view it was
+  on (terminal, chat or changes). It is never which task, project or session the screen was
+  showing, and nothing that was on it. Knowing where a failure happened, and how the app got
+  there, is often the only way to reproduce it
+- what the app's connection to your desktop was doing in the lead-up: connecting, connected, a
+  secure session established, reconnecting, closed, and that the first board update of a session
+  had arrived. Each is one fixed word. No address, no project, and nothing your desktop sent
 - an approximate location, at the level of a city and country, which Sentry works out from the
   IP address the report arrives from. The app never reads your location and has no location
   permission; this is Sentry's own lookup when the report reaches it. It is kept because where a
@@ -70,6 +79,10 @@ or to link a crash report to any other data. When the crash is caught by the ope
 rather than by the app's own code, that same random ID is additionally recorded as the report's
 user field, which is why it is declared to both app stores.
 
+The screen names in a crash report are declared to both app stores as well, as information about
+how the app is used. That is what a list of screens is, even when it is only ever sent inside a
+report of the app failing, and we would rather declare it than argue it is something else.
+
 Builds you compile yourself from the open-source repository have crash reporting switched off
 entirely and send nothing.
 
@@ -77,10 +90,11 @@ entirely and send nothing.
 
 - **No account.** Pairing, transport, and notification code have no dependency on any Kangentic
   account or entitlement system. There is nothing to sign up for and no account data to collect.
-- **No usage analytics or tracking.** The app does not record what you do in it, which features
-  you open, how long or how often you use it, or any behavioural profile. It has no analytics
-  SDK and reports no usage events. The only thing it ever reports about itself is a crash, as
-  described above.
+- **No usage analytics or tracking.** The app has no analytics SDK and reports no usage events.
+  While it is working it sends nothing about what you do in it: not which features you open, not
+  how long or how often you use it. The only thing it ever reports about itself is a failure, as
+  described above, and that one report names the screens that were open in the lead-up to it.
+  Nothing in it is used to build a behavioural profile.
 - **No sharing of your content with third parties.** The relay that carries traffic between your
   phone and desktop forwards encrypted ciphertext only, is self-hostable, and cannot read message
   content. Crash reports carry no session content either.
