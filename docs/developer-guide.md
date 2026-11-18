@@ -3908,8 +3908,8 @@ checking the installed package.
 against this section's protocol is recorded below under "Dependency refresh, 2026-10 (task #102)",
 and the 1.2.0 one under "Dependency upgrade, 2026-11 (task #151)", which also covers the completed
 task's Description for the first time and says why the cycles are driven with plain `adb` taps.
-**Look at a release build as well as counting views**: 1.2.0 passed every count and every test
-while drawing headings at body weight.
+**Look at a release build as well as counting views**: 1.2.0 drew headings at body weight with
+every test green, and a view count cannot show a weight.
 
 ### Two dead ends worth not repeating
 
