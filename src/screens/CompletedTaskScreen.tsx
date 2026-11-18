@@ -5,6 +5,7 @@ import { ClipboardList, FileText, MessagesSquare } from 'lucide-react-native';
 import { EmptyState, Screen, SegmentedSwitcher, useTheme, type SegmentOption } from '@/components';
 import { loadTranscriptTail } from '@/connection/actions';
 import { lastAssistantMessage } from '@/conversation/lastAssistantMessage';
+import { useReportedLens } from '@/navigation/screenTracking';
 import { findArchivedTaskById, useBoardStore } from '@/state/boardStore';
 import { useTranscriptStore } from '@/state/transcriptStore';
 import { DescriptionPane } from './completed/DescriptionPane';
@@ -52,6 +53,9 @@ export function CompletedTaskScreen(): React.JSX.Element {
   );
   const [mode, setMode] = useState<CompletedMode>('conversation');
   const onModeChange = useCallback((next: CompletedMode) => setMode(next), []);
+  // Which lens a crash report says this screen was on. Up here, above the
+  // not-found early return below, because a hook cannot sit after one.
+  useReportedLens('/completed-task', mode);
   const theme = useTheme();
 
   /**

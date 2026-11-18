@@ -189,7 +189,13 @@ describe('app.config.ts iOS privacy manifest', () => {
   // manifest (see the comment in app.config.ts). If this list changes,
   // docs/store-listing.md's App Store Connect answers must change with it -
   // they are one consistency requirement, not two independent edits.
-  it('declares crash, performance, other-diagnostic, and device-ID data, none linked or used for tracking', () => {
+  // Product Interaction joined the list with task #152 (2026-11-18): a crash
+  // report now names the screens that were open before the failure, and
+  // Apple's definition of that type ("...or other information about how the
+  // user interacts with the app") covers a screen trail whatever it rides on.
+  // Declared rather than argued away, on the maintainer's decision: over-
+  // declaring is allowed, under-declaring is the violation.
+  it('declares crash, performance, other-diagnostic, product-interaction and device-ID data, none linked or used for tracking', () => {
     const collectedTypes = appConfig.ios?.privacyManifests?.NSPrivacyCollectedDataTypes;
     expect(collectedTypes).toBeDefined();
     expect(collectedTypes?.map((entry) => entry.NSPrivacyCollectedDataType).sort()).toEqual(
@@ -198,6 +204,7 @@ describe('app.config.ts iOS privacy manifest', () => {
         'NSPrivacyCollectedDataTypeDeviceID',
         'NSPrivacyCollectedDataTypeOtherDiagnosticData',
         'NSPrivacyCollectedDataTypePerformanceData',
+        'NSPrivacyCollectedDataTypeProductInteraction',
       ].sort()
     );
     for (const entry of collectedTypes ?? []) {

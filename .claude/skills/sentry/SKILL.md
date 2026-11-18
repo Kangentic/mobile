@@ -1,5 +1,5 @@
 ---
-description: Investigate a Sentry issue - retrieve the issue, latest event, stack trace, tags and breadcrumbs from the kangentic org's `mobile` project and diagnose it. Use when a task or the user says to investigate/look at/diagnose a Sentry issue or link, to check what errors are arriving, or to triage Sentry before a release (a sweep ends by filing the actionable issues as grouped, parallel-safe board tasks).
+description: Investigate a Sentry issue - retrieve the issue, latest event, stack trace, tags and breadcrumbs from the kangentic org's `mobile` project and diagnose it. Use when a task or the user says to investigate/look at/diagnose a Sentry issue or link, to check what errors are arriving, or to triage Sentry before a release (a sweep ends by filing the actionable issues as grouped, parallel-safe board tasks, and an issue that cannot be fixed for lack of information goes to a reporting-gap task).
 allowed-tools: Read, Glob, Grep, Bash(npx -y sentry@0.46.0:*), PowerShell(npx -y sentry@0.46.0 *), PowerShell(Invoke-RestMethod:*), PowerShell(Invoke-WebRequest:*), Bash(curl:*), mcp__kangentic__kangentic_search_tasks, mcp__kangentic__kangentic_find_task, mcp__kangentic__kangentic_create_task, mcp__kangentic__kangentic_update_task
 argument-hint: [issue id, Sentry URL, or "any new issues?"]
 ---
@@ -111,7 +111,9 @@ in `.claude/rules/crash-reporting-scope.md`'s "Known limitations": a native-capt
 per-install `user.id`, and the uncaught path's exception message, which for a `CapabilityError`
 is a desktop-supplied string verbatim. So never paste the readable view's Message, an exception
 value, a breadcrumb, or a stack line into a task or a reply. Describe the error in your own words
-and cite frames by module and line (`capabilityClient.ts:<line>`).
+and cite frames by module and line (`capabilityClient.ts:<line>`). The one exception is the
+app's own fixed names (the `screen` and `lens` tags and the states in its two crumb categories):
+see Boundaries.
 
 ### Raw-API fallback
 
@@ -210,29 +212,78 @@ these tasks in parallel worktrees and prefers fewer, larger ones, so:
 - **Title a grouped task by its shared cause:** `Fix MOBILE-A, MOBILE-B: <what they share>`.
 - **Priority follows impact.** Escalating, many installs, or user-visible first; one event on
   one install with no visible effect last.
+- **An issue you cannot fix for lack of information is a reporting gap, and it IS filed.** When
+  the event does not carry what a fix needs, and the app could have captured it (which screen,
+  what the app was doing, a trail long enough to reach the cause, a field the door could have
+  tagged), the defect is in the report. Do not list it as "not filed, no app-side lead". See
+  "Reporting gaps" below for the mechanics. This is the maintainer's rule (2026-11-18), first
+  applied to MOBILE-H, an iOS app hang whose event named no screen.
 - **Do not file what has no fix in this repo.** Each of these gets one line in the report with
   the reason, and no task: `development`/`e2e`/`crash-test` noise; a fix that belongs in the
   desktop repo or `@kangentic/protocol` (name the repo; a task on THAT board is filed when
-  someone starts the work, not by the sweep); an OS kill with no app-side lead (a
-  `WatchdogTermination` with no memory evidence); and an issue an unreleased change already
+  someone starts the work, not by the sweep); and an issue an unreleased change already
   addresses. They stay unassigned, so offer to archive them in Sentry (until it occurs again)
-  and do it only on the user's OK.
+  and do it only on the user's OK. An OS kill with no app-side lead used to be on this list. It
+  is not any more: if nothing in the event explains it, ask what the event would have needed to
+  carry, and that is a reporting gap.
 
 Close the sweep with the filed tasks (number, title, priority, and the files each touches, which
-is what shows the set is safe to run at once), the issues not filed and why, and any recurrence
-of an assigned issue on the newest release.
+is what shows the set is safe to run at once), the reporting gaps and what each was missing, the
+issues not filed and why, and any recurrence of an assigned issue on the newest release.
 
 ### "Investigate this issue" / "create a follow-up task"
 
 Retrieve the issue and its latest event, diagnose it (below), and create a task **only when
 asked**. Duplicate-guard first, both prefixes, exactly as above - never re-report or re-file an
-issue a search already finds.
+issue a search already finds. The one thing an investigation files without being asked is a
+reporting gap (next section): if the diagnosis ends at "the event does not say", that is a
+finding about the reports, and it goes on the board.
 
 One task. Column **`To Do`** (this board has no Backlog column). Title:
 `Fix MOBILE-N: <issue title, trimmed>`, using the issue's **actual, current** shortId - never
 assume the prefix without checking. Description: the Sentry link, shortId, level, event and
 affected-install counts, environment, release, the diagnosis, and only the specific stack
 frames or tags that carry it, not a raw event dump (see Boundaries).
+
+### Reporting gaps (both flows)
+
+A report that cannot be acted on is a reporting bug. When a sweep or an investigation finds an
+issue that cannot be fixed because its event lacks information **the app could have captured**,
+strengthen the reports:
+
+1. **Name the missing field precisely.** Not "more context": "the event does not say which
+   screen was showing", "the trail is at the cap and starts after the app went to the
+   background", "the handled event has no refusal code". Use the Diagnosis check below ("where,
+   doing what, since when") to find it.
+2. **Check the event's release first.** The `screen` and `lens` tags and the `app.navigation`
+   and `app.connection` crumbs exist from the release that carries task #152, and
+   `maxBreadcrumbs` was 20 before it. An event from an older build (up to and including 1.5.0
+   build 24) that lacks them is the gap #152 already closed, not a new one: say so, cite #152,
+   and assign the issue to it if it is not already assigned. A new gap is something an event
+   from a CURRENT build still cannot say.
+3. **Append to an open reporting-gap task, or create one.** Search the board for
+   `Strengthen Sentry reports` (and for the issue's shortId, both prefixes). If one is open,
+   add the issue and its missing field with `kangentic_update_task`'s `appendDescription`. If
+   none is, create one in **`To Do`**, titled
+   `Strengthen Sentry reports: <the missing field> (from MOBILE-N)`. Its description carries the
+   evidence (what the event had, what it could not answer), the proposed field, and a "Done when"
+   that includes a delivered event proving the field arrives, on the native path if the issue
+   was native. One open reporting-gap task at a time: the fixes land in the same few files under
+   `src/observability/`, so a second task would conflict with the first at merge.
+4. **Assign the issue to that task**, with the PUT from Retrieval, exactly as for a fix task.
+   The task does not fix the issue. It makes the next occurrence diagnosable, and its
+   description should say that the issue gets its own `Fix MOBILE-N:` task if it recurs on a
+   build that carries the new field.
+5. **Say what changes for users.** A new field changes what leaves a device, so the task must
+   also name the privacy work: `docs/privacy-policy.md`, `docs/security.md`, the canonical list
+   in `.claude/rules/crash-reporting-scope.md`, and a re-check of both store declarations
+   (`docs/store-listing.md`; a console change is a step only the maintainer can do).
+
+What is still NOT a reporting gap: `development`, `e2e` and `crash-test` noise; a fix that
+belongs in another repo; and information the app could not have had (the content of a session
+is never a "missing field", and neither is anything the privacy controls exclude on purpose). A
+missing field that would need a control relaxed is a decision for the maintainer, raised in the
+report, never filed as if it were routine.
 
 ### Filing mechanics (both flows)
 
@@ -266,6 +317,29 @@ its own board.
 
 ## Diagnosis (mobile specifics)
 
+- **First: does the event say where, doing what, and since when?** Ask it of every event before
+  reading a frame, because the answer decides whether there is a diagnosis to make at all.
+  - *Where.* The `screen` tag is the open screen's route template (`/task/[taskId]`, `/board`,
+    `/settings`, `/` for the Agents tab), and `lens` is the surface on it (`terminal`, `chat`,
+    `changes`; `conversation`, `summary`, `description` on a completed task; `none` elsewhere).
+    `screen: none` means no screen had rendered: a crash before the first route, or a headless
+    launch such as a push waking a killed app. Both tags ride native events too.
+  - *Doing what.* `app.connection` crumbs carry one of `connecting`, `connected`,
+    `established`, `reconnecting`, `closed`, `board-snapshot`. `established` then
+    `board-snapshot` is a bootstrap landing, which re-renders every feed. Each state is recorded
+    once per connection cycle, so a single `reconnecting` can stand for a long retry loop and a
+    single `board-snapshot` for every snapshot of that session.
+  - *Since when.* `app.navigation` crumbs give the route into the failure, one per change of
+    screen or lens. Count the whole trail against `maxBreadcrumbs` (100; it was 20 up to and
+    including 1.5.0 build 24). A trail AT the cap was truncated, and the native SDKs share the
+    ring, so on a phone left in the background for days their `device.event` crumbs can evict
+    the app's. Tags survive that. Trust the tag over a missing crumb.
+
+  These values are fixed names from closed sets, so unlike the rest of an event they may be
+  quoted in a task or a reply (see Boundaries). An event with none of them is from a build
+  before task #152. If an event from a CURRENT build still cannot answer one of the three, that
+  is a reporting gap: see "Reporting gaps" above. `docs/developer-guide.md`'s crash reporting
+  section has the longer reading guide.
 - **Native vs JS, one-field discriminator.** A native-captured event carries `platform: java`
   and an unhandled mechanism (`UncaughtExceptionHandler` up to @sentry/react-native 7.11;
   `expoReactHost` on 8.29, observed 2026-10-06 on a crash-test `Sentry.nativeCrash()`; why it
@@ -348,7 +422,8 @@ its own board.
   writes, since it hides nothing and changes no alerting.
 - **Filing:** a triage sweep files its actionable issues as grouped board tasks without a
   separate ask, unless the user asked only to list or diagnose. A single-issue investigation
-  files a task only when asked.
+  files a task only when asked, except for a reporting gap, which either flow files (or appends
+  to the open one) and assigns without a separate ask.
 - **Auto mode:** `.claude/settings.json`'s `autoMode.allow` names exactly what this skill does
   unattended - Sentry reads, the single-issue assign PUT, and the single-issue
   archive-until-it-recurs PUT once the user has said yes to it in the current conversation - and
@@ -361,6 +436,12 @@ its own board.
   identifier that this app's own privacy documentation discloses rather than suppresses (see
   `.claude/rules/crash-reporting-scope.md`) - cite `userCount` (affected installs) instead of
   the identifier itself.
+- **What may be quoted: the app's own fixed names.** The `screen` and `lens` tag values, and the
+  `screen`, `lens` and `state` values inside `app.navigation` and `app.connection` crumbs, are
+  members of closed sets declared in `src/observability/reportVocabulary.ts`. They are app
+  structure, not app data, so a task or a reply may say "the hang was on `/task/[taskId]` with
+  the `chat` lens, two seconds after `established`". That carve-out is for those values only. A
+  native breadcrumb, an exception value and a stack line are still described in your own words.
 - This repo also has a Sentry **MCP** server wired (`.mcp.json`), which this skill deliberately
   does not use: it requires an interactive OAuth per session. Its URL is also slug-scoped rather
   than org-scoped, so it goes stale on a project rename - it was pinned to the pre-rename

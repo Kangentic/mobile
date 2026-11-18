@@ -196,13 +196,17 @@ src/
                   #   expo-router's imperative router throws until the navigation container
                   #   commits and only enqueues after that, so a call from outside React
                   #   fails or is lost (fatal through SDK 57: the iOS 0.6.3 build 13
-                  #   cold-start crash)
+                  #   cold-start crash). Also screenTracking: the root layout's ScreenTracker
+                  #   and the lens hook, which tell the crash reporter which screen is showing
   state/           # Zustand stores (activity/board/transcript/diff/channel/settings/readingView/
                   #   resume/commandTerminal/workflow) + the non-Zustand terminalFeed PTY ring
-                  #   buffers
+                  #   buffers + connectionBreadcrumbs, which watches the channel and board
+                  #   stores and puts the connection's life on the crash-report trail
   voice/           # Dictation hook over the OS speech engines
   observability/   # Sentry crash reporting: the ONLY module allowed to import the SDK, plus
-                  #   the pure event/breadcrumb scrubber (lint-enforced, crash-reporting-scope.md)
+                  #   the pure event/breadcrumb scrubber (lint-enforced, crash-reporting-scope.md),
+                  #   reportContext (the screen and lens tags and the app's two breadcrumb
+                  #   trails) and reportVocabulary (the closed sets those values come from)
   lib/             # Shared pure utilities (crypto polyfills)
 ```
 

@@ -673,7 +673,8 @@ src/
   connection/     # Lifecycle composer: connect/dispose, bootstrap, store feed glue, actions API,
                   #   dev-only mockDesktop peer (EXPO_PUBLIC_KANGENTIC_MOCK)
   navigation/     # The pending-navigation slot + PendingNavigationRunner: the only code that
-                  #   performs a navigation published from outside React
+                  #   performs a navigation published from outside React; and screenTracking,
+                  #   which tells the crash reporter which screen and lens are showing
   conversation/   # Pure transcript-cell flattener, prompt keystrokes, pending-prompt summary
   demo/           # The permanent reviewer/demo pairing (ships in release builds by design)
   devsupport/     # Loopback transport, protocol-faithful stub peer classes, wire fixtures -
@@ -689,10 +690,13 @@ src/
                   #   local notifier, foreground service, tap routing, permission cache,
                   #   sharedKeychain (rich display on both platforms: Notifee's background
                   #   handler on Android, the targets/nse/ extension on iOS)
-  state/          # Zustand stores + the non-Zustand terminalFeed PTY ring buffers
+  state/          # Zustand stores + the non-Zustand terminalFeed PTY ring buffers +
+                  #   connectionBreadcrumbs (the connection's life on the crash-report trail)
   voice/          # Dictation hook over the OS speech engines
   observability/  # Sentry crash reporting - the only module allowed to import the SDK, plus the
-                  #   pure event/breadcrumb scrubber (see crash-reporting-scope.md)
+                  #   pure event/breadcrumb scrubber, reportContext (screen and lens tags, the
+                  #   app's breadcrumb trails) and reportVocabulary (their closed sets); see
+                  #   crash-reporting-scope.md
   lib/            # Shared pure utilities (crypto polyfills)
 tests/unit/       # vitest
 tests/components/ # Jest + RNTL
@@ -3001,9 +3005,16 @@ here was wrong in both directions.
   `event.serializedBreadcrumbs` from `fileManager readPreviousBreadcrumbs`. So the trail is real
   evidence about the session that died, and `dateReceived - dateCreated` bounds the whole episode.
   For MOBILE-8 that was 22.9 s, which is decisive against a slow leak.
-- **Count the breadcrumbs against `maxBreadcrumbs` (20 here).** A trail that starts with
+- **Count the breadcrumbs against `maxBreadcrumbs`: 100 from the release that carries task #152,
+  20 on every build up to and including 1.5.0 build 24.** A trail that starts with
   sentry-cocoa's own `started` marker and is well under the cap was not truncated - it is the
   complete life of that session. MOBILE-8's six said the user never navigated past the Agents tab.
+  A trail AT the cap was truncated, and says nothing about what came before its first entry:
+  MOBILE-H's was exactly 20, all of them sentry-cocoa's own `device.event` crumbs from background
+  wakes, which is how an app hang arrived with no record of anything the app had done. The
+  persisted trail a watchdog-termination event is built from follows the same cap (read from
+  sentry-cocoa 9.33.0: the processor is constructed with `options.maxBreadcrumbs`, and the
+  tracker trims the event to it).
 - **RETRACTED, inline where it was drawn:** the absence of a low-memory breadcrumb was read as
   weak evidence against the memory hypothesis. It is worth nothing.
   `SentrySystemEventBreadcrumbs` observes keyboard, screenshot, battery, orientation, timezone and
@@ -3371,6 +3382,41 @@ build jobs (against `submit=testflight` or `submit=appstore`, and against `scree
 simulator the probe drives), and `submit-testflight` will not run for one either. The iOS
 dispatch drives the rows itself, on the CI simulator, and relaunches after each crash; see the
 capture audit block below.
+
+**Reading where the app was: the `screen` and `lens` tags and the app's own trail (task #152).**
+Every event from a release that carries task #152 says where the app was and what it was doing,
+because Sentry MOBILE-H (an iOS app hang) arrived saying neither. Read these before the stack:
+
+- **Tags first.** `screen` is the open screen's route TEMPLATE, for example `/task/[taskId]`,
+  `/board`, `/settings`, or `/` for the Agents tab. It is never the path, so it never names a
+  task. `none` means no screen had rendered: a crash before the first route committed, or a
+  headless launch (a push waking a killed app), which is itself the answer for a killed-app push
+  crash. `unknown` should not occur; it means a route file has no entry in
+  `src/observability/reportVocabulary.ts`, which `tests/unit/reportVocabulary.test.ts` exists to
+  catch. `lens` is the surface that was showing on a screen with more than one: `terminal`,
+  `chat` or `changes` on a session or a Command Terminal, `conversation`, `summary` or
+  `description` on a completed task, `none` everywhere else. A tag is a single value that is
+  replaced, so it is correct however long the app sat in the background.
+- **Then the trail.** `app.navigation` crumbs carry `{ screen, lens }`, one per change, so they
+  read as the route into the failure. `app.connection` crumbs carry `{ state }`:
+  `connecting`, `connected` (the socket to the relay is open, not yet a secure session),
+  `established` (the desktop answered), `reconnecting`, `closed`, and `board-snapshot`.
+  The sequence `established` then `board-snapshot` is a bootstrap landing, which re-renders every
+  feed; that pair inside a hang's window is the thing MOBILE-H could not show.
+- **What the trail deliberately does not record, so its silence is not misread.** Each
+  connection state is recorded ONCE per connection cycle (a cycle starts at `established` or
+  `closed`), so one `reconnecting` stands for a retry loop of any length, and one
+  `board-snapshot` stands for every snapshot of that session: the absence of a later one does
+  not mean the board went quiet. A move between two tasks records no `app.navigation` crumb,
+  because only the ID changed. Rekeys and pairing are never recorded.
+- **Count the trail against 100**, and remember the native SDKs write into the same ring. On a
+  phone left in the background for days sentry-cocoa's `device.event` crumbs can push the app's
+  out, which is why the tags exist. An event with tags and no `app.*` crumbs has been evicted,
+  not skipped.
+- **An event with neither tag is from a build before this change** (up to and including 1.5.0
+  build 24), not a reporting failure. `/sentry` treats a missing field on such an event as the
+  gap task #152 already closed, and files a NEW reporting-gap task only for something an event
+  from a current build still cannot say.
 
 **What that verification actually found**, on a `preview`-profile (arm64-v8a, release-signed,
 non-debuggable) install, cross-checked with `adb logcat`, mitmproxy on the same device, and the

@@ -7,6 +7,8 @@ import './src/devsupport/connectionTrace';
 import './src/lib/cryptoPolyfills';
 import { initializeCrashReporting } from './src/observability/crashReporting';
 import { initializeMemoryPressure } from './src/observability/memoryPressure';
+import { initializeReportContext } from './src/observability/reportContext';
+import { registerConnectionBreadcrumbs } from './src/state/connectionBreadcrumbs';
 import { registerMemoryShedders } from './src/state/memoryShed';
 import { initializeNotifications } from './src/notifications';
 import 'expo-router/entry';
@@ -26,6 +28,12 @@ import 'expo-router/entry';
 // No-ops entirely when EXPO_PUBLIC_SENTRY_DSN is unset, which is every
 // build made from source - see src/observability/crashReporting.ts.
 initializeCrashReporting();
+// Straight after the SDK is up, so an event from before the first render says
+// so: the scope starts at `screen: none`, which is the whole of a headless
+// launch (a push waking a killed app never mounts a navigator). The root
+// layout's ScreenTracker replaces it once a route commits. No-ops without a
+// DSN. See src/observability/reportContext.ts.
+initializeReportContext();
 // Immediately after, and outside React on purpose. iOS warns before it kills
 // a foreground app for memory, and the episode behind Sentry MOBILE-8 fit
 // inside about 23 seconds of launch - a listener that armed when a screen
@@ -33,4 +41,8 @@ initializeCrashReporting();
 // without a DSN: the shedding half is robustness, not reporting.
 initializeMemoryPressure();
 registerMemoryShedders();
+// The connection's life on the crash-report trail (connecting, established,
+// the first board snapshot, closed). Outside React so it is watching before
+// the root layout opens the first connection, and it only reads two stores.
+registerConnectionBreadcrumbs();
 initializeNotifications();

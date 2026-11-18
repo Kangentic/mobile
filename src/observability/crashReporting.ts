@@ -4,8 +4,10 @@ import { allowlistBreadcrumb, scrubEvent } from './scrubEvent';
 
 /**
  * Crash and error reporting. Deliberately narrow: this app reports that it
- * broke and where in the code, and nothing about what the user was doing or
- * what their agent session contained.
+ * broke, where in the code, and what state the app itself was in (which
+ * screen, by its fixed name, and what the connection was doing: see
+ * reportContext.ts). Nothing about which task was open, and nothing their
+ * agent session contained.
  *
  * WHY THE CONTROLS LOOK LIKE THIS. A JavaScript `beforeSend` hook does NOT
  * filter native events - a hard iOS/Android crash is captured and sent by
@@ -51,7 +53,8 @@ import { allowlistBreadcrumb, scrubEvent } from './scrubEvent';
  * out-of-memory kill are the app breaking, which is what this reports.
  * `sendDefaultPii`, `attachScreenshot`, `attachViewHierarchy`,
  * `maxBreadcrumbs`, `ignoreErrors` and `enableAutoSessionTracking` DO reach
- * native (RNSentryModuleImpl.java bridges each explicitly). `ignoreErrors`
+ * native (on Android, RNSentryStart.java reads each one out of the options,
+ * read at 8.34.0). `ignoreErrors`
  * is the one to read carefully: wrapper.js DOES list it in the destructure
  * that strips options, so it looks stripped, but the lines just above that
  * first translate it into `ignoreErrorsStr` / `ignoreErrorsRegex`, and those
@@ -120,10 +123,11 @@ let initialized = false;
 
 /**
  * Whether `Sentry.init()` actually ran (a DSN was present). Exported for the
- * one sibling in this directory that records scope data rather than events -
- * `memoryPressure.ts` - so it can skip the breadcrumb while still doing its
- * non-reporting half. Deliberately not exported outside `src/observability/`:
- * nothing else has a reason to branch on it.
+ * two siblings in this directory that record scope data rather than events:
+ * `memoryPressure.ts`, so it can skip the breadcrumb while still doing its
+ * non-reporting half, and `reportContext.ts`, whose tags and breadcrumbs have
+ * nowhere to go without the SDK. Deliberately not used outside
+ * `src/observability/`: nothing else has a reason to branch on it.
  */
 export function isCrashReportingInitialized(): boolean {
   return initialized;
@@ -133,8 +137,9 @@ export function isCrashReportingInitialized(): boolean {
  * Gates the crash-test affordance in Settings and the SDK's `debug` logging.
  * `EXPO_PUBLIC_KANGENTIC_CRASHTEST` is inlined at bundle time by the same
  * mechanism as every other `EXPO_PUBLIC_*` flag, so it can only be true in a
- * build that was dispatched with it on (`build-android.yml`'s `crash_test`
- * input) - never in a store build, never by default. It exists so this
+ * build that was dispatched with it on (the `crash_test` input of
+ * `build-android.yml` or `build-ios.yml`) - never in a store build, never by
+ * default. It exists so this
  * app's own privacy claims can be verified against a delivered payload
  * instead of against `Sentry.init()` options, repeatably, after every SDK
  * upgrade. See the crash reporting section of docs/developer-guide.md.
@@ -441,8 +446,21 @@ export function initializeCrashReporting(): void {
     // users it collects none. Flip deliberately, with a privacy-policy
     // edit, not as a side effect (docs/privacy-policy.md).
     enableAutoSessionTracking: false,
-    // Transaction names carry route parameters, which here are the
-    // desktop's task IDs.
+    // Tracing is usage telemetry: a transaction per screen visit and per
+    // interaction, sent whether or not anything broke, and this app tells
+    // users it collects none (docs/privacy-policy.md).
+    //
+    // CORRECTION (2026-11-18, task #152). This comment used to give a
+    // different reason: "transaction names carry route parameters, which here
+    // are the desktop's task IDs". Read out of @sentry/react-native 8.34.0,
+    // that is not what the SDK does. Under expo-router the transaction is
+    // named for the route TEMPLATE (`/task/[taskId]`, built from the segments
+    // with groups dropped), and the resolved URL and params are attached as
+    // span attributes only when `sendDefaultPii` is true, which it is not
+    // here. The decision stands on the telemetry ground alone. It is recorded
+    // rather than quietly edited because the old reason was repeated in the
+    // rule file and in task descriptions, and a wrong cause that is merely
+    // deleted gets rediscovered.
     enableAutoPerformanceTracing: false,
     enableUserInteractionTracing: false,
     // `tracesSampleRate` is deliberately ABSENT, not 0. The SDK decides
@@ -461,6 +479,14 @@ export function initializeCrashReporting(): void {
     // can carry personal data. sentry-cocoa 9.24 flipped its default to false;
     // pinned here so a later default cannot flip it back.
     enableMemoryIntrospection: false,
+    // Android: copies the Java scope into the NDK layer, which is what puts
+    // the `screen` and `lens` tags and the app's breadcrumbs (reportContext.ts)
+    // on a crash caught by the NDK signal handler rather than by Java. Already
+    // the default; pinned for the reason the line above is, in the other
+    // direction: a default that flipped off would strip a native crash of
+    // where the app was, with every check still green. RNSentryStart.java
+    // reads this key. iOS has one scope and needs no equivalent.
+    enableNdkScopeSync: true,
 
     // Session Replay is absent rather than disabled: no
     // `mobileReplayIntegration()` is registered and no replay sample rate
@@ -479,8 +505,9 @@ export function initializeCrashReporting(): void {
         // this app ever renders through react-native-web.
         dom: false,
         history: false,
-        // Sentry's own "an event was sent" bookkeeping. Carries no app data
-        // and is the one category allowlistBreadcrumb lets through.
+        // Sentry's own "an event was sent" bookkeeping. Carries no app data,
+        // and is the one SDK-written category allowlistBreadcrumb lets
+        // through. The others it admits are the app's own (scrubEvent.ts).
         sentry: true,
       }),
     ],
@@ -492,7 +519,23 @@ export function initializeCrashReporting(): void {
     // see the crash reporting section of docs/developer-guide.md.
     sampleRate: 1.0,
     ignoreErrors: EXPECTED_TRANSPORT_NOISE,
-    maxBreadcrumbs: 20,
+    // The SDK's own default, set explicitly so it cannot drift. It was 20,
+    // chosen to keep events small, and that was the wrong economy: Sentry
+    // MOBILE-H (an iOS app hang) arrived with exactly 20 breadcrumbs, every
+    // one of them sentry-cocoa's own battery, clock and time-change crumbs from
+    // two and a half days of background wakes, about three per wake. The trail
+    // said nothing about what the app had done before it hung, because all of
+    // that had been pushed out. This reaches both native SDKs
+    // (RNSentryStart.java reads it; sentry-cocoa parses it out of the options
+    // dictionary), and on iOS it is also the bound on the trail persisted for
+    // a watchdog-termination event (read from sentry-cocoa 9.33.0:
+    // SentryWatchdogTerminationBreadcrumbProcessor is built with
+    // `options.maxBreadcrumbs` and the event is trimmed to it).
+    //
+    // A longer trail is not a durable answer on its own: left long enough, the
+    // native crumbs fill 100 slots too. What survives that is the `screen` and
+    // `lens` tags in reportContext.ts, which nothing can evict.
+    maxBreadcrumbs: 100,
 
     beforeBreadcrumb: allowlistBreadcrumb,
     beforeSend: scrubEvent,

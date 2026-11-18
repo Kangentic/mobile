@@ -11,6 +11,7 @@ import { traceConnection } from '@/devsupport/connectionTrace';
 import { initializeNotifications } from '@/notifications';
 import { runWhenFirstActive } from '@/lib/whenFirstActive';
 import { PendingNavigationRunner } from '@/navigation/PendingNavigationRunner';
+import { ScreenTracker } from '@/navigation/screenTracking';
 import { AppErrorBoundaryScreen } from '@/screens/AppErrorBoundaryScreen';
 import { useSettingsStore } from '@/state/settingsStore';
 
@@ -189,6 +190,16 @@ function RootStack(): React.JSX.Element {
           moved inside one - <Stack> children are route declarations.
           See src/navigation/pendingNavigation.ts. */}
       <PendingNavigationRunner />
+      {/* Tells the crash reporter which screen is showing, by its fixed route
+          name and never by task, so an event can say where the app was (Sentry
+          MOBILE-H's could not).
+
+          AFTER the Stack as well, and here the position decides what gets
+          recorded rather than whether a call is safe: a screen that owns a
+          lens reports it from its own focus effect, which runs before a later
+          sibling's effect, so the one breadcrumb this records per navigation
+          already carries the right lens. See src/navigation/screenTracking.tsx. */}
+      <ScreenTracker />
     </>
   );
 }

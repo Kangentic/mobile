@@ -14,6 +14,91 @@ appId: com.kangentic.mobile
     visible:
       text: "Agents"
     timeout: 45000
+# The same walk as crash-test-js.yaml, for the same reason and with its
+# comments: pair with the demo desktop if this install is not paired yet (it
+# is, when this flow runs second), open a task, change lens twice, come back.
+# THIS is the flow whose event matters most for task #152: a native crash
+# never passes through JavaScript, so its event shows what the native scope
+# was actually holding.
+- extendedWaitUntil:
+    visible:
+      id: "triage-pair-cta"
+    timeout: 15000
+    optional: true
+- runFlow:
+    when:
+      visible:
+        id: "triage-pair-cta"
+    commands:
+      - tapOn:
+          id: "triage-pair-cta"
+      - extendedWaitUntil:
+          visible:
+            id: "pairing-paste-link-input"
+          timeout: 20000
+      - tapOn:
+          id: "pairing-paste-link-input"
+      - inputText: "demo"
+      - runFlow:
+          when:
+            platform: Android
+          commands:
+            - hideKeyboard
+      - runFlow:
+          when:
+            platform: iOS
+          commands:
+            - pressKey: Enter
+      - extendedWaitUntil:
+          visible:
+            id: "pairing-paste-link-submit"
+          timeout: 10000
+      - tapOn:
+          id: "pairing-paste-link-submit"
+      - extendedWaitUntil:
+          visible:
+            id: "sas-accept"
+          timeout: 30000
+      - tapOn:
+          id: "sas-accept"
+- extendedWaitUntil:
+    visible:
+      id: "triage-home-list"
+    timeout: 60000
+- extendedWaitUntil:
+    visible:
+      text: "Approve:.*"
+    timeout: 90000
+- tapOn:
+    id: "activity-row-mock-session-1"
+- extendedWaitUntil:
+    visible:
+      id: "session-screen"
+    timeout: 45000
+- tapOn:
+    id: "session-mode-terminal"
+- runFlow:
+    when:
+      notVisible:
+        id: "terminal-webview"
+    commands:
+      - tapOn:
+          id: "session-mode-terminal"
+- tapOn:
+    id: "session-mode-chat"
+- runFlow:
+    when:
+      notVisible:
+        id: "conversation-list"
+    commands:
+      - tapOn:
+          id: "session-mode-chat"
+- tapOn:
+    id: "task-back-button"
+- extendedWaitUntil:
+    visible:
+      id: "triage-home-list"
+    timeout: 30000
 - tapOn:
     id: "header-settings-button"
 - extendedWaitUntil:
