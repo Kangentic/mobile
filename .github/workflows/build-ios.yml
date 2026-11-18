@@ -797,16 +797,29 @@ jobs:
       # the in-process demo desktop when the install is unpaired, opens a task
       # and changes lens, so the delivered events can show the screen and lens
       # tags and the app.navigation / app.connection trail riding a native
-      # event. That walk is why the budget is 30 minutes and not the 20 the
+      # event. That walk is why the budget is longer than the 20 minutes the
       # two bare crashes needed, and it adds a second way for a flow to end
       # with the app still alive: a step of the walk failing before the crash
       # row is ever reached. assert_app_died's message says so.
+      #
+      # A THIRD way, which is neither: the Maestro driver never starting. Run
+      # 44404669700 (2026-11-18) failed here with "iOS driver not ready in
+      # time" 2 m 20 s into the step, before the first flow command, and
+      # assert_app_died then reported the app still running, which was true
+      # and beside the point. It is the failure the screenshot capture step
+      # above already carries a longer MAESTRO_DRIVER_STARTUP_TIMEOUT for
+      # (Maestro builds its XCUITest driver on first use, and a busy runner
+      # can outlast the default wait), so this step carries the same value.
+      # The step budget is 35 minutes to leave room for a slow driver build
+      # ahead of the two walks.
       - name: Run the crash-test flows
         if: env.CRASH_TEST == 'true'
-        timeout-minutes: 30
+        timeout-minutes: 35
         env:
           MAESTRO_DEVICE: ${{ steps.smoke.outputs.device-id }}
           EVIDENCE: ${{ runner.temp }}/crash-evidence
+          # Milliseconds. See the comment above, and the capture step's.
+          MAESTRO_DRIVER_STARTUP_TIMEOUT: '600000'
         run: |
           set -euo pipefail
           mkdir -p "$EVIDENCE"
