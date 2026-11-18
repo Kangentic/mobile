@@ -3489,13 +3489,42 @@ Three things that event settles, and one it corrected:
   the connection. Its exception value is still the fixed `handled at crash-test`, so the door's
   redaction holds alongside the new tags (`screen: /settings`, `lens: none`, `site`).
 
-*Not observed, and why.* A hang and a watchdog termination cannot be produced by any Settings
-row, so for those two event kinds the tags and trail rest on sentry-cocoa 9.33.0's source (the
-scope is applied to a hang at detection; tags and a `maxBreadcrumbs`-bounded trail are persisted
-for a watchdog termination) plus the native-crash observations sharing the same scope. A real
-NDK signal crash on Android was not produced either; `enableNdkScopeSync` is pinned on for it.
-A recurrence of MOBILE-H on a build carrying this change is the first direct proof of the hang
-path, and should be read for exactly these fields.
+*iOS, observed, including the event kind this was built for.* `build-ios.yml -f crash_test=true`
+on the branch (run 44410731965, commit `7279485`, one commit BEFORE the pairing screens were
+taken off the trail), on the CI simulator: iPhone18,1, iOS 26.5, release `1.5.0+24`,
+sentry-cocoa 9.33.0. The workflow drove both flows itself and relaunched after each crash.
+
+- The native crash (`platform: cocoa`, `mechanism: mach`, `handled: no`) arrived as MOBILE-A at
+  22:59:02Z with tags `screen: /settings` and `lens: none`, and a trail of 19 entries in which
+  sentry-cocoa's own `started` and `ui.lifecycle` crumbs sit beside the app's: `/`;
+  `connected`, `established`, `board-snapshot`; `/task/[taskId] chat` (one entry on arrival),
+  then `terminal`, then `chat`; `/`; `/settings`. So the isolation-scope sync reaches
+  sentry-cocoa's scope for tags and allowlisted breadcrumbs, as it does sentry-android's.
+- **Two App Hang events arrived from the same run, unplanned, and both carry the tags and the
+  app's trail.** No Settings row can produce a hang; the simulator hung on its own, twice.
+  MOBILE-B (`mechanism: AppHang`, fully blocked for 4.1 to 4.9 seconds, at the cold launch) has
+  `screen: /`, `lens: none` and an `app.navigation` entry for `/`. MOBILE-G (not fully blocked,
+  2.0 to 2.8 seconds, while the flow was typing on the pairing screen) has `screen: /pair`,
+  `lens: none`, and `app.navigation` entries for `/` and `/pair` among sentry-cocoa's
+  `ui.lifecycle` and `touch` crumbs. That is the path MOBILE-H came down, and it is now
+  observed rather than read from source: an iOS app hang says which screen it was on. (The
+  `/pair` ENTRY on MOBILE-G's trail is the pre-fix behaviour described above; on a current
+  build the entry is absent and the `screen: /pair` tag remains, which is the intended split.)
+- The walk itself is new evidence for another job: this is the first time the demo pairing has
+  been typed on the iOS simulator. `pressKey: Enter` after `inputText` dismisses the keyboard (a
+  single-line `TextInput` blurs on submit), which avoids Maestro's gesture-based `hideKeyboard`.
+  The first attempt (run 44404669700) never reached a flow: Maestro's driver was not ready in
+  time, and the step now carries the `MAESTRO_DRIVER_STARTUP_TIMEOUT` the capture step has.
+
+*Still not observed, and why.* A watchdog termination: no row can cause one and a simulator
+build never reports one (`SentryWatchdogTerminationLogic` returns early on a simulator), so for
+that event the tags and trail rest on sentry-cocoa 9.33.0's source (tags are read back from
+disk onto the event, and the persisted trail is bounded by, and trimmed to, `maxBreadcrumbs`).
+Real iOS hardware: every iOS observation above is a simulator's. A real NDK signal crash on
+Android: `Sentry.nativeCrash()` is the Java uncaught path, and `enableNdkScopeSync` is pinned on
+for the other. And the pairing-screen silence on iOS specifically: it is JavaScript shared by
+both platforms and was confirmed on the Android event above, not re-run on iOS. A recurrence of
+MOBILE-H on a build carrying this change should be read for exactly these fields.
 
 **What that verification actually found**, on a `preview`-profile (arm64-v8a, release-signed,
 non-debuggable) install, cross-checked with `adb logcat`, mitmproxy on the same device, and the
