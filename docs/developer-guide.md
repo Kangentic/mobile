@@ -3417,6 +3417,15 @@ because Sentry MOBILE-H (an iOS app hang) arrived saying neither. Read these bef
   phone left in the background for days sentry-cocoa's `device.event` crumbs can push the app's
   out, which is why the tags exist. An event with tags and no `app.*` crumbs has been evicted,
   not skipped.
+- **On an iOS app hang, the tags and trail are the state when the hang BEGAN.** Read from
+  source, not observed: `RNSentry`'s method queue is the main queue (`RNSentry.mm`,
+  `methodQueue`), so every tag and crumb the JS side records reaches the native scope through
+  the very thread a hang blocks, and sentry-cocoa applies the scope to the event when it
+  detects the hang, about two seconds in. Whatever JS recorded DURING the hang is queued behind
+  it and misses that event. This is not the loss it sounds like, because of the order things
+  are queued in: a board snapshot is applied (and its crumb queued) before React commits the
+  re-render it causes, so a snapshot that CAUSED the hang is already on the scope. What is
+  missing is only what happened while the app was already stuck.
 - **An event with neither tag is from a build before this change** (up to and including 1.5.0
   build 24), not a reporting failure. `/sentry` treats a missing field on such an event as the
   gap task #152 already closed, and files a NEW reporting-gap task only for something an event

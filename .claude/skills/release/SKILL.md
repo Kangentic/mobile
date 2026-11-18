@@ -117,6 +117,15 @@ All of these, and stop on any failure:
   the newest existing version, which shows the previous release's frames whenever they were
   re-captured since, and stage 1 replaces them. A failed library read is a stop. It cannot prove
   write access; the App Manager role can.
+- **No store declaration is pending.** Search `docs/store-listing.md` for `PENDING`. A change
+  that makes the app collect something new lands its code first (on iOS including the privacy
+  manifest entry, which ships inside the build) and leaves the two console answers to the
+  maintainer, marked PENDING in that file's "Data safety / App Privacy declarations" section.
+  Releasing over a PENDING block ships a build whose own manifest says more than App Store
+  Connect's App Privacy answers do, and a Play build that collects more than its Data safety form
+  declares. Stop and ask the user to confirm each console step named there is done; when they
+  confirm, remove the block and its markers in the release's own bump PR. The first one was the
+  screen trail from task #152 (2026-11-18).
 - The approval environment for the chosen platform still has a required reviewer:
   `gh api repos/Kangentic/mobile/environments --jq '.environments[] | {name, rules: [.protection_rules[].type]}'`
   must show `required_reviewers` on `google-play` (Android) or `app-store-connect` (iOS). **A missing
