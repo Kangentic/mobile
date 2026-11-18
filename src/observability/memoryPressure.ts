@@ -30,6 +30,14 @@ import { MEMORY_PRESSURE_BREADCRUMB_CATEGORY } from './scrubEvent';
  * the next such event self-identifies: a trail carrying memory warnings is an
  * out-of-memory kill, and one without is a hang or a user force-quit.
  *
+ * Re-read at sentry-cocoa 9.33.0 (2026-11-18, the version @sentry/react-native
+ * 8.34.0 bundles, where these classes are Swift): the same path holds, the
+ * processor is built with `options.maxBreadcrumbs` and the event is trimmed to
+ * it. One thing in the first sentence above is no longer the whole story: at
+ * 9.33.0 the observer also persists TAGS, context and user, and the tracker
+ * reads them back onto the event. A breadcrumb is still the right shape for a
+ * count that changes over a launch, and reportContext.ts uses the tag half.
+ *
  * NO USER CONTENT LEAVES HERE, and no third capture call is added. The
  * breadcrumb is a bare signal plus a count;
  * `.claude/rules/crash-reporting-scope.md`'s "exactly two capture calls"
@@ -57,9 +65,12 @@ import { MEMORY_PRESSURE_BREADCRUMB_CATEGORY } from './scrubEvent';
  * The shortest gap between two recorded breadcrumbs.
  *
  * iOS can deliver warnings in a burst, and the persisted breadcrumb file
- * rotates every `maxBreadcrumbs` (20 for this app). Uncoalesced, a burst would
- * evict the `ui.lifecycle` trail that says where the user was - the
- * instrumentation would degrade the very diagnostic it exists to produce.
+ * rotates every `maxBreadcrumbs` (100 for this app; it was 20 when this was
+ * written, and the reasoning does not depend on the number). Uncoalesced, a
+ * burst would evict the trail that says where the user was - `ui.lifecycle`,
+ * and since task #152 the app's own `app.navigation` and `app.connection`
+ * crumbs - so the instrumentation would degrade the very diagnostic it exists
+ * to produce.
  *
  * Coalesced on the LEADING edge, which matters more than it looks: a trailing
  * summary would be the obvious design and is wrong here, because the episode
@@ -111,13 +122,17 @@ let lastRecordedAtMs: number | null = null;
 /**
  * Registers a reaction to memory pressure.
  *
- * Exists so that directories which may not import the Sentry SDK at all
- * (`src/connection/`, `src/channel/`, and the rest of the ban list in
- * `.claude/rules/crash-reporting-scope.md`) can still shed memory when the OS
- * asks. They depend on this plain callback, never on the reporting half.
+ * Exists so that code which must not depend on the reporting half can still
+ * shed memory when the OS asks: it takes this plain callback and never the
+ * SDK. The directories banned from this door outright (`src/channel/`,
+ * `src/pairing/` and the rest of the list in
+ * `.claude/rules/crash-reporting-scope.md`) cannot subscribe even to this, so
+ * the one subscriber lives in `src/state/memoryShed.ts`. (`src/connection/` is
+ * NOT on that list, whatever an earlier version of this comment said: it
+ * imports the door for `reportHandledError`.)
  *
  * Listeners fire on EVERY warning, not only the ones that get a breadcrumb:
- * the coalescing above is about not flooding a 20-entry breadcrumb buffer, and
+ * the coalescing above is about not flooding the breadcrumb buffer, and
  * has nothing to do with how often it is worth releasing memory. A listener
  * must therefore be idempotent and cheap - one that has nothing left to
  * release should do nothing rather than rebuild anything.

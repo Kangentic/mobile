@@ -555,7 +555,10 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
   fails CI until it has been reviewed. The one deliberate exception is a render throw caught by an
   error boundary (the root one or a chat feed's), which keeps its message: that text is written by
   this app, not by a peer or a user, and it is what makes the crash diagnosable.
-  The one thing the app deliberately ADDS is a single diagnostic breadcrumb, recorded when the OS
+  The app deliberately ADDS four things of its own to a report, and this is the whole list. Each
+  is a bare count or a member of a closed set, none is content, and none is a new capture call (a
+  tag and a breadcrumb are scope data riding an event that was already going to be sent).
+  The first is a diagnostic breadcrumb recorded when the OS
   reports memory pressure: category `app.memory`, carrying a count of warnings seen this launch
   and nothing else - no byte figure, no free text, no session content. It exists because the OS
   kills a foreground app for memory without producing a crash report, and sentry-cocoa does not
@@ -569,6 +572,40 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
   devices still report the legacy pressure levels and do breadcrumb. The payload is a bare count
   with no severity and no level, even though the app distinguishes the cases internally to decide
   how much to release.
+  The other three say where the app was and what it was doing, and were added on 2026-11-18
+  (task #152) because a report that cannot say either cannot be acted on: Sentry MOBILE-H, an iOS
+  app hang, arrived naming no screen, with a trail made entirely of the native SDK's battery and
+  clock crumbs. They are written by `src/observability/reportContext.ts` and nothing else:
+  - Two **tags**, `screen` and `lens`. `screen` is the open screen's route TEMPLATE
+    (`/task/[taskId]`), `none` before the first screen has rendered (which is the whole of a
+    headless push launch), or `unknown`. It is never the resolved path, whose parameter is one of
+    the desktop's task IDs: the value is derived from expo-router's file segments and then checked
+    against a closed record of every route (`src/observability/reportVocabulary.ts`), so a
+    resolved path handed to it comes out as `unknown` rather than through. `lens` is which of a
+    screen's surfaces was showing (`terminal`, `chat`, `changes`; `conversation`, `summary`,
+    `description` on a completed task), or `none`.
+  - A breadcrumb, category `app.navigation`, on each change of that pair, carrying the pair and
+    nothing else. This is a trail of screen NAMES, so a report says which screens were opened
+    before a failure and in what order. Moving between two tasks records nothing, because the
+    only thing that changed is the ID.
+  - A breadcrumb, category `app.connection`, carrying one of six fixed states: `connecting`,
+    `connected`, `established`, `reconnecting`, `closed`, `board-snapshot`. No relay address, no
+    project, no count of anything the desktop sent. Each state is recorded once per connection
+    cycle, so a retry loop or a busy board cannot spend the trail. A rekey is not recorded, and
+    nothing about pairing is (`src/state/connectionBreadcrumbs.ts`).
+
+  The tags are the durable half. The trail is a ring of 100 entries (`maxBreadcrumbs`, raised
+  from 20 in the same change) that the native SDKs also write into, so on a phone left alone for
+  days their crumbs can push the app's out; a tag is one value that nothing evicts. All three
+  are meant to reach a NATIVE event, which is the point. Read from source, not assumed
+  (@sentry/react-native 8.34.0, sentry-cocoa 9.33.0): the SDK syncs the isolation scope's tags
+  and each allowlisted breadcrumb to the native scope as they are set, sentry-cocoa applies the
+  scope to an app hang when it detects one, and it persists tags and breadcrumbs to disk for the
+  watchdog-termination event it builds on the next launch. What has been OBSERVED on a delivered
+  event, and what has not, is recorded in the crash reporting section of
+  `docs/developer-guide.md`. The screen trail is information about how the app is used, even though it is
+  only ever sent inside a failure report, so it is declared to both app stores as such
+  (`docs/store-listing.md`) and disclosed in the privacy policy.
   Screenshots and view hierarchy are the two that reach native, and both are off there too.
   Transcripts, terminal output, diff content, board data, pairing material and notification
   payloads are never collected, and `src/pairing/`, `src/channel/`, `src/demo/`,
@@ -576,9 +613,12 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
   by a source scan that also covers `require()` and dynamic `import()`) from reporting to Sentry
   at all, because their error messages can echo ciphertext, key material, or
   attacker-controlled bytes (see `src/notifications/pushDecrypt.ts`).
-- **What Sentry can see:** that this app crashed, where in the code, and on what kind of device.
-  A stack trace, the exception type and message, app version, and the SDK's standard device and
-  OS context. For a failure the app caught and handled, strictly less: which part of the app
+- **What Sentry can see:** that this app crashed, where in the code, on what kind of device, and
+  what state the app itself was in.
+  A stack trace, the exception type and message, app version, the SDK's standard device and
+  OS context, and the four app-added items above: which screen and lens were showing, the
+  screens opened before it, the connection's recent states, and a memory-warning count. For a
+  failure the app caught and handled, strictly less of the first group: which part of the app
   caught it (a fixed site label), the error's class name, the capability verb if one was
   involved, the desktop's refusal code if it sent one (a fixed protocol label such as
   `unknown-session`), and the stack frames - never the message, which is replaced by the site label

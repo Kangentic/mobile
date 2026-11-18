@@ -82,6 +82,14 @@ jest.mock('expo-router', () => {
   };
 });
 
+// The lens this screen reports to the crash reporter (task #152). Recorded
+// rather than run: what this file can pin is the wiring, which screen name and
+// which lens the Command Terminal screen hands the hook.
+const mockUseReportedLens = jest.fn();
+jest.mock('@/navigation/screenTracking', () => ({
+  useReportedLens: (screenName: string, lens: string) => mockUseReportedLens(screenName, lens),
+}));
+
 const mockStopCommandTerminal = jest.fn();
 const mockWriteTerminal = jest.fn();
 jest.mock('@/connection/actions', () => ({
@@ -922,6 +930,22 @@ describe('CommandTerminalScreen', () => {
 
       expect(mockWriteTerminal).toHaveBeenCalledTimes(1);
       expect(mockWriteTerminal).toHaveBeenCalledWith(SESSION_ID, expect.any(String));
+    });
+
+    /**
+     * A crash report names the lens that was showing (task #152). A Command
+     * Terminal has its own route name, so its lens must not be reported under
+     * the task session's. Mutation that reddens this: removing the
+     * `useReportedLens` call, or handing it '/task/[taskId]'.
+     */
+    it('reports its lens to the crash reporter under its own route name, and again when the lens changes', async () => {
+      mockUseReportedLens.mockClear();
+      await renderScreen();
+      expect(mockUseReportedLens).toHaveBeenLastCalledWith('/command-terminal', 'terminal');
+
+      await fireEvent.press(screen.getByTestId('session-mode-chat'));
+
+      expect(mockUseReportedLens).toHaveBeenLastCalledWith('/command-terminal', 'chat');
     });
 
     it('holds the composer too: the chat lens footer is inert while held', async () => {

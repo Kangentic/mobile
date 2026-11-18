@@ -7,6 +7,8 @@ paths:
   - "src/devsupport/**"
   - "src/notifications/**"
   - "app/+native-intent.ts"
+  - "src/navigation/screenTracking.tsx"
+  - "src/state/connectionBreadcrumbs.ts"
 ---
 # Rule: crash reporting reports crashes, never content
 
@@ -60,7 +62,8 @@ scrubber is therefore a second line of defence, never the control itself.
   door forwards no message text and no `cause`; it tags `site`, `errorName` and, for a
   capability error, `verb` and the refusal's `code` (each only when it is one of the protocol's
   closed literals: the wire decoder accepts any string as `code`, so the door checks it against
-  a record the compiler holds to `CapabilityErrorCode`), keeps the stack frames, fingerprints on
+  a record the compiler holds to `CapabilityErrorCode`; the scope's `screen` and `lens` tags ride
+  the event as well, as they ride every event), keeps the stack frames, fingerprints on
   those tags (the code is appended only when present, so an uncoded event keeps the fingerprint
   it had before the tag existed), drops
   `NotConnectedError` and `ChannelDisconnectedError` by name and the transport-noise patterns by
@@ -84,18 +87,46 @@ scrubber is therefore a second line of defence, never the control itself.
   `TurboModuleContext` and `ExpoUpdatesListener`, all dropped by name in
   `DROPPED_DEFAULT_INTEGRATIONS`. `tests/unit/crashReporting.test.ts` pins the INSTALLED SDK's
   full default-integration list, so the next default an upgrade adds fails CI until it is
-  reviewed here, rather than shipping because nothing asked. The one
-  thing the app itself ADDS to the payload is a single diagnostic breadcrumb: when the OS reports
-  memory pressure, `src/observability/memoryPressure.ts` records category `app.memory` carrying a
-  count of warnings this launch and nothing else - no byte figure, no free text, no session
-  content. This list is the canonical enumeration;
+  reviewed here, rather than shipping because nothing asked.
+- **The app itself ADDS exactly four things to the payload, and this is the whole list.** Each is
+  a bare count or a member of a closed set; none is content; none is a capture call.
+  1. A breadcrumb, category `app.memory`: when the OS reports memory pressure,
+     `src/observability/memoryPressure.ts` records a count of warnings this launch and nothing
+     else - no byte figure, no free text, no session content.
+  2. Two scope tags, `screen` and `lens`. `screen` is the open screen's route TEMPLATE
+     (`/task/[taskId]`), `none` before any screen has rendered, or `unknown`; **never the resolved
+     path, whose parameter is one of the desktop's task IDs**. `lens` is which surface of a
+     screen was showing, or `none`.
+  3. A breadcrumb, category `app.navigation`, on each change of that pair, carrying
+     `{ screen, lens }` and nothing else.
+  4. A breadcrumb, category `app.connection`, carrying `{ state }` where `state` is one of
+     `connecting`, `connected`, `established`, `reconnecting`, `closed`, `board-snapshot`. No
+     relay address, no project, no count of anything the desktop sent, no rekey, and nothing
+     about pairing.
+
+  Items 2 to 4 (task #152, 2026-11-18) are written only by `src/observability/reportContext.ts`,
+  and every value is checked there, at runtime, against the closed sets in
+  `src/observability/reportVocabulary.ts`: a caller cannot widen what leaves by casting, and a
+  resolved path handed to the door comes out as `unknown`. The React half
+  (`src/navigation/screenTracking.tsx`) reads expo-router's `useSegments()`, never
+  `usePathname()`. Which connection transitions are worth a slot is decided in
+  `src/state/connectionBreadcrumbs.ts` (each state once per connection cycle, so a retry loop or
+  a busy board cannot spend the trail), which watches the stores so that neither
+  `src/connection/` nor the banned `src/channel/` records anything.
+  This list, with the bullet above, is the canonical enumeration;
   `docs/security.md` mirrors it, so an addition here has to land there in the same change.
 - **JS breadcrumbs are allowlisted, not denylisted.** An unanticipated category must be dropped
   by default, because a future SDK version can add one this repo never reviewed. The allowlist
-  holds exactly two entries: Sentry's own `sentry.event` bookkeeping, and the app's `app.memory`
-  above. That second one is deliberately NOT the platform's `device.event`, which would have
+  holds exactly four entries: Sentry's own `sentry.event` bookkeeping, and the app's three
+  above, `app.memory`, `app.navigation` and `app.connection`. Each app-owned one deliberately
+  avoids a platform category. `app.memory` is NOT `device.event`, which would have
   admitted sentry-cocoa's and sentry-android's battery, keyboard and screen-state breadcrumbs
-  along with it. Read the
+  along with it. `app.navigation` is NOT the SDK's `navigation`, whose contents the SDK's own
+  navigation integration owns and an upgrade can widen, and which both native bridges treat
+  specially (they copy its `data.to` into the native scope's current screen). An allowlist entry
+  is also what lets a breadcrumb reach a native event at all: `beforeBreadcrumb` runs before the
+  sync to the native scope, so a category missing here is recorded in JS and never leaves it.
+  Read the
   breadcrumb entry under Known limitations before assuming this covers a native crash: it does
   not.
 - **The DSN is never committed.** It arrives as `EXPO_PUBLIC_SENTRY_DSN` from the `SENTRY_DSN`
@@ -164,6 +195,74 @@ lookup; the app has no location permission). Both are disclosed in `docs/privacy
 The line this does NOT move is session content: the scrubber, the breadcrumb allowlist and the
 handled-error door stay exactly as they are. Reversing either native decision is still a
 privacy-policy change that edits `docs/privacy-policy.md` and `docs/security.md` together.
+
+**A report must say where, doing what, and since when. Decided 2026-11-18, and what was
+considered and not adopted.** The maintainer's directive, extending the 2026-10-06 standard
+above: an issue that cannot be fixed for lack of information the app could have captured is a
+REPORTING bug, and the report is what gets strengthened. Sentry MOBILE-H (an iOS app hang on
+1.5.0 build 24) was the first handled under it: its event named no screen and no app state, and
+its trail was exactly `maxBreadcrumbs: 20` entries of sentry-cocoa's own battery and clock
+crumbs, about three per background wake over two and a half days. MOBILE-8 had the same gap
+earlier. Task #152 answered with `maxBreadcrumbs: 100` and items 2 to 4 of the app-added list
+above. `/sentry` now files such an issue against a reporting-gap task instead of listing it as
+not filed.
+
+Recorded so the next pass does not re-propose them, each considered for the same gap and NOT
+adopted:
+
+- **Performance tracing and profiling.** Usage telemetry: a transaction per screen visit and per
+  interaction, sent whether or not anything broke, against a privacy policy that says nothing
+  is sent while the app works. (This file and `crashReporting.ts` used to give a second reason,
+  that transaction names carry route parameters. Read out of @sentry/react-native 8.34.0, that
+  is wrong: under expo-router a transaction is named for the route template, and the resolved
+  URL and params are span attributes only under `sendDefaultPii`. The decision does not need
+  it, and the correction is kept in `crashReporting.ts` beside the option.)
+- **Screenshots, view hierarchy and Session Replay.** Screen content, which is session content.
+- **`enableJsHangTracking`.** Experimental, and it would not have helped: MOBILE-H's JS thread
+  was idle in its run loop while the main thread laid out text.
+- **The SDK's own navigation integration** (`reactNavigationIntegration` /
+  `expoRouterIntegration`). It would have recorded route names with no code of ours, and read
+  from 8.34.0 it does emit templates. But its `navigation` breadcrumb's contents belong to the
+  SDK, so an upgrade can widen them with every check green, it is built around tracing spans
+  this app keeps off, and its breadcrumb sets the native scope's current screen as a side
+  effect. An app-owned category whose one writer checks a closed set is the same information
+  with nothing delegated.
+- **Recording every connection transition, every board snapshot, and rekeys.** A retry loop
+  against an absent desktop alternates `connected` and `reconnecting` on a five-second floor, a
+  busy board is re-read on a 300 ms debounce, and a rekey arrives every two minutes or so. Any
+  one of them would spend the 100-entry trail and evict the screen crumbs that say where the
+  user was, which is the failure MOBILE-H already demonstrated with the native SDK's crumbs.
+
+**What the app-added tags and breadcrumbs are known to reach, and how it is known.** Three
+different strengths of evidence, kept apart on purpose (see
+`performance-claims-are-measured.md` for why this repo labels them):
+
+- **Read from source** (@sentry/react-native 8.34.0): `Sentry.init` makes only the ISOLATION and
+  GLOBAL scopes sync to native (`dist/js/sdk.js`, `enableSyncToNative`). The top-level
+  `Sentry.setTag` and `Sentry.addBreadcrumb` write the isolation scope, so they sync;
+  `Sentry.getCurrentScope().setTag(...)` looks equivalent and stays in JavaScript. A breadcrumb
+  syncs only after `beforeBreadcrumb` admits it. `maxBreadcrumbs` reaches both native SDKs
+  (`RNSentryStart.java`; sentry-cocoa's `Options+Dictionary.swift`), as does
+  `enableNdkScopeSync`, which is pinned on so an NDK-caught Android crash keeps the scope.
+- **Read from source** (sentry-cocoa 9.33.0, the version 8.34.0 bundles): an app hang has the
+  scope applied when it is detected (`SentryHangTrackingIntegration`,
+  `scope.applyTo(event:maxBreadcrumbs:)`), though on a UI build the event is stored and sent
+  when the hang ends or on the next launch. A watchdog-termination event is built on the next
+  launch from tags (`readPreviousTagsFromDisk`) and from a breadcrumb file bounded by, and
+  trimmed to, `options.maxBreadcrumbs`. So the persisted trail follows the same cap.
+- **Observed on a delivered event:** see the crash reporting section of
+  `docs/developer-guide.md`, which records what each platform's native crash carried and the
+  date. Two things that section says plainly because no crash-test row can produce them: an app
+  hang and a watchdog termination have not been observed carrying the tags, and the `lens` tag
+  has only been observed as `none`, because both crash rows live in Settings. A recurrence of
+  MOBILE-H on a build with this change is the first direct proof of the hang path.
+
+**The trail is a ring the native SDKs share, so the TAG is the durable answer.** Raising the cap
+to 100 does not stop sentry-cocoa's `device.event` crumbs filling it on a phone left alone for
+long enough; it moves the horizon by a factor of five. What survives any amount of that is the
+`screen` and `lens` tags, which are single values that are replaced rather than appended. Read
+an event's tags first and its trail second, and count the trail against 100 before concluding
+that something did not happen.
 
 **The native breadcrumbs also ride a JS-CAPTURED event, and there the allowlist does reach
 them.** Observed on the first iOS event the project ever received (the handled canary from
@@ -293,6 +392,16 @@ how often.
   `metro.config.js` sits outside the scan by design.
 - **Test (live now):** `tests/unit/scrubEvent.test.ts` locks the scrubber, the `site`-keyed
   redaction and the breadcrumb allowlist, including its default-deny behaviour.
+  The app-added screen and connection data has its own set, each written against a named
+  mutation: `tests/unit/reportVocabulary.test.ts` (a resolved path is `unknown`, and the route
+  record matches the files under `app/` in both directions, so a new screen cannot ship
+  reporting as `unknown`), `tests/unit/reportContext.test.ts` (the door refuses any value
+  outside the closed sets, and keeps a lens to the screen that set it),
+  `tests/unit/connectionBreadcrumbs.test.ts` (each state once per connection cycle, and a
+  deliberate close is recorded), `tests/components/ScreenTracker.test.tsx` (the tracker under
+  expo-router's REAL `useSegments`, red when it is swapped for the resolved pathname),
+  `tests/unit/rootLayoutWiring.test.ts` (the tracker is mounted, after the Stack) and
+  `tests/unit/bundleEntry.test.ts` (the scope's starting tags are set straight after init).
   `tests/unit/crashReporting.test.ts` locks the door's contract (a synthetic error, frames only,
   the four tags, the fingerprint, the exclusions, the cooldown and cap) and the four
   environments. `tests/unit/buildWorkflow.test.ts` locks the pre-prebuild ordering of the Sentry
@@ -305,7 +414,9 @@ how often.
   site, or any relaxation of an init option above, as in scope during `/code-review`.
 - **Skill (live now):** `/sentry` (`.claude/skills/sentry/SKILL.md`) reads arriving issues and
   defers to this rule for the privacy controls and their known limitations rather than
-  restating them. Its no-raw-payload boundary (never paste an event payload or a `user.id` into
+  restating them. It also carries the 2026-11-18 directive at the point of use: its first
+  diagnosis check is whether the event says where, doing what, and since when, and an issue
+  that cannot be fixed for lack of that is filed against a reporting-gap task. Its no-raw-payload boundary (never paste an event payload or a `user.id` into
   a task, PR, or reply) is this rule's "Known limitations" section applied at retrieval time, so
   the two move together.
 

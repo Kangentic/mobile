@@ -203,7 +203,11 @@ src/
                   #   only enqueues after that - see
                   #   .claude/rules/imperative-router-inside-react.md. Also taskOpenIntent: the
                   #   one-slot note of a person's OPEN of a task, claimed once by the session
-                  #   screen for the protocol 0.28.0 resume on open (useResumeOnOpen)
+                  #   screen for the protocol 0.28.0 resume on open (useResumeOnOpen). And
+                  #   screenTracking: the root layout's ScreenTracker and the lens hook, which
+                  #   tell the crash reporter which screen is showing. It reads useSegments(),
+                  #   NEVER usePathname(): segments are the route template, the pathname has a
+                  #   task ID in it. Mounted AFTER the root Stack, which is load-bearing
   conversation/   # Pure transcript-cell flattener, prompt keystrokes, pending-prompt summary
   demo/           # The permanent reviewer/demo pairing: fixed non-expiring code, in-process
                   #   IKpsk0 ceremony against StubPairingResponder, the isDemoAnchor
@@ -261,8 +265,14 @@ src/
                   #   and a Pause or Resume in flight) + the non-Zustand
                   #   terminalFeed PTY ring buffers +
                   #   memoryShed (registers the OS-memory-pressure reactions; lives here rather
-                  #   than in observability/ because it touches the stores, and here rather than
-                  #   in connection/ because that directory is banned from the observability door)
+                  #   than in observability/ because it touches the stores, and beside those
+                  #   stores rather than in connection/, which MAY import the observability
+                  #   door and does, for reportHandledError: the banned directories are listed
+                  #   in crash-reporting-scope.md) + connectionBreadcrumbs (puts the
+                  #   connection's life on the crash-report trail by watching the channel and
+                  #   board stores, so src/channel/, which IS banned from the door, records
+                  #   nothing; each state once per connection cycle, so a retry loop or a busy
+                  #   board cannot spend the trail)
   voice/          # Dictation hook over the OS speech engines (expo-speech-recognition)
   observability/  # Sentry crash reporting - the only module allowed to import the SDK, plus the
                   #   pure event/breadcrumb scrubber (see crash-reporting-scope.md). Two capture
@@ -270,11 +280,18 @@ src/
                   #   one and the chat feeds' FeedErrorBoundary; names are a closed union) and
                   #   reportHandledError (the handled-error door for caught failures, which
                   #   never forwards message text; sites are a closed union). Also
-                  #   memoryPressure: the OS memory-warning subscriber, which records the one
-                  #   breadcrumb this app ADDS (category app.memory, a count and nothing else,
-                  #   because sentry-cocoa observes no memory warning of its own) and re-publishes
-                  #   the signal as a plain callback the Sentry-banned directories can subscribe
-                  #   to. A breadcrumb is scope data, so the two-capture-call count is unchanged
+                  #   memoryPressure: the OS memory-warning subscriber, which records an
+                  #   app.memory breadcrumb (a count and nothing else, because sentry-cocoa
+                  #   observes no memory warning of its own) and re-publishes the signal as a
+                  #   plain callback for src/state/memoryShed. And reportContext, which says
+                  #   WHERE the app was and WHAT it was doing on every event, native ones
+                  #   included (Sentry MOBILE-H's could not): the `screen` and `lens` scope
+                  #   tags, an app.navigation breadcrumb per change, and an app.connection
+                  #   breadcrumb per connection state. Every value is a member of a closed set
+                  #   in reportVocabulary (pure, no imports) and is checked at the door, so a
+                  #   screen is its route TEMPLATE and never a path with a task ID in it.
+                  #   Those four are everything the app ADDS; tags and breadcrumbs are scope
+                  #   data, so the two-capture-call count is unchanged. maxBreadcrumbs is 100
   lib/            # Shared pure utilities (crypto polyfills, haptics, the bounded task queue that
                   #   caps the Home feed's cold-start snippet pre-warm, runWhenFirstActive:
                   #   the root layout's guard against hydrating settings in an iOS background
@@ -668,8 +685,10 @@ names its enforcement (live now, or planned where mechanical coverage does not e
   (`src/notifications/`, `plugins/`, `targets/`).
 - `crash-reporting-scope.md` - Sentry imports confined to `src/observability/` and banned outright
   from the pairing/channel/demo/devsupport/notification paths; privacy controls set at the source
-  because a JS `beforeSend` cannot filter native crashes (`src/observability/`, `src/pairing/`,
-  `src/channel/`, `src/demo/`, `src/devsupport/`, `src/notifications/`, `app/+native-intent.ts`).
+  because a JS `beforeSend` cannot filter native crashes; and the canonical list of the four
+  things the app itself adds to a report (`src/observability/`, `src/pairing/`,
+  `src/channel/`, `src/demo/`, `src/devsupport/`, `src/notifications/`, `app/+native-intent.ts`,
+  `src/navigation/screenTracking.tsx`, `src/state/connectionBreadcrumbs.ts`).
 - `expo-cng.md` - no hand-edited `ios/`/`android/`; native config via config plugins; SDK-resolved
   dependency installs via `expo install` (`app.json`, `app.config.*`, `eas.json`, `plugins/`,
   `ios/`, `android/`, `package.json`, `package-lock.json`).
@@ -803,7 +822,10 @@ in a gitignored `CLAUDE.local.md` at the project root.
 - `/sentry` retrieves and diagnoses issues from the `mobile` Sentry project. A triage sweep ends
   by filing the actionable issues as grouped, parallel-safe board tasks (grouped by the files the
   fix touches) and assigning them as the triage marker; a single-issue investigation files a
-  task only when asked.
+  task only when asked. The one exception to "only when asked" is a reporting gap: an issue that
+  cannot be fixed because its event lacks information the app could have captured is filed
+  against a reporting-gap task (or appended to an open one) and assigned to it, in either flow,
+  because a report that cannot be acted on is a reporting bug (the maintainer, 2026-11-18).
 - `/upgrade-deps` researches every npm dependency that can move, within the Expo SDK mapping (a
   move past it is a hold research must earn, recorded in the developer guide's hold table), with
   `upgrade-researcher` agents that may only read. In a task it does the upgrade there, following

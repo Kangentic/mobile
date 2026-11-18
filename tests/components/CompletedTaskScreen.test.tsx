@@ -37,6 +37,15 @@ jest.mock('@/observability/crashReporting', () => ({
   reportHandledError: (site: string, error: unknown) => mockReportHandledError(site, error),
 }));
 
+// The lens this screen reports to the crash reporter. The real hook is a focus
+// effect over the observability door, neither of which this file's `expo-router`
+// and `crashReporting` mocks carry, and what matters here is the WIRING: which
+// screen name and which lens this screen hands it.
+const mockUseReportedLens = jest.fn();
+jest.mock('@/navigation/screenTracking', () => ({
+  useReportedLens: (screenName: string, lens: string) => mockUseReportedLens(screenName, lens),
+}));
+
 const mockOpenURL = jest.fn().mockResolvedValue(true);
 jest.mock('expo-linking', () => ({
   openURL: (url: string) => mockOpenURL(url),
@@ -231,6 +240,31 @@ describe('CompletedTaskScreen', () => {
    * lands and is immediately discarded, which looks exactly like a desktop
    * that returned nothing.
    */
+  /**
+   * A crash report names the lens that was showing (task #152). This screen
+   * holds its lens in local state, so it is the only thing that can report it.
+   * Mutation that reddens this: removing the `useReportedLens` call, or
+   * passing it a constant instead of `mode`.
+   */
+  it('reports its lens to the crash reporter under its own screen name, and again when the lens changes', async () => {
+    seedArchived('project-1', taskFixture(), summaryFixture());
+
+    await renderCompletedTask();
+    expect(mockUseReportedLens).toHaveBeenLastCalledWith('/completed-task', 'conversation');
+
+    await fireEvent.press(screen.getByTestId('completed-mode-summary'));
+    await act(async () => {});
+    expect(mockUseReportedLens).toHaveBeenLastCalledWith('/completed-task', 'summary');
+  });
+
+  it('reports a lens even while the task is not found, so the hook sits above the early return', async () => {
+    mockParams = { taskId: 'task-gone', projectId: 'project-1' };
+
+    await renderCompletedTask();
+
+    expect(mockUseReportedLens).toHaveBeenLastCalledWith('/completed-task', 'conversation');
+  });
+
   it('retains the session before fetching its transcript tail', async () => {
     seedArchived('project-1', taskFixture(), summaryFixture({ sessionId: 'sess-summary-1' }));
     const retainSessionSpy = jest.spyOn(useTranscriptStore.getState(), 'retainSession');

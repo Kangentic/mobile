@@ -22,6 +22,7 @@ import { useSettingsStore } from '@/state/settingsStore';
 import { selectChatLens, useTranscriptStore } from '@/state/transcriptStore';
 import { selectTerminalPainted, useTerminalUiStore } from '@/state/terminalUiStore';
 import { closeSessionScreen, loadArchivedTasks, openSessionScreen } from '@/connection/actions';
+import { useReportedLens } from '@/navigation/screenTracking';
 import { openNotificationSurface } from '@/notifications/notificationSignals';
 import { TaskHeader } from './TaskHeader';
 import { ChatPane } from './ChatPane';
@@ -220,6 +221,9 @@ export function SessionScreen(): React.JSX.Element {
     const adoptedLens = rememberedLens ?? 'terminal';
     if (adoptedLens !== mode) setMode(adoptedLens);
   }
+  // Which lens a crash report says this screen was on. The screen's name comes
+  // from the root layout's tracker; the lens lives only here, in local state.
+  useReportedLens('/task/[taskId]', mode);
 
   useEffect(() => {
     if (!sessionId) return;

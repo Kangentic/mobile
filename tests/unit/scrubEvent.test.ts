@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { Breadcrumb, ErrorEvent } from '@sentry/react-native';
-import { MEMORY_PRESSURE_BREADCRUMB_CATEGORY, allowlistBreadcrumb, scrubEvent } from '@/observability/scrubEvent';
+import {
+  CONNECTION_BREADCRUMB_CATEGORY,
+  MEMORY_PRESSURE_BREADCRUMB_CATEGORY,
+  NAVIGATION_BREADCRUMB_CATEGORY,
+  allowlistBreadcrumb,
+  scrubEvent,
+} from '@/observability/scrubEvent';
 
 /**
  * These lock the payload shape that leaves the device. The privacy claims in
@@ -107,6 +113,28 @@ describe('scrubEvent', () => {
     expect(scrubbed.breadcrumbs?.map((breadcrumb) => breadcrumb.category)).toEqual(['sentry.event']);
   });
 
+  it("keeps the app's own trail on a JS-captured event while the native SDK's device crumbs are dropped beside it", () => {
+    // The shape of Sentry MOBILE-H's trail: sentry-cocoa's `device.event`
+    // crumbs interleaved with the app's own. The second allowlist pass must
+    // keep the three app-owned categories and nothing native.
+    const scrubbed = scrubEvent(
+      errorEvent({
+        breadcrumbs: [
+          { category: 'device.event', data: { action: 'BATTERY_STATE_CHANGE' } },
+          { category: NAVIGATION_BREADCRUMB_CATEGORY, data: { screen: '/task/[taskId]', lens: 'chat' } },
+          { category: 'app.lifecycle', data: { state: 'foreground' } },
+          { category: CONNECTION_BREADCRUMB_CATEGORY, data: { state: 'established' } },
+          { category: MEMORY_PRESSURE_BREADCRUMB_CATEGORY, data: { count: 1 } },
+        ],
+      }),
+    );
+    expect(scrubbed.breadcrumbs?.map((breadcrumb) => breadcrumb.category)).toEqual([
+      NAVIGATION_BREADCRUMB_CATEGORY,
+      CONNECTION_BREADCRUMB_CATEGORY,
+      MEMORY_PRESSURE_BREADCRUMB_CATEGORY,
+    ]);
+  });
+
   it('leaves breadcrumbs absent when nothing survives the allowlist, rather than sending an empty list', () => {
     const scrubbed = scrubEvent(errorEvent({ breadcrumbs: [{ category: 'ui.lifecycle' }, { category: 'started' }] }));
     expect('breadcrumbs' in scrubbed).toBe(false);
@@ -179,8 +207,26 @@ describe('allowlistBreadcrumb', () => {
     expect(allowlistBreadcrumb(breadcrumb('fetch'))).toBeNull();
   });
 
-  it('drops navigation breadcrumbs, whose route params are desktop task IDs', () => {
+  /**
+   * The same coupling as the memory category, for the two categories
+   * reportContext.ts writes (task #152, from Sentry MOBILE-H). Dropping either
+   * would leave the screen trail or the connection trail recorded in JS and
+   * never synced to the native scope, so a native crash, an app hang and a
+   * watchdog termination would all arrive without it, with every other test
+   * still green.
+   */
+  it('lets the app-owned screen and connection categories through', () => {
+    expect(allowlistBreadcrumb(breadcrumb(NAVIGATION_BREADCRUMB_CATEGORY))).not.toBeNull();
+    expect(allowlistBreadcrumb(breadcrumb(CONNECTION_BREADCRUMB_CATEGORY))).not.toBeNull();
+  });
+
+  it("drops the SDK's own navigation breadcrumbs, which the app-owned category deliberately avoids reusing", () => {
+    // The SDK's navigation integration owns that category's contents, so an
+    // upgrade could widen what it carries, and both native bridges copy its
+    // `data.to` into the native scope's current screen.
+    expect(NAVIGATION_BREADCRUMB_CATEGORY).not.toBe('navigation');
     expect(allowlistBreadcrumb(breadcrumb('navigation'))).toBeNull();
+    expect(allowlistBreadcrumb(breadcrumb('navigation.dispatch'))).toBeNull();
   });
 
   it('is default-deny: an unanticipated category is dropped, not forwarded', () => {

@@ -54,6 +54,15 @@ jest.mock('@/devsupport/retentionProbe', () => ({
   getRetentionProbeVariant: () => mockRetentionProbeVariant,
 }));
 
+// The lens this screen reports to the crash reporter (task #152). Recorded
+// rather than run: the real hook is a focus effect over the observability
+// door, and what this file can pin is the wiring, which screen name and which
+// lens the session screen hands it.
+const mockUseReportedLens = jest.fn();
+jest.mock('@/navigation/screenTracking', () => ({
+  useReportedLens: (screenName: string, lens: string) => mockUseReportedLens(screenName, lens),
+}));
+
 jest.mock('@/connection/actions', () => ({
   openSessionScreen: jest.fn(),
   closeSessionScreen: jest.fn(),
@@ -616,6 +625,27 @@ describe('SessionScreen session binding', () => {
     mockParams = { taskId: 'task-1', sessionId: 'sess-a', mode: 'chat' };
     await renderSessionScreen();
     expect(screen.getByTestId('stub-session-input-bar').props.accessibilityLabel).toBe('chat');
+  });
+
+  /**
+   * A crash report names the lens that was showing (task #152, from Sentry
+   * MOBILE-H). The lens lives only in this screen's local state, so this
+   * screen is the only thing that can report it, and it must report the lens
+   * it is ACTUALLY on: the remembered one here, not the terminal default.
+   * Mutation that reddens this: removing the `useReportedLens` call, or
+   * passing it a constant instead of `mode`.
+   */
+  it('reports the lens it is on to the crash reporter, under the session route name', async () => {
+    mockUseReportedLens.mockClear();
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a' };
+    seedTaskWithSession('sess-a');
+    const first = await renderSessionScreen();
+    expect(mockUseReportedLens).toHaveBeenLastCalledWith('/task/[taskId]', 'terminal');
+    await first.unmount();
+
+    mockParams = { taskId: 'task-1', sessionId: 'sess-a', mode: 'chat' };
+    await renderSessionScreen();
+    expect(mockUseReportedLens).toHaveBeenLastCalledWith('/task/[taskId]', 'chat');
   });
 
   /**

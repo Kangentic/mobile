@@ -45,9 +45,20 @@ vi.mock('@/observability/memoryPressure', () => ({
   initializeMemoryPressure: vi.fn(() => callOrder.push('initializeMemoryPressure')),
 }));
 
+vi.mock('@/observability/reportContext', () => ({
+  initializeReportContext: vi.fn(() => callOrder.push('initializeReportContext')),
+}));
+
 vi.mock('@/state/memoryShed', () => ({
   registerMemoryShedders: vi.fn(() => {
     callOrder.push('registerMemoryShedders');
+    return () => undefined;
+  }),
+}));
+
+vi.mock('@/state/connectionBreadcrumbs', () => ({
+  registerConnectionBreadcrumbs: vi.fn(() => {
+    callOrder.push('registerConnectionBreadcrumbs');
     return () => undefined;
   }),
 }));
@@ -74,6 +85,17 @@ describe('index.js (bundle entry)', () => {
     expect(callOrder.filter((entry) => entry === 'initializeMemoryPressure')).toHaveLength(1);
     expect(callOrder.filter((entry) => entry === 'registerMemoryShedders')).toHaveLength(1);
     expect(callOrder.filter((entry) => entry === 'initializeNotifications')).toHaveLength(1);
+    expect(callOrder.filter((entry) => entry === 'initializeReportContext')).toHaveLength(1);
+    expect(callOrder.filter((entry) => entry === 'registerConnectionBreadcrumbs')).toHaveLength(1);
+  });
+
+  it('puts the starting screen on the scope straight after the SDK is up, before anything else can fail', async () => {
+    // `screen: none` is only useful if it is there for the earliest event: a
+    // throw from a later initializer must already carry it.
+    await loadBundleEntry();
+
+    const initializerCalls = callOrder.filter((entry) => !entry.endsWith(':imported'));
+    expect(initializerCalls.indexOf('initializeReportContext')).toBe(initializerCalls.indexOf('initializeCrashReporting') + 1);
   });
 
   it('initializes crash reporting before memory pressure, which needs the SDK up', async () => {
@@ -94,8 +116,10 @@ describe('index.js (bundle entry)', () => {
     const initializerCalls = callOrder.filter((entry) => !entry.endsWith(':imported'));
     expect(initializerCalls).toEqual([
       'initializeCrashReporting',
+      'initializeReportContext',
       'initializeMemoryPressure',
       'registerMemoryShedders',
+      'registerConnectionBreadcrumbs',
       'initializeNotifications',
     ]);
   });

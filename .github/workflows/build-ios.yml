@@ -792,9 +792,18 @@ jobs:
       # Expect exactly ONE Sentry event per crash: RNSentry.mm installs a
       # native beforeSend that drops the "Unhandled JS Exception" twin of the
       # JS throw, the same dedup sentry-android does with JavascriptException.
+      #
+      # EACH FLOW WALKS THE APP BEFORE IT CRASHES IT (task #152): it pairs with
+      # the in-process demo desktop when the install is unpaired, opens a task
+      # and changes lens, so the delivered events can show the screen and lens
+      # tags and the app.navigation / app.connection trail riding a native
+      # event. That walk is why the budget is 30 minutes and not the 20 the
+      # two bare crashes needed, and it adds a second way for a flow to end
+      # with the app still alive: a step of the walk failing before the crash
+      # row is ever reached. assert_app_died's message says so.
       - name: Run the crash-test flows
         if: env.CRASH_TEST == 'true'
-        timeout-minutes: 20
+        timeout-minutes: 30
         env:
           MAESTRO_DEVICE: ${{ steps.smoke.outputs.device-id }}
           EVIDENCE: ${{ runner.temp }}/crash-evidence
@@ -826,7 +835,7 @@ jobs:
           # collected afterwards as a bonus and the gate is "the app is gone".
           assert_app_died() {
             if app_is_running; then
-              echo "::error::com.kangentic.mobile is still running after $1, so the tap did not crash it. Read the flow's debug output in the ios-probe-evidence artifact."
+              echo "::error::com.kangentic.mobile is still running after $1. Either the flow stopped before it reached the crash row (it pairs with the demo desktop and opens a task first) or the tap did not crash the app. The flow's last screenshot in the ios-probe-evidence artifact says which: read it before anything else."
               exit 1
             fi
             echo "com.kangentic.mobile is no longer running after $1: the crash happened."
