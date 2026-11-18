@@ -17,6 +17,7 @@ import {
   isConnectionBreadcrumbState,
   isLensScreenName,
   isScreenLens,
+  isTrailSilentScreen,
   screenNameFromSegments,
 } from '@/observability/reportVocabulary';
 
@@ -108,6 +109,22 @@ describe('the screen-name record against the route files under app/', () => {
     const namesFromFiles = new Set(routeSegmentLists.map((segments) => screenNameFromSegments(segments)));
     const namesWithoutFile = ROUTE_SCREEN_NAME_LIST.filter((screenName) => !namesFromFiles.has(screenName));
     expect(namesWithoutFile).toEqual([]);
+  });
+});
+
+describe('the screens kept off the trail', () => {
+  it('is exactly the two steps of the pairing ceremony', () => {
+    // Listed against every route, so a new screen cannot join or leave the
+    // silent set without this test saying so.
+    const silent = ROUTE_SCREEN_NAME_LIST.filter((screenName) => isTrailSilentScreen(screenName));
+    expect([...silent].sort()).toEqual(['/pair', '/pair-confirm']);
+  });
+
+  it('does not silence the screens around pairing, or the placeholder names', () => {
+    expect(isTrailSilentScreen('/devices')).toBe(false);
+    expect(isTrailSilentScreen('/settings')).toBe(false);
+    expect(isTrailSilentScreen('none')).toBe(false);
+    expect(isTrailSilentScreen('unknown')).toBe(false);
   });
 });
 

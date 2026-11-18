@@ -100,7 +100,12 @@ scrubber is therefore a second line of defence, never the control itself.
   3. A breadcrumb, category `app.navigation`, on each change of that pair, carrying
      `{ screen, lens }` and nothing else. Its `message` is those same two values joined
      (`/task/[taskId] chat`), there only because the Sentry CLI's trail view prints the message
-     column and nothing from `data`.
+     column and nothing from `data`. **The two pairing screens, `/pair` and `/pair-confirm`,
+     leave no entry.** They still set the `screen` tag, because a crash there has to say where
+     it was; but a pair of timestamped entries is "a ceremony's existence and timing", which is
+     the thing the pairing bullet above keeps out of Sentry, arriving by another route. The
+     first delivered event of task #152 showed exactly that pair, and the set was added then
+     (`TRAIL_SILENT_SCREEN_NAMES` in `reportVocabulary.ts`).
   4. A breadcrumb, category `app.connection`, carrying `{ state }` where `state` is one of
      `connecting`, `connected`, `established`, `reconnecting`, `closed`, `board-snapshot`, with
      the state repeated as its `message` for the same reason. No relay address, no project, no
@@ -402,8 +407,9 @@ how often.
   mutation: `tests/unit/reportVocabulary.test.ts` (a resolved path is `unknown`, and the route
   record matches the files under `app/` in both directions, so a new screen cannot ship
   reporting as `unknown`), `tests/unit/reportContext.test.ts` (the door refuses any value
-  outside the closed sets, keeps a lens to the screen instance that set it, and records one
-  trail entry per arrival whichever of the screen and the lens is reported first),
+  outside the closed sets, keeps a lens to the screen instance that set it, records one
+  trail entry per arrival whichever of the screen and the lens is reported first, and keeps
+  the two pairing screens off the trail while still tagging them),
   `tests/unit/connectionBreadcrumbs.test.ts` (each state once per connection cycle, and a
   deliberate close is recorded), `tests/components/ScreenTracker.test.tsx` (the tracker under
   expo-router's REAL `useSegments`, red when it is swapped for the resolved pathname),

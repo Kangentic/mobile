@@ -3412,7 +3412,10 @@ because Sentry MOBILE-H (an iOS app hang) arrived saying neither. Read these bef
   `closed`), so one `reconnecting` stands for a retry loop of any length, and one
   `board-snapshot` stands for every snapshot of that session: the absence of a later one does
   not mean the board went quiet. A move between two tasks records no `app.navigation` crumb,
-  because only the ID changed. Rekeys and pairing are never recorded.
+  because only the ID changed. Rekeys are never recorded, and neither is pairing: `/pair` and
+  `/pair-confirm` set the `screen` tag and leave NO trail entry, so two consecutive `/` entries
+  with a gap between them is what a pairing in between looks like, and it is all a report says
+  about one.
 - **Count the trail against 100**, and remember the native SDKs write into the same ring. On a
   phone left in the background for days sentry-cocoa's `device.event` crumbs can push the app's
   out, which is why the tags exist. An event with tags and no `app.*` crumbs has been evicted,
@@ -3430,6 +3433,64 @@ because Sentry MOBILE-H (an iOS app hang) arrived saying neither. Read these bef
   build 24), not a reporting failure. `/sentry` treats a missing field on such an event as the
   gap task #152 already closed, and files a NEW reporting-gap task only for something an event
   from a current build still cannot say.
+
+**What a delivered event carried: screen and connection context, 2026-11-18 (task #152).** The
+tags and the app's own trail exist to reach NATIVE events, which no JavaScript hook can see, so
+the claim was checked the only way it can be: a crash-test build, the probe flows, and the
+delivered events read back. The flows (`.maestro/probes/crash-test-js.yaml` and
+`crash-test-native.yaml`) now walk the app before they crash it: pair with the in-process demo
+desktop if unpaired, open the mock task, switch Terminal then Chat, go back, open Settings.
+
+*Android, observed.* A `preview`-profile x86_64 build dispatched with `crash_test=true` (run
+44408612973, commit `4445551`), installed on a throwaway API 36 emulator, both flows run with
+the Maestro CLI, the app relaunched to flush. The native crash (`Sentry.nativeCrash()`:
+`platform: java`, `mechanism: expoReactHost`, `handled: no`, sentry-android 8.62.0, the Java
+uncaught path and not an NDK signal) arrived as MOBILE-2 at 22:20:14Z carrying:
+
+- tags `screen: /settings` and `lens: none`;
+- the trail, in order, beside sentry-android's own `app.lifecycle` and `device.event` crumbs:
+  `app.navigation` `/`; `app.connection` `connected`, `established`, `board-snapshot`;
+  `app.navigation` `/task/[taskId]` on `chat`, then `terminal`, then `chat`; `/`; `/settings`;
+- no task, project or session ID in any tag or crumb. The mock task's route parameter appears
+  nowhere.
+
+Three things that event settles, and one it corrected:
+
+- The isolation-scope sync reaches sentry-android's scope for both tags and allowlisted
+  breadcrumbs, and they ride a crash JavaScript never sees. That was read from source before;
+  it is now observed.
+- There is no `connecting` crumb, correctly: the demo desktop is an in-process loopback
+  transport, which goes from `idle` straight to `connected`. A real relay dial records
+  `connecting` first.
+- `lens` arrived as `none` on the TAG because both crash rows live in Settings. A real lens
+  value is observed only in the trail. The tag and the crumb are written by the same call, so
+  this is a gap in what the probe can show, not in what is known to work.
+- **CORRECTED by this run, where it was claimed.** The first build (run 44404675309, commit
+  `abd0749`) recorded TWO entries on opening the task, 8 ms apart: `lens: none`, then `chat`.
+  The code, its comments and a root-layout test had all stated that a screen's focus effect
+  runs before the root tracker's effect ("a later sibling's effect runs last"), so one entry
+  would already carry the lens. That was read out of React's effect ordering and never run, and
+  it is wrong here: a route's screen mounts after the navigation state naming it has changed,
+  so the tracker speaks first. The door was rebuilt to give one entry in either order (a held
+  breadcrumb, an instance-owned lens, a blur that only forgets), the position test was removed,
+  and the second build's event above shows a single `/task/[taskId] chat` entry on arrival. The
+  same first event also showed every app-owned row blank in the Sentry CLI's trail view, which
+  prints only a breadcrumb's `message`; each crumb now carries one, built from the same values.
+- **A second correction from the same run, this one about what should leave at all.** The
+  handled canary's event from the first build (MOBILE-6, 21:58:58Z, a JS-captured event, so its
+  trail is the app's own crumbs only) showed `/pair` and then `/pair-confirm` eight seconds
+  later, ahead of the connection coming up: the flow had just demo-paired. That is a record of
+  when a pairing was attempted, which the crash-reporting rule keeps out of Sentry on purpose
+  and which the connection trail had been written to avoid; the screen trail carried it anyway.
+  The two pairing screens now set the tag and leave no trail entry.
+
+*Not observed, and why.* A hang and a watchdog termination cannot be produced by any Settings
+row, so for those two event kinds the tags and trail rest on sentry-cocoa 9.33.0's source (the
+scope is applied to a hang at detection; tags and a `maxBreadcrumbs`-bounded trail are persisted
+for a watchdog termination) plus the native-crash observations sharing the same scope. A real
+NDK signal crash on Android was not produced either; `enableNdkScopeSync` is pinned on for it.
+A recurrence of MOBILE-H on a build carrying this change is the first direct proof of the hang
+path, and should be read for exactly these fields.
 
 **What that verification actually found**, on a `preview`-profile (arm64-v8a, release-signed,
 non-debuggable) install, cross-checked with `adb logcat`, mitmproxy on the same device, and the

@@ -330,7 +330,8 @@ its own board.
     once per connection cycle, so a single `reconnecting` can stand for a long retry loop and a
     single `board-snapshot` for every snapshot of that session.
   - *Since when.* `app.navigation` crumbs give the route into the failure, one per change of
-    screen or lens. Count the whole trail against `maxBreadcrumbs` (100; it was 20 up to and
+    screen or lens. The two pairing screens never appear there (they set the tag only), so do
+    not read their absence as "never paired". Count the whole trail against `maxBreadcrumbs` (100; it was 20 up to and
     including 1.5.0 build 24). A trail AT the cap was truncated, and the native SDKs share the
     ring, so on a phone left in the background for days their `device.event` crumbs can evict
     the app's. Tags survive that. Trust the tag over a missing crumb.
