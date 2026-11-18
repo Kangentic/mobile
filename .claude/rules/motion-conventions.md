@@ -69,7 +69,7 @@ Tab switches never slide: peers are not a hierarchy.
   `exiting=` preset (`ConnectionBanner`, `SessionSwapVeil`): Reanimated removes an exiting view
   only in the animation's finished callback on the UI runtime
   (`react-native-reanimated/src/layoutReanimation/animationsManager.native.ts`, the
-  `shouldRemoveView` / `EXITING` branch, unchanged in 4.7.1 even though 4.7.0 made the new
+  `shouldRemoveView` / `EXITING` branch, unchanged through 4.7.2 even though 4.7.0 made the new
   layout-animations engine the default), so a lost frame leaves the banner or veil on screen. If one of those is ever reported stuck
   after a resume, start here, and ask whether the spinners still turned: a dead frame loop
   freezes all of them at once.
@@ -82,12 +82,15 @@ Tab switches never slide: peers are not a hierarchy.
   `tests/components/SessionSwapVeil.test.tsx`. Never put a from-zero `entering` on a surface
   whose job is to cover or block; a decorative entrance can keep one. The signature in a
   failing flow's `device-logcat.txt` is `Skipping invisible child ... viewIdResName: <testID>`
-  repeated while the node is mounted.
+  repeated while the node is mounted. Reanimated 4.7.2 (task #151) carries an upstream fix for
+  an Android entering view left invisible when its only frame is dropped under reduced motion,
+  which fits this failure. The link is probable, not proven: nothing reran the flow on 4.7.2.
+  The ban does not depend on it, so 4.7.2 is not a reason to give the veil its `entering` back.
 - Never `setState` from a gesture or scroll handler. Use a shared value plus `useAnimatedStyle`.
 - Never read or write a shared value during render. It fires mid-reconciliation, and a re-render
   you did not cause replays the write. Touch shared values only in worklets, handlers and effects.
 - Prefer `.get()` and `.set()` over direct `.value` access. On Reanimated 4 (this project pins
-  4.7.1, the version SDK 58 maps) they are the documented
+  4.7.2, one patch past the 4.7.1 that SDK 58 maps) they are the documented
   compiler-safe form; direct `.value` is the shape the React
   Compiler cannot see through. The two places that predated this (`PressScale.tsx` and the Agents
   feed's section pulse, now `src/screens/home/SectionLandingPulse.tsx`) have both been converted.
