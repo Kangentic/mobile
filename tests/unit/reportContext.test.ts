@@ -143,6 +143,31 @@ describe('setReportedScreen', () => {
     ]);
   });
 
+  /**
+   * Pairing's convention is silence: when a ceremony was attempted is itself
+   * information (.claude/rules/crash-reporting-scope.md). The first delivered
+   * event of this task showed `/pair` then `/pair-confirm` on the trail, eight
+   * seconds apart, which is that information arriving by another route. The
+   * mutation this guards is recording a breadcrumb for every screen.
+   */
+  it('keeps the pairing screens off the trail, while the tag still says a crash there was there', async () => {
+    const reportContext = await loadFreshModule();
+    reportContext.setReportedScreen(['(tabs)']);
+
+    reportContext.setReportedScreen(['pair']);
+    expect(tagValue('screen')).toBe('/pair');
+    reportContext.setReportedScreen(['pair-confirm']);
+    expect(tagValue('screen')).toBe('/pair-confirm');
+    reportContext.setReportedScreen(['(tabs)']);
+
+    const recorded = breadcrumbsIn(NAVIGATION_BREADCRUMB_CATEGORY).map((breadcrumb) => breadcrumb.data);
+    expect(recorded).toEqual([
+      { screen: '/', lens: 'none' },
+      { screen: '/', lens: 'none' },
+    ]);
+    expect(JSON.stringify(sentryState.addBreadcrumb.mock.calls)).not.toContain('pair');
+  });
+
   it('records nothing when the screen is reported again unchanged', async () => {
     const reportContext = await loadFreshModule();
     reportContext.setReportedScreen(['settings']);

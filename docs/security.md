@@ -588,7 +588,10 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
     nothing else (as `data`, and repeated as a readable `message`, since Sentry's CLI prints only
     that column). This is a trail of screen NAMES, so a report says which screens were opened
     before a failure and in what order. Moving between two tasks records nothing, because the
-    only thing that changed is the ID.
+    only thing that changed is the ID. The two pairing screens leave no entry either: they set
+    the `screen` tag, so a crash while pairing says where it was, but when a pairing was
+    attempted is not put on a trail (pairing's convention here is silence, and a pair of
+    timestamped screen entries would be the same information by another route).
   - A breadcrumb, category `app.connection`, carrying one of six fixed states: `connecting`,
     `connected`, `established`, `reconnecting`, `closed`, `board-snapshot`. No relay address, no
     project, no count of anything the desktop sent. Each state is recorded once per connection
