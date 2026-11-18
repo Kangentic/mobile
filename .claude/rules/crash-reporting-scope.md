@@ -398,9 +398,9 @@ how often.
   `Lint (ESLint)` is a required status check on `main`,
   so this is mechanical rather than review-only. Each zone was verified to fire by probe file,
   not merely assumed, and `tests/unit/eslintConfig.test.ts` pins BOTH directions: every banned
-  entry refuses the door, and `src/screens`, `src/components`, `src/connection` and `src/state`
-  may import it, so a reordered zone cannot silently ban the door from every screen and read as
-  "nothing calls it". **Its one hole is closed by a scan for `src/` and `app/`:**
+  entry refuses the door, and `src/screens`, `src/components`, `src/connection`, `src/state` and
+  `src/navigation` may import it, so a reordered zone cannot silently ban the door from every
+  screen and read as "nothing calls it". **Its one hole is closed by a scan for `src/` and `app/`:**
   `no-restricted-imports` matches `import` syntax only, never `require()` or a dynamic
   `import()`, and `metro.config.js` legitimately does `require('@sentry/react-native/metro')`,
   so the pattern is live in this repo. `tests/unit/crashReportingConfinement.test.ts` scans
@@ -441,5 +441,7 @@ how often.
 
 ## Scope
 
-`src/observability/**` and the directories (plus `app/+native-intent.ts`) banned from reporting.
-Does not govern what the desktop or relay log about themselves.
+`src/observability/**`, the two files outside it that feed the door
+(`src/navigation/screenTracking.tsx` and `src/state/connectionBreadcrumbs.ts`), and the
+directories (plus `app/+native-intent.ts`) banned from reporting. Does not govern what the
+desktop or relay log about themselves.

@@ -45,8 +45,9 @@ export function ScreenTracker(): null {
 
   useEffect(() => {
     // Reported on every change of the segments array, including a change of
-    // route params that leaves the template alone. That is deliberate and
-    // free: the door does nothing when the screen's name is unchanged.
+    // route params that leaves the template alone. That is deliberate: the
+    // door returns before writing anything when the screen's name is unchanged
+    // (`setReportedScreen`).
     setReportedScreen(segments);
   }, [segments]);
 

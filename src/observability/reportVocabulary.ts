@@ -26,6 +26,16 @@
  */
 
 /**
+ * Membership in one of the closed sets below: a string that is an OWN key of
+ * the record. `hasOwnProperty` and never `in`, so a name every object inherits
+ * (`constructor`, `toString`) is not a member. Every guard in this file goes
+ * through here, so that choice is made once.
+ */
+function isOwnKey(record: object, candidate: unknown): boolean {
+  return typeof candidate === 'string' && Object.prototype.hasOwnProperty.call(record, candidate);
+}
+
+/**
  * The route templates under `app/`, one per screen file, with `(group)`
  * segments dropped the way expo-router drops them from a URL. A record rather
  * than a list so membership is one property lookup.
@@ -77,7 +87,7 @@ export type ScreenName = RouteScreenName | 'none' | 'unknown';
 export const ROUTE_SCREEN_NAME_LIST = Object.keys(ROUTE_SCREEN_NAMES) as readonly RouteScreenName[];
 
 function isRouteScreenName(candidate: string): candidate is RouteScreenName {
-  return Object.prototype.hasOwnProperty.call(ROUTE_SCREEN_NAMES, candidate);
+  return isOwnKey(ROUTE_SCREEN_NAMES, candidate);
 }
 
 function isRouteGroupSegment(segment: string): boolean {
@@ -124,7 +134,7 @@ const TRAIL_SILENT_SCREEN_NAMES = {
 } as const satisfies Partial<Record<RouteScreenName, true>>;
 
 export function isTrailSilentScreen(candidate: ScreenName): boolean {
-  return Object.prototype.hasOwnProperty.call(TRAIL_SILENT_SCREEN_NAMES, candidate);
+  return isOwnKey(TRAIL_SILENT_SCREEN_NAMES, candidate);
 }
 
 /**
@@ -145,7 +155,7 @@ const SCREEN_LENSES = {
 export type ScreenLens = keyof typeof SCREEN_LENSES;
 
 export function isScreenLens(candidate: unknown): candidate is ScreenLens {
-  return typeof candidate === 'string' && Object.prototype.hasOwnProperty.call(SCREEN_LENSES, candidate);
+  return isOwnKey(SCREEN_LENSES, candidate);
 }
 
 /** The screens that own a lens. A lens is only ever reported while one of these is showing. */
@@ -158,7 +168,7 @@ const LENS_SCREEN_NAMES = {
 export type LensScreenName = keyof typeof LENS_SCREEN_NAMES;
 
 export function isLensScreenName(candidate: unknown): candidate is LensScreenName {
-  return typeof candidate === 'string' && Object.prototype.hasOwnProperty.call(LENS_SCREEN_NAMES, candidate);
+  return isOwnKey(LENS_SCREEN_NAMES, candidate);
 }
 
 /**
@@ -194,5 +204,5 @@ export const CONNECTION_BREADCRUMB_STATE_LIST = Object.keys(
 ) as readonly ConnectionBreadcrumbState[];
 
 export function isConnectionBreadcrumbState(candidate: unknown): candidate is ConnectionBreadcrumbState {
-  return typeof candidate === 'string' && Object.prototype.hasOwnProperty.call(CONNECTION_BREADCRUMB_STATES, candidate);
+  return isOwnKey(CONNECTION_BREADCRUMB_STATES, candidate);
 }

@@ -124,26 +124,44 @@ function effectiveLens(): ScreenLens {
   return isLensScreenName(currentScreen) ? (lensByScreen.get(currentScreen)?.lens ?? 'none') : 'none';
 }
 
+/**
+ * Writes the pair to the scope's tags and remembers it as what the scope
+ * holds. The ONLY place either happens, so `reportedScreen` and `reportedLens`
+ * are always the last pair handed to the SDK, whichever path wrote it.
+ *
+ * The pair is remembered even when the SDK throws: a failed write is
+ * swallowed, never retried.
+ */
 function writeScreenTags(screen: ScreenName, lens: ScreenLens): void {
-  Sentry.setTag(SCREEN_TAG, screen);
-  Sentry.setTag(LENS_TAG, lens);
+  reportedScreen = screen;
+  reportedLens = lens;
+  try {
+    Sentry.setTag(SCREEN_TAG, screen);
+    Sentry.setTag(LENS_TAG, lens);
+  } catch {
+    // Recording where the app is must never be the thing that breaks it.
+  }
 }
 
 function recordScreenBreadcrumb(screen: ScreenName, lens: ScreenLens): void {
   // The pairing screens set the tag (written by the caller) and stay off the
   // trail: when a pairing was attempted is not something a report records.
   if (isTrailSilentScreen(screen)) return;
-  Sentry.addBreadcrumb({
-    category: NAVIGATION_BREADCRUMB_CATEGORY,
-    level: 'info',
-    // The same two closed-set values as `data`, joined, because the Sentry
-    // CLI's trail view prints only this column: without it every row of the
-    // app's own trail read as blank on the first delivered event.
-    message: lens === 'none' ? screen : `${screen} ${lens}`,
-    // The pair and nothing else. No route params, no previous screen (the
-    // crumb before this one is that), no free text.
-    data: { screen, lens },
-  });
+  try {
+    Sentry.addBreadcrumb({
+      category: NAVIGATION_BREADCRUMB_CATEGORY,
+      level: 'info',
+      // The same two closed-set values as `data`, joined, because the Sentry
+      // CLI's trail view prints only this column: without it every row of the
+      // app's own trail read as blank on the first delivered event.
+      message: lens === 'none' ? screen : `${screen} ${lens}`,
+      // The pair and nothing else. No route params, no previous screen (the
+      // crumb before this one is that), no free text.
+      data: { screen, lens },
+    });
+  } catch {
+    // See writeScreenTags.
+  }
 }
 
 /** Brings the scope up to date with the current screen and lens: tags, and one breadcrumb. */
@@ -151,14 +169,8 @@ function applyScreenContext(): void {
   const lens = effectiveLens();
   if (!crumbHeld && currentScreen === reportedScreen && lens === reportedLens) return;
   crumbHeld = false;
-  reportedScreen = currentScreen;
-  reportedLens = lens;
-  try {
-    writeScreenTags(currentScreen, lens);
-    recordScreenBreadcrumb(currentScreen, lens);
-  } catch {
-    // Recording where the app is must never be the thing that breaks it.
-  }
+  writeScreenTags(currentScreen, lens);
+  recordScreenBreadcrumb(currentScreen, lens);
 }
 
 /**
@@ -175,13 +187,7 @@ function applyScreenContext(): void {
  */
 export function initializeReportContext(): void {
   if (!isCrashReportingInitialized()) return;
-  reportedScreen = currentScreen;
-  reportedLens = effectiveLens();
-  try {
-    writeScreenTags(reportedScreen, reportedLens);
-  } catch {
-    // See applyScreenContext.
-  }
+  writeScreenTags(currentScreen, effectiveLens());
 }
 
 /**
@@ -202,11 +208,7 @@ export function setReportedScreen(segments: readonly string[]): void {
     // Leaving a lens-owning screen that never said which lens it was on. Its
     // arrival still belongs on the trail, so it is recorded now, as it stood.
     crumbHeld = false;
-    try {
-      recordScreenBreadcrumb(currentScreen, 'none');
-    } catch {
-      // See applyScreenContext.
-    }
+    recordScreenBreadcrumb(currentScreen, 'none');
   }
 
   currentScreen = nextScreen;
@@ -215,13 +217,7 @@ export function setReportedScreen(segments: readonly string[]): void {
     // a fresh mount. Say where the app is NOW, on the tags, and hold the
     // breadcrumb for the lens.
     crumbHeld = true;
-    reportedScreen = nextScreen;
-    reportedLens = 'none';
-    try {
-      writeScreenTags(nextScreen, 'none');
-    } catch {
-      // See applyScreenContext.
-    }
+    writeScreenTags(nextScreen, 'none');
     return;
   }
   applyScreenContext();
@@ -283,6 +279,6 @@ export function recordConnectionState(state: ConnectionBreadcrumbState): void {
       data: { state },
     });
   } catch {
-    // See applyScreenContext.
+    // See writeScreenTags.
   }
 }

@@ -277,6 +277,19 @@ describe('registerConnectionBreadcrumbs', () => {
     expect(doorState.recorded).toEqual([]);
   });
 
+  it('stops recording board snapshots once unregistered after the connection is up', () => {
+    // The mutation this guards: dropping the board unsubscribe from the
+    // returned function. Unregistering before the connection opens (below)
+    // cannot see it, because the board listener could never record anyway.
+    openAndEstablish();
+    doorState.recorded.length = 0;
+
+    unregister();
+    useBoardStore.getState().applyBoardSnapshot(boardSnapshotFixture());
+
+    expect(doorState.recorded).toEqual([]);
+  });
+
   it('stops recording once unregistered', () => {
     unregister();
     openAndEstablish();
