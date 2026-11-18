@@ -26,10 +26,12 @@ export interface MarkdownBlockProps {
  * the markdown library is a one-file change: keep the `MarkdownBlockProps`
  * contract and rewrite the body.
  *
- * Library notes (react-native-enriched-markdown 1.1.x):
+ * Library notes (react-native-enriched-markdown 1.2.x):
  * - Renders via `EnrichedMarkdownText`, a native Fabric component (New
  *   Architecture required). It needs a native rebuild (`npx expo prebuild` /
- *   a new dev client) and does not run in Expo Go.
+ *   a new dev client) and does not run in Expo Go. Since 1.2.0 the package
+ *   ships no generated code: the app's own build runs codegen for it, and it
+ *   registers a C++ parser TurboModule through autolinking.
  * - Autolinking is sufficient. 1.0.2 removed the bundled Expo config plugin;
  *   native features are configured by the `"enriched-markdown"` block in
  *   package.json, which both the Gradle build and the podspec read.
@@ -41,10 +43,11 @@ export interface MarkdownBlockProps {
  *   literal source text. With all three off the APK skips Media3 ExoPlayer,
  *   and the postinstall exits without downloading the tree-sitter grammars or
  *   the RaTeX framework.
- * - 1.1.0 removes its accessibility layout listener on detach (upstream #731).
+ * - 1.1.0 removes its accessibility layout listener on detach (upstream #731),
+ *   and 1.2.0 still does (`AccessibleMarkdownTextView.onDetachedFromWindow`).
  *   That listener retained a whole session screen per open on 0.7.x, which is
  *   what the deleted patch-package patch used to fix (REACT-NATIVE-5 in
- *   docs/developer-guide.md).
+ *   docs/developer-guide.md). Re-measure with the retention probe on any bump.
  * - Styling flows through the `markdownStyle` prop, mapped below from the
  *   theme's semantic tokens and typography scale.
  * - The library never opens a URL itself: a tapped link only reaches

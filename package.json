@@ -96,7 +96,7 @@
     "lucide-react-native": "^1.75.0",
     "react": "19.3.0",
     "react-native": "0.88.1",
-    "react-native-enriched-markdown": "^1.1.1",
+    "react-native-enriched-markdown": "^1.2.0",
     "react-native-gesture-handler": "~3.5.0",
     "react-native-get-random-values": "~2.1.0",
     "react-native-pager-view": "10.0.3",
