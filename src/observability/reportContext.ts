@@ -75,30 +75,50 @@ const LENS_TAG = 'lens';
 let currentScreen: ScreenName = 'none';
 
 /**
- * The lens each lens-owning screen last reported, kept per screen and never
- * cleared.
+ * The lens each lens-owning screen is on, with the screen INSTANCE that
+ * reported it.
  *
- * Keyed by screen because a single "current lens" slot cannot be kept right.
- * The obvious design clears it when the screen blurs, and that breaks twice:
- * opening one task over another (a notification tap) runs the new screen's
- * focus effect BEFORE the old screen's blur, so the blur wipes the lens the
- * new screen just set and the tag reads `none` until the user toggles; and
- * every exit records a false "same screen, no lens" crumb before the real
- * one. With the lens stored against its owner there is nothing to clear: the
- * effective lens is whatever the CURRENT screen's entry says, and a screen
- * that owns no lens has no entry.
+ * TWO REPORTERS, AND NO PROMISE ABOUT THEIR ORDER. The screen's name comes from
+ * the root layout's tracker; the lens comes from the screen itself, on focus.
+ * An earlier version of this module assumed the screen's focus effect ran
+ * first (read out of React's effect ordering: a later sibling's effect runs
+ * last). A delivered event disproved it: on the first device run (Android,
+ * 2026-11-18) opening a task recorded `lens: none` and then `chat` 8 ms later,
+ * the tracker first. A route's screen mounts after the navigation state that
+ * names it has already changed. So nothing below depends on which arrives
+ * first, and three rules make that true:
+ *
+ * 1. An entry belongs to the instance that set it, and only that instance can
+ *    clear it. The same route can be on the stack twice (one task opened over
+ *    another from a notification), and the old instance's blur may run after
+ *    the new instance has reported. Without the owner check that blur would
+ *    wipe the new screen's lens.
+ * 2. A lens is cleared when its instance blurs, so a lens can never be left
+ *    over from an earlier visit and shown against a different task.
+ * 3. Arriving on a lens-owning screen whose lens is not known yet moves the
+ *    TAGS at once and HOLDS the breadcrumb until the lens arrives (see
+ *    `crumbHeld`), so the trail gets one entry per arrival carrying the real
+ *    pair, whichever reporter spoke first.
  */
-const lensByScreen = new Map<LensScreenName, ScreenLens>();
+const lensByScreen = new Map<LensScreenName, { lens: ScreenLens; owner: string }>();
 
 /** What the scope holds now, so an unchanged pair costs nothing and records nothing. */
 let reportedScreen: ScreenName | null = null;
 let reportedLens: ScreenLens | null = null;
 
+/**
+ * True between arriving on a lens-owning screen and learning its lens. The
+ * tags already say where the app is; only the breadcrumb is waiting. It is
+ * released by the lens arriving, or by the app moving on first, never by a
+ * timer: a breadcrumb waiting on a clock is one a crash can beat.
+ */
+let crumbHeld = false;
+
 function effectiveLens(): ScreenLens {
   // `none`, never an absent tag: the native bridge stringifies whatever it is
   // handed, so clearing a tag with `undefined` would arrive as the text
   // "undefined" on a native event.
-  return isLensScreenName(currentScreen) ? (lensByScreen.get(currentScreen) ?? 'none') : 'none';
+  return isLensScreenName(currentScreen) ? (lensByScreen.get(currentScreen)?.lens ?? 'none') : 'none';
 }
 
 function writeScreenTags(screen: ScreenName, lens: ScreenLens): void {
@@ -106,20 +126,30 @@ function writeScreenTags(screen: ScreenName, lens: ScreenLens): void {
   Sentry.setTag(LENS_TAG, lens);
 }
 
+function recordScreenBreadcrumb(screen: ScreenName, lens: ScreenLens): void {
+  Sentry.addBreadcrumb({
+    category: NAVIGATION_BREADCRUMB_CATEGORY,
+    level: 'info',
+    // The same two closed-set values as `data`, joined, because the Sentry
+    // CLI's trail view prints only this column: without it every row of the
+    // app's own trail read as blank on the first delivered event.
+    message: lens === 'none' ? screen : `${screen} ${lens}`,
+    // The pair and nothing else. No route params, no previous screen (the
+    // crumb before this one is that), no free text.
+    data: { screen, lens },
+  });
+}
+
+/** Brings the scope up to date with the current screen and lens: tags, and one breadcrumb. */
 function applyScreenContext(): void {
   const lens = effectiveLens();
-  if (currentScreen === reportedScreen && lens === reportedLens) return;
+  if (!crumbHeld && currentScreen === reportedScreen && lens === reportedLens) return;
+  crumbHeld = false;
   reportedScreen = currentScreen;
   reportedLens = lens;
   try {
     writeScreenTags(currentScreen, lens);
-    Sentry.addBreadcrumb({
-      category: NAVIGATION_BREADCRUMB_CATEGORY,
-      level: 'info',
-      // The pair and nothing else. No route params, no previous screen (the
-      // crumb before this one is that), no free text.
-      data: { screen: currentScreen, lens },
-    });
+    recordScreenBreadcrumb(currentScreen, lens);
   } catch {
     // Recording where the app is must never be the thing that breaks it.
   }
@@ -157,20 +187,69 @@ export function initializeReportContext(): void {
  */
 export function setReportedScreen(segments: readonly string[]): void {
   if (!isCrashReportingInitialized()) return;
-  currentScreen = screenNameFromSegments(segments);
+  const nextScreen = screenNameFromSegments(segments);
+  // The same screen again: a change of route params (another task on the same
+  // route) or a re-render. Nothing a report may carry has changed.
+  if (nextScreen === currentScreen) return;
+
+  if (crumbHeld) {
+    // Leaving a lens-owning screen that never said which lens it was on. Its
+    // arrival still belongs on the trail, so it is recorded now, as it stood.
+    crumbHeld = false;
+    try {
+      recordScreenBreadcrumb(currentScreen, 'none');
+    } catch {
+      // See applyScreenContext.
+    }
+  }
+
+  currentScreen = nextScreen;
+  if (isLensScreenName(nextScreen) && !lensByScreen.has(nextScreen)) {
+    // Arrived before the screen reported its lens, which is the usual order on
+    // a fresh mount. Say where the app is NOW, on the tags, and hold the
+    // breadcrumb for the lens.
+    crumbHeld = true;
+    reportedScreen = nextScreen;
+    reportedLens = 'none';
+    try {
+      writeScreenTags(nextScreen, 'none');
+    } catch {
+      // See applyScreenContext.
+    }
+    return;
+  }
   applyScreenContext();
 }
 
 /**
- * Reports the lens a lens-owning screen is on. The screen names itself, so the
- * lens is stored against its owner (see `lensByScreen`) and takes effect only
- * while that screen is the one showing.
+ * Reports the lens a lens-owning screen is on.
+ *
+ * `owner` identifies the reporting screen INSTANCE (a `useId()` value), so
+ * that `clearReportedLens` from one instance cannot remove a lens another
+ * instance of the same route has since reported. The lens takes effect only
+ * while its screen is the one showing.
  */
-export function setReportedLens(screen: LensScreenName, lens: Exclude<ScreenLens, 'none'>): void {
+export function setReportedLens(screen: LensScreenName, lens: Exclude<ScreenLens, 'none'>, owner: string): void {
   if (!isCrashReportingInitialized()) return;
   if (!isLensScreenName(screen) || !isScreenLens(lens)) return;
-  lensByScreen.set(screen, lens);
+  lensByScreen.set(screen, { lens, owner });
+  if (screen !== currentScreen) return;
   applyScreenContext();
+}
+
+/**
+ * Forgets a lens when the instance that reported it blurs or unmounts, so it
+ * cannot outlive the visit and be shown against a different task later.
+ *
+ * It only forgets. It writes no tag and records no breadcrumb, because a blur
+ * is not a place: the screen that takes over reports itself, and until it does
+ * the scope still describes the last place the app actually was. Recording
+ * here would put a false "same screen, no lens" entry on the trail on every
+ * exit.
+ */
+export function clearReportedLens(screen: LensScreenName, owner: string): void {
+  if (!isCrashReportingInitialized()) return;
+  if (lensByScreen.get(screen)?.owner === owner) lensByScreen.delete(screen);
 }
 
 /**
@@ -193,6 +272,8 @@ export function recordConnectionState(state: ConnectionBreadcrumbState): void {
     Sentry.addBreadcrumb({
       category: CONNECTION_BREADCRUMB_CATEGORY,
       level: 'info',
+      // The state again, for the CLI's trail view (see recordScreenBreadcrumb).
+      message: state,
       data: { state },
     });
   } catch {

@@ -98,18 +98,24 @@ scrubber is therefore a second line of defence, never the control itself.
      path, whose parameter is one of the desktop's task IDs**. `lens` is which surface of a
      screen was showing, or `none`.
   3. A breadcrumb, category `app.navigation`, on each change of that pair, carrying
-     `{ screen, lens }` and nothing else.
+     `{ screen, lens }` and nothing else. Its `message` is those same two values joined
+     (`/task/[taskId] chat`), there only because the Sentry CLI's trail view prints the message
+     column and nothing from `data`.
   4. A breadcrumb, category `app.connection`, carrying `{ state }` where `state` is one of
-     `connecting`, `connected`, `established`, `reconnecting`, `closed`, `board-snapshot`. No
-     relay address, no project, no count of anything the desktop sent, no rekey, and nothing
-     about pairing.
+     `connecting`, `connected`, `established`, `reconnecting`, `closed`, `board-snapshot`, with
+     the state repeated as its `message` for the same reason. No relay address, no project, no
+     count of anything the desktop sent, no rekey, and nothing about pairing.
 
   Items 2 to 4 (task #152, 2026-11-18) are written only by `src/observability/reportContext.ts`,
   and every value is checked there, at runtime, against the closed sets in
   `src/observability/reportVocabulary.ts`: a caller cannot widen what leaves by casting, and a
   resolved path handed to the door comes out as `unknown`. The React half
   (`src/navigation/screenTracking.tsx`) reads expo-router's `useSegments()`, never
-  `usePathname()`. Which connection transitions are worth a slot is decided in
+  `usePathname()`. The screen and its lens are reported by two different components in no
+  guaranteed order, and the door is built so either order leaves one trail entry carrying the
+  real pair; never reintroduce an assumption about which effect runs first (the one this was
+  first built on was read from source and disproved by the first delivered event).
+  Which connection transitions are worth a slot is decided in
   `src/state/connectionBreadcrumbs.ts` (each state once per connection cycle, so a retry loop or
   a busy board cannot spend the trail), which watches the stores so that neither
   `src/connection/` nor the banned `src/channel/` records anything.
@@ -396,11 +402,12 @@ how often.
   mutation: `tests/unit/reportVocabulary.test.ts` (a resolved path is `unknown`, and the route
   record matches the files under `app/` in both directions, so a new screen cannot ship
   reporting as `unknown`), `tests/unit/reportContext.test.ts` (the door refuses any value
-  outside the closed sets, and keeps a lens to the screen that set it),
+  outside the closed sets, keeps a lens to the screen instance that set it, and records one
+  trail entry per arrival whichever of the screen and the lens is reported first),
   `tests/unit/connectionBreadcrumbs.test.ts` (each state once per connection cycle, and a
   deliberate close is recorded), `tests/components/ScreenTracker.test.tsx` (the tracker under
   expo-router's REAL `useSegments`, red when it is swapped for the resolved pathname),
-  `tests/unit/rootLayoutWiring.test.ts` (the tracker is mounted, after the Stack) and
+  `tests/unit/rootLayoutWiring.test.ts` (the tracker is mounted, once, outside the Stack) and
   `tests/unit/bundleEntry.test.ts` (the scope's starting tags are set straight after init).
   `tests/unit/crashReporting.test.ts` locks the door's contract (a synthetic error, frames only,
   the four tags, the fingerprint, the exclusions, the cooldown and cap) and the four

@@ -585,7 +585,8 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
     screen's surfaces was showing (`terminal`, `chat`, `changes`; `conversation`, `summary`,
     `description` on a completed task), or `none`.
   - A breadcrumb, category `app.navigation`, on each change of that pair, carrying the pair and
-    nothing else. This is a trail of screen NAMES, so a report says which screens were opened
+    nothing else (as `data`, and repeated as a readable `message`, since Sentry's CLI prints only
+    that column). This is a trail of screen NAMES, so a report says which screens were opened
     before a failure and in what order. Moving between two tasks records nothing, because the
     only thing that changed is the ID.
   - A breadcrumb, category `app.connection`, carrying one of six fixed states: `connecting`,
