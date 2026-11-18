@@ -71,9 +71,10 @@ the "Dependencies held past the Expo SDK mapping" table in the
 `package.json`. That test checks names only, so `apply.md` makes the agent update the row's version
 and reason itself.
 
-Two couplings the mapping does not express are kept anyway. `react-native-reanimated` is mapped and
-`react-native-worklets` is held, so they land in different groups, and reanimated's peer range on
-worklets (`0.13.x`) is what reports a worklets move that would break it. `@react-native/jest-preset`
+Two couplings the mapping does not express are kept anyway. `react-native-reanimated` and
+`react-native-worklets` are both held (reanimated since task #151, one patch past the mapping), and
+each is its own group, so reanimated's peer range on worklets (`0.13.x`) is what reports a worklets
+move that would break it. `@react-native/jest-preset`
 is not mapped and peers only on `react`, so nothing would notice it drifting off `react-native`: it
 moves in whichever group moves `react-native`, to the same version.
 
