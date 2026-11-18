@@ -183,8 +183,8 @@ function hasNewBoardSnapshot(
  * registered once for the life of the process.
  *
  * Harmless without a DSN. The door it reports to no-ops when crash reporting
- * never started, so a build from source runs two cheap subscriptions that
- * record nothing.
+ * never started, so a build from source runs two subscriptions that record
+ * nothing.
  */
 export function registerConnectionBreadcrumbs(): () => void {
   let trail = initialConnectionTrailState(useChannelStore.getState());

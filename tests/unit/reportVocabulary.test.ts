@@ -150,6 +150,16 @@ describe('the lens and connection sets', () => {
     expect(isLensScreenName('/task/[taskId]/changes')).toBe(false);
   });
 
+  it('is not fooled by a property every object inherits, in the lens-screen, silent-screen and connection sets', () => {
+    // The mutation this guards: `candidate in record` instead of an own-key
+    // check in isOwnKey, which makes `constructor` and `toString` members.
+    for (const inheritedName of ['constructor', 'toString']) {
+      expect(isLensScreenName(inheritedName)).toBe(false);
+      expect(isConnectionBreadcrumbState(inheritedName)).toBe(false);
+      expect(isTrailSilentScreen(inheritedName as never)).toBe(false);
+    }
+  });
+
   it('holds the connection states to the six the trail records', () => {
     expect([...CONNECTION_BREADCRUMB_STATE_LIST].sort()).toEqual(
       ['board-snapshot', 'closed', 'connected', 'connecting', 'established', 'reconnecting'].sort(),

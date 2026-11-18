@@ -233,14 +233,6 @@ describe('CompletedTaskScreen', () => {
   });
 
   /**
-   * applyWindow drops any window for a session that is not retained - a
-   * memory guard so background sessions cannot pile up transcripts - and
-   * retention is normally declared by openSessionScreen, which this screen
-   * must never call. Fetching before retaining means the desktop's window
-   * lands and is immediately discarded, which looks exactly like a desktop
-   * that returned nothing.
-   */
-  /**
    * A crash report names the lens that was showing (task #152). This screen
    * holds its lens in local state, so it is the only thing that can report it.
    * Mutation that reddens this: removing the `useReportedLens` call, or
@@ -265,6 +257,14 @@ describe('CompletedTaskScreen', () => {
     expect(mockUseReportedLens).toHaveBeenLastCalledWith('/completed-task', 'conversation');
   });
 
+  /**
+   * applyWindow drops any window for a session that is not retained - a
+   * memory guard so background sessions cannot pile up transcripts - and
+   * retention is normally declared by openSessionScreen, which this screen
+   * must never call. Fetching before retaining means the desktop's window
+   * lands and is immediately discarded, which looks exactly like a desktop
+   * that returned nothing.
+   */
   it('retains the session before fetching its transcript tail', async () => {
     seedArchived('project-1', taskFixture(), summaryFixture({ sessionId: 'sess-summary-1' }));
     const retainSessionSpy = jest.spyOn(useTranscriptStore.getState(), 'retainSession');

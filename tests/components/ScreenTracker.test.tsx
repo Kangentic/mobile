@@ -285,6 +285,29 @@ describe('useReportedLens', () => {
     expect(mockAddBreadcrumb).not.toHaveBeenCalled();
   });
 
+  it("keeps a newer instance's lens when an older instance of the same route goes away", async () => {
+    // Two reporters on one route, as when a task is opened over another. The
+    // mutation this guards: a shared owner string in useReportedLens instead
+    // of useId(), which lets the first reporter's cleanup delete the second's
+    // lens. A clear writes nothing, so the door is made to look at the lens
+    // again by leaving the screen and coming back.
+    const withReporters = (includeFirst: boolean): React.ReactElement => (
+      <RouteInfoContext.Provider value={getRouteInfoFromState(taskRouteState())}>
+        <ScreenTracker />
+        {includeFirst ? <LensReporter key="first" screenName="/task/[taskId]" lens="chat" /> : null}
+        <LensReporter key="second" screenName="/task/[taskId]" lens="terminal" />
+      </RouteInfoContext.Provider>
+    );
+    const view = await render(withReporters(true));
+    expect(tagValue('lens')).toBe('terminal');
+
+    await view.rerender(withReporters(false));
+    setReportedScreen(['devices']);
+    setReportedScreen(['task', '[taskId]']);
+
+    expect(tagValue('lens')).toBe('terminal');
+  });
+
   it('forgets the lens with the visit, so the next screen on that route waits for its own', async () => {
     // Visit one, on `changes`, goes away. Visit two arrives screen-first: its
     // lens tag must read `none` until IT reports, never the last visit's.

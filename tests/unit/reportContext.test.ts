@@ -206,6 +206,81 @@ describe('setReportedScreen', () => {
 
     expect(() => reportContext.setReportedScreen(['settings'])).not.toThrow();
   });
+
+  /**
+   * The SDK calls are wrapped where they are made, in two places, so each
+   * path is pinned on its own. `mockClear` in the file's beforeEach does not
+   * remove an implementation, so each case resets the mock it made throw.
+   */
+  describe('when the SDK throws', () => {
+    function throwNativeModuleGone(): never {
+      throw new Error('native module gone');
+    }
+
+    it('never throws from initializeReportContext when the tag write throws', async () => {
+      // The mutation this guards: removing the try/catch in writeScreenTags.
+      sentryState.setTag.mockImplementation(throwNativeModuleGone);
+      try {
+        const reportContext = await loadFreshModule();
+        expect(() => reportContext.initializeReportContext()).not.toThrow();
+      } finally {
+        sentryState.setTag.mockReset();
+      }
+    });
+
+    it('never throws on arrival at a lens screen (the held path) when the tag write throws', async () => {
+      // The mutation this guards: removing the try/catch in writeScreenTags.
+      sentryState.setTag.mockImplementation(throwNativeModuleGone);
+      try {
+        const reportContext = await loadFreshModule();
+        expect(() => reportContext.setReportedScreen(TASK_SEGMENTS)).not.toThrow();
+      } finally {
+        sentryState.setTag.mockReset();
+      }
+    });
+
+    it('never throws when a held arrival is flushed by leaving the screen and the breadcrumb write throws', async () => {
+      // The mutation this guards: removing the try/catch in recordScreenBreadcrumb.
+      const reportContext = await loadFreshModule();
+      reportContext.setReportedScreen(TASK_SEGMENTS);
+      sentryState.addBreadcrumb.mockImplementation(throwNativeModuleGone);
+      try {
+        expect(() => reportContext.setReportedScreen(['settings'])).not.toThrow();
+        // Non-vacuity: the flush did reach the SDK.
+        expect(sentryState.addBreadcrumb).toHaveBeenCalled();
+      } finally {
+        sentryState.addBreadcrumb.mockReset();
+      }
+    });
+
+    it('never throws on a plain screen change when the breadcrumb write throws', async () => {
+      // The mutation this guards: removing the try/catch in recordScreenBreadcrumb.
+      const reportContext = await loadFreshModule();
+      sentryState.addBreadcrumb.mockImplementation(throwNativeModuleGone);
+      try {
+        expect(() => reportContext.setReportedScreen(['settings'])).not.toThrow();
+        expect(sentryState.addBreadcrumb).toHaveBeenCalled();
+      } finally {
+        sentryState.addBreadcrumb.mockReset();
+      }
+    });
+
+    it('still records the trail entry when the tag write for that screen throws', async () => {
+      // The mutation this guards: a throwing tag write skipping the breadcrumb
+      // after it (one try/catch around both calls, or an early return).
+      sentryState.setTag.mockImplementation(throwNativeModuleGone);
+      try {
+        const reportContext = await loadFreshModule();
+        reportContext.setReportedScreen(['settings']);
+
+        expect(breadcrumbsIn(NAVIGATION_BREADCRUMB_CATEGORY).map((breadcrumb) => breadcrumb.data)).toEqual([
+          { screen: '/settings', lens: 'none' },
+        ]);
+      } finally {
+        sentryState.setTag.mockReset();
+      }
+    });
+  });
 });
 
 /**
@@ -268,6 +343,26 @@ describe('setReportedLens and clearReportedLens', () => {
       { screen: '/task/[taskId]', lens: 'none' },
       { screen: '/settings', lens: 'none' },
     ]);
+  });
+
+  it('records nothing when a held lens screen is reported again before its lens, then ONE entry when the lens lands', async () => {
+    // A route-param change on the same route while the breadcrumb is held. The
+    // mutation this guards: deleting the same-screen early return in
+    // setReportedScreen, which flushes the held arrival as `lens: none`.
+    const reportContext = await loadFreshModule();
+    reportContext.setReportedScreen(['(tabs)']);
+    reportContext.setReportedScreen(TASK_SEGMENTS);
+    sentryState.addBreadcrumb.mockClear();
+    sentryState.setTag.mockClear();
+
+    reportContext.setReportedScreen(TASK_SEGMENTS);
+
+    expect(sentryState.addBreadcrumb).not.toHaveBeenCalled();
+    expect(sentryState.setTag).not.toHaveBeenCalled();
+
+    reportContext.setReportedLens('/task/[taskId]', 'chat', 'instance-a');
+
+    expect(navigationData()).toEqual([{ screen: '/task/[taskId]', lens: 'chat' }]);
   });
 
   it('reads none on a screen that owns no lens', async () => {
