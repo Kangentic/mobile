@@ -261,12 +261,18 @@ different strengths of evidence, kept apart on purpose (see
   when the hang ends or on the next launch. A watchdog-termination event is built on the next
   launch from tags (`readPreviousTagsFromDisk`) and from a breadcrumb file bounded by, and
   trimmed to, `options.maxBreadcrumbs`. So the persisted trail follows the same cap.
-- **Observed on a delivered event:** see the crash reporting section of
-  `docs/developer-guide.md`, which records what each platform's native crash carried and the
-  date. Two things that section says plainly because no crash-test row can produce them: an app
-  hang and a watchdog termination have not been observed carrying the tags, and the `lens` tag
-  has only been observed as `none`, because both crash rows live in Settings. A recurrence of
-  MOBILE-H on a build with this change is the first direct proof of the hang path.
+- **Observed on a delivered event** (2026-11-18; the crash reporting section of
+  `docs/developer-guide.md` has the runs, the event times and the trails): a native crash on
+  Android (the Java uncaught path) and on the iOS simulator each carried `screen`, `lens` and
+  the app's `app.navigation` and `app.connection` trail; a JS-captured handled event carried
+  them beside its `site` tags with the message still redacted; and **two iOS App Hang events
+  carried the tags and the trail**, which is the event kind MOBILE-H was. Those hangs were the
+  simulator's own, not something a crash-test row can produce, so do not expect a run to
+  reproduce them on demand.
+- **Still not observed:** a watchdog termination (no row causes one, and a simulator never
+  reports one, so that event rests on the source read above); real iOS hardware; a real NDK
+  signal crash on Android; and a `lens` TAG with a real value, because both crash rows live in
+  Settings, so `lens` has arrived as `none` on every tag and with real values only in the trail.
 
 **The trail is a ring the native SDKs share, so the TAG is the durable answer.** Raising the cap
 to 100 does not stop sentry-cocoa's `device.event` crumbs filling it on a phone left alone for
