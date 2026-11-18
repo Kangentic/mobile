@@ -3905,7 +3905,11 @@ An earlier draft of this paragraph said rendering was unchanged; it read 0.7.4 a
 checking the installed package.
 
 **Re-run the probe after any bump of `react-native-enriched-markdown`.** The 1.1.1 re-measure
-against this section's protocol is recorded below under "Dependency refresh, 2026-10 (task #102)".
+against this section's protocol is recorded below under "Dependency refresh, 2026-10 (task #102)",
+and the 1.2.0 one under "Dependency upgrade, 2026-11 (task #151)", which also covers the completed
+task's Description for the first time and says why the cycles are driven with plain `adb` taps.
+**Look at a release build as well as counting views**: 1.2.0 passed every count and every test
+while drawing headings at body weight.
 
 ### Two dead ends worth not repeating
 
@@ -4574,6 +4578,113 @@ so until then they are unproven on SDK 58. Everything above is emulator, simulat
   pinned by a unit test only.
 - Both: terminal pinch, and dictation. Board swipes on iOS. `pager-view` 10 and `gesture-handler` 3.5
   were days old when taken, so a problem in either means falling back to the mapped version.
+
+### Dependency upgrade, 2026-11 (task #151)
+
+Task #151 took `react-native-enriched-markdown` 1.2.0, `react-native-reanimated` 4.7.2,
+`react-native-pager-view` 10.0.3 and `@sentry/react-native` 8.36.0, with seven smaller moves and a
+lockfile refresh. This records what was MEASURED and what was only read. Every build is an x86_64
+release build with the retention probe compiled in, on the `kangentic_profile` AVD (API 36,
+`default` image, demo-paired), cold-booted before each retention arm.
+
+**The two arms differ in one native package.** `control` is the branch at `599f354`: every phase
+but the markdown one, so 1.1.1 with reanimated 4.7.2, pager-view 10.0.3 and Sentry 8.36.0 already
+in. `1.2.0` is `ba0d4de`, the finished branch. Between them sit the markdown upgrade, the lockfile
+refresh, which moved no native module (read from its lockfile diff), and the heading fix below,
+which is JS. A dependency cannot be toggled in one process, so this is a cross-build A/B by
+necessity, as the SDK 58 one above was.
+
+**Both arms carried the same capture-only demo content**, applied to `mockDesktop.ts` for the
+build and never committed. The demo's chat message and its one completed Description each gained
+nested ordered and bullet lists, inline code in a list item and in a heading, an ordered list that
+starts at nine, and a fenced code block. The shipped demo has none of those shapes, and they are
+the paths 1.2.0 changed. So these counts are not comparable with the SDK 58 table above, which ran
+on the shipped demo.
+
+**Retention (measured): the leak stays fixed on 1.2.0.** This section's protocol: a GC'd baseline,
+the open and close cycles, a GC by backgrounding for nine seconds, then two `dumpsys meminfo`
+samples eight seconds apart with the second trusted. One run per row. The two samples agreed in
+every reading.
+
+| Screen | Arm | Views before / after | WebViews before / after | Opened |
+|---|---|---|---|---|
+| Session, Chat lens | control | 444 / 444 | 0 / 0 | 6 of 6 (815 views, 1 WebView while open) |
+| Session, Chat lens | 1.2.0 | 444 / 444 | 0 / 0 | 6 of 6 (815 views, 1 WebView while open) |
+| Completed task, Description | control | 801 / 801 | 0 / 0 | 7 of 7 (848 views while open) |
+| Completed task, Description | 1.2.0 | 801 / 801 | 0 / 0 | 7 of 7 (850 views while open) |
+| Session, `single-markdown` | control | 801 / 801 | 0 / 0 | 6 of 6 (907 views, 1 WebView) |
+| Session, `single-markdown` | 1.2.0 | 801 / 801 | 0 / 0 | 6 of 6 (907 views, 1 WebView) |
+| Session, `markdown-not-selectable` | control | 801 / 801 | 0 / 0 | 6 of 6 (1172 views, 1 WebView) |
+| Session, `markdown-not-selectable` | 1.2.0 | 801 / 801 | 0 / 0 | 6 of 6 (1172 views, 1 WebView) |
+
+The baseline moves from 444 to 801 once the Board tab has been opened, because the Board mounts
+every column's page, so the later rows start there. The Description row is the first retention
+reading of the `flavor="github"` container, which the probe's variants do not reach. It ran seven
+opens in both arms: on `control` the seventh was a screenshot, to see that the cycles had opened
+the Description and not the Conversation segment. Total PSS at rest read 133 MB on `control` and
+135 MB on `1.2.0`, and 261 and 264 MB after the six session opens. That is one run each, inside
+the spread this rig has shown before, so it is not a result.
+
+**The cycles were driven with `adb shell input tap`, not Maestro, on purpose.** Maestro attaches an
+accessibility client, and this leak lived on an accessibility path, so a Maestro-driven arm would
+not be the app a person runs. `uiautomator dump` cannot help either: it gives up with "could not get
+idle state" on a feed whose spinners never stop. Tap targets were read off a screenshot. One
+`adb shell "..."` call per run holds the taps, the waits and the `dumpsys meminfo` reads, so the
+timing is the same in both arms.
+
+**Launch (measured).** Four release builds cold-launched into the demo feed with
+`adb logcat -d -b crash` empty: `main` at `6fa731f`, `control`, the tree after the lockfile refresh
+(`a42e4fb`) and `1.2.0`. On `a42e4fb` the buffer was read again after markdown rendered in a
+session's Chat, and on `1.2.0` at the end of the retention runs, after the Chat and the
+Description had each rendered many times. Reaching the demo feed also means the handshake ran on
+the `@noble` 2.4.0 libraries the refresh brought.
+
+**What only the 1.2.0 build could show, on Android.** The app's own build ran codegen for the
+package (`:react-native-enriched-markdown:generateCodegenArtifactsFromSchema`), Expo autolinked the
+new C++ parser TurboModule (the generated `autolinking.cpp` registers `EnrichedMarkdownParser`),
+and R8 kept the classes native code looks up by name, since markdown parsed and drew in a release
+build. iOS was not built here.
+
+**Read from source, not measured.** In the installed 1.2.0,
+`AccessibleMarkdownTextView.onDetachedFromWindow()` still calls `accessibilityHelper.cleanup()`,
+which removes the pending layout listener, and that helper holds the only `ViewTreeObserver`
+registration under the package's Android sources.
+
+**A regression the release build showed: 600-weight headings drew at body weight.** No test could
+have caught it, because the component tier mocks the native view. On the first 1.2.0 build,
+"Done when" in a completed Description matched the paragraph above it, and so did the chat's
+`##` heading. Read from the installed sources: 1.2.0 sets its heading span at top priority so it
+applies first (`HeadingRenderer.kt`), which lets the text run's own span decide the typeface
+(`TextSpan.kt`). That span asks React Native for a typeface by family name and weight, and with a
+family name `ReactFontManager.getTypeface` uses `nearestStyle`, which is regular for any weight
+under 700. The library's default heading family is `sans-serif`, so 600 became 400. On 1.1.1 the
+heading span applied last and built its typeface in two steps, which kept the real weight.
+`MarkdownBlock` now passes an empty font family on an Android heading, which skips the by-name
+lookup. Seen on the next build: the headings are bold again and no line moved. By the same rule a
+700 heading was never affected, which is read and was not on screen. iOS was not checked.
+
+**1.2.0's visible changes that stay (seen on the same builds).** Inline code inside a list item or
+a heading now draws in the monospace face the app always asked for, where 1.1.1 drew it in the
+body face inside its box. A bullet nested under a numbered item sits at the normal distance from
+its marker, where 1.1.1 left a wide gap. A fenced block's header gains a line wrap toggle by
+default, in the GitHub flavor only, and `MarkdownBlock` turns it off so an upgrade adds no control.
+
+**Board on pager-view 10.0.3 (seen on `control`, one screen recording per version at 30 frames a
+second).** A chip tap from To Do to Done on 10.0.0 jumps straight to the page beside the target and
+slides one page, in about a quarter of a second. On 10.0.3 it passes through all five pages in
+between, in about a third of a second, and lands with the chip and the page agreeing. Page swipes
+kept the chips in step, a vertical drag scrolled the list and left the pager alone, and pull to
+refresh and an adjacent chip tap behaved. A recording is not a frame-timing measurement, so nothing
+here says how smooth the longer scroll is on a phone.
+
+**Swap veil on reanimated 4.7.2 (seen on `control`).** The mock's `/respawn` leaves a task without
+a session for six seconds. The veil covered the terminal for that gap and cleared when the
+successor landed. The connection banner, the app's only `entering`, cannot be reached in the demo:
+it needs two seconds of a degraded channel, and the in-process desktop never degrades it.
+
+**Not proven here.** iOS: the compile, the pod install and a launch for all four native moves, and
+how headings and lists draw on 1.2.0. The Sentry crash-test readback at 8.36.0 on both platforms.
+Any phone. The 4.7.1 mapper and idle CPU measurements were not repeated on 4.7.2.
 
 ## Credential inventory
 
