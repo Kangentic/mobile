@@ -123,8 +123,24 @@ describe('setReportedScreen', () => {
       { screen: '/settings', lens: 'none' },
     ]);
     for (const breadcrumb of breadcrumbs) {
-      expect(Object.keys(breadcrumb).sort()).toEqual(['category', 'data', 'level']);
+      expect(Object.keys(breadcrumb).sort()).toEqual(['category', 'data', 'level', 'message']);
     }
+  });
+
+  it('gives each breadcrumb a message made of the same two fixed names, so the trail reads in the CLI', async () => {
+    // The Sentry CLI's trail view prints only the message column. The first
+    // delivered event had none, and every row of the app's own trail was blank.
+    // The message must add nothing: it is the screen, and the lens when there
+    // is one.
+    const reportContext = await loadFreshModule();
+    reportContext.setReportedScreen(['settings']);
+    reportContext.setReportedLens('/task/[taskId]', 'chat', 'instance-a');
+    reportContext.setReportedScreen(TASK_SEGMENTS);
+
+    expect(breadcrumbsIn(NAVIGATION_BREADCRUMB_CATEGORY).map((breadcrumb) => breadcrumb.message)).toEqual([
+      '/settings',
+      '/task/[taskId] chat',
+    ]);
   });
 
   it('records nothing when the screen is reported again unchanged', async () => {
@@ -167,42 +183,72 @@ describe('setReportedScreen', () => {
   });
 });
 
-describe('setReportedLens', () => {
-  it('tags the lens while its screen is the one showing', async () => {
-    const reportContext = await loadFreshModule();
-    reportContext.setReportedScreen(TASK_SEGMENTS);
-    reportContext.setReportedLens('/task/[taskId]', 'chat');
+/**
+ * The screen and the lens are reported by two different components, and
+ * nothing guarantees which speaks first. The first device run (Android,
+ * 2026-11-18) showed the tracker reporting the screen 8 ms BEFORE the screen
+ * reported its lens, the opposite of what had been assumed, and the trail got
+ * a `lens: none` entry followed by the real one. So every arrival is pinned
+ * here in BOTH orders, and each must leave exactly one breadcrumb carrying the
+ * real pair.
+ */
+describe('setReportedLens and clearReportedLens', () => {
+  function navigationData(): unknown[] {
+    return breadcrumbsIn(NAVIGATION_BREADCRUMB_CATEGORY).map((breadcrumb) => breadcrumb.data);
+  }
 
-    expect(tagValue('screen')).toBe('/task/[taskId]');
-    expect(tagValue('lens')).toBe('chat');
-    expect(breadcrumbsIn(NAVIGATION_BREADCRUMB_CATEGORY).at(-1)?.data).toEqual({
-      screen: '/task/[taskId]',
-      lens: 'chat',
-    });
-  });
-
-  it('records ONE breadcrumb when the lens arrives before the screen, which is the order a mounting screen reports in', async () => {
-    // A screen's focus effect runs before the root tracker's effect (a later
-    // sibling commits last). The lens lands first and must wait, silently, for
-    // its screen: the one crumb the tracker then records already carries it.
+  it('records ONE breadcrumb when the screen arrives before its lens, the order seen on a device', async () => {
+    // The mutation this guards: recording a breadcrumb as soon as the screen
+    // is known. That is the two-entry trail the first delivered event had.
     const reportContext = await loadFreshModule();
     reportContext.setReportedScreen(['(tabs)']);
     sentryState.addBreadcrumb.mockClear();
 
-    reportContext.setReportedLens('/task/[taskId]', 'terminal');
+    reportContext.setReportedScreen(TASK_SEGMENTS);
+    // The tags move at once, so an event in the gap still says where the app is.
+    expect(tagValue('screen')).toBe('/task/[taskId]');
+    expect(tagValue('lens')).toBe('none');
+    expect(sentryState.addBreadcrumb).not.toHaveBeenCalled();
+
+    reportContext.setReportedLens('/task/[taskId]', 'chat', 'instance-a');
+    expect(tagValue('lens')).toBe('chat');
+    expect(navigationData()).toEqual([{ screen: '/task/[taskId]', lens: 'chat' }]);
+  });
+
+  it('records ONE breadcrumb when the lens arrives before its screen', async () => {
+    const reportContext = await loadFreshModule();
+    reportContext.setReportedScreen(['(tabs)']);
+    sentryState.addBreadcrumb.mockClear();
+
+    reportContext.setReportedLens('/task/[taskId]', 'terminal', 'instance-a');
+    // Not the showing screen yet: nothing on the trail, and the lens tag still
+    // describes the screen that IS showing.
     expect(sentryState.addBreadcrumb).not.toHaveBeenCalled();
     expect(tagValue('lens')).toBe('none');
 
     reportContext.setReportedScreen(TASK_SEGMENTS);
-    expect(breadcrumbsIn(NAVIGATION_BREADCRUMB_CATEGORY).map((breadcrumb) => breadcrumb.data)).toEqual([
-      { screen: '/task/[taskId]', lens: 'terminal' },
+    expect(navigationData()).toEqual([{ screen: '/task/[taskId]', lens: 'terminal' }]);
+  });
+
+  it('still records the arrival when a lens screen is left before it ever reported a lens', async () => {
+    // A held breadcrumb must not be lost. It is released by the next screen.
+    const reportContext = await loadFreshModule();
+    reportContext.setReportedScreen(['(tabs)']);
+    sentryState.addBreadcrumb.mockClear();
+
+    reportContext.setReportedScreen(TASK_SEGMENTS);
+    reportContext.setReportedScreen(['settings']);
+
+    expect(navigationData()).toEqual([
+      { screen: '/task/[taskId]', lens: 'none' },
+      { screen: '/settings', lens: 'none' },
     ]);
   });
 
-  it('reads none on a screen that owns no lens, however recently a lens was set', async () => {
+  it('reads none on a screen that owns no lens', async () => {
     const reportContext = await loadFreshModule();
     reportContext.setReportedScreen(TASK_SEGMENTS);
-    reportContext.setReportedLens('/task/[taskId]', 'chat');
+    reportContext.setReportedLens('/task/[taskId]', 'chat', 'instance-a');
 
     reportContext.setReportedScreen(['settings']);
 
@@ -214,8 +260,8 @@ describe('setReportedLens', () => {
     // The mutation this guards: one shared "current lens" slot instead of a
     // lens per owning screen.
     const reportContext = await loadFreshModule();
-    reportContext.setReportedLens('/completed-task', 'summary');
-    reportContext.setReportedLens('/task/[taskId]', 'terminal');
+    reportContext.setReportedLens('/completed-task', 'summary', 'instance-completed');
+    reportContext.setReportedLens('/task/[taskId]', 'terminal', 'instance-session');
 
     reportContext.setReportedScreen(['completed-task']);
     expect(tagValue('lens')).toBe('summary');
@@ -224,41 +270,130 @@ describe('setReportedLens', () => {
     expect(tagValue('lens')).toBe('terminal');
   });
 
-  it('restores the lens on the way back to a screen, with no blur ever having cleared it', async () => {
+  it('records nothing when a screen blurs: a blur only forgets, the next screen reports itself', async () => {
+    // The mutation this guards: updating the scope from the clear. That puts a
+    // false "same screen, no lens" entry on the trail on every exit.
     const reportContext = await loadFreshModule();
     reportContext.setReportedScreen(TASK_SEGMENTS);
-    reportContext.setReportedLens('/task/[taskId]', 'changes');
-    reportContext.setReportedScreen(['task-actions']);
-    sentryState.addBreadcrumb.mockClear();
-
-    reportContext.setReportedScreen(TASK_SEGMENTS);
-
-    expect(breadcrumbsIn(NAVIGATION_BREADCRUMB_CATEGORY).map((breadcrumb) => breadcrumb.data)).toEqual([
-      { screen: '/task/[taskId]', lens: 'changes' },
-    ]);
-  });
-
-  it('records a lens change on the showing screen as its own breadcrumb', async () => {
-    const reportContext = await loadFreshModule();
-    reportContext.setReportedScreen(TASK_SEGMENTS);
-    reportContext.setReportedLens('/task/[taskId]', 'terminal');
-    reportContext.setReportedLens('/task/[taskId]', 'chat');
-
-    expect(breadcrumbsIn(NAVIGATION_BREADCRUMB_CATEGORY).map((breadcrumb) => breadcrumb.data)).toEqual([
-      { screen: '/task/[taskId]', lens: 'none' },
-      { screen: '/task/[taskId]', lens: 'terminal' },
-      { screen: '/task/[taskId]', lens: 'chat' },
-    ]);
-  });
-
-  it('refuses a lens or an owner outside the closed sets, whatever the caller cast', async () => {
-    const reportContext = await loadFreshModule();
-    reportContext.setReportedScreen(TASK_SEGMENTS);
+    reportContext.setReportedLens('/task/[taskId]', 'chat', 'instance-a');
     sentryState.addBreadcrumb.mockClear();
     sentryState.setTag.mockClear();
 
-    reportContext.setReportedLens('/task/[taskId]', 'the task title' as never);
-    reportContext.setReportedLens('/settings' as never, 'chat');
+    reportContext.clearReportedLens('/task/[taskId]', 'instance-a');
+
+    expect(sentryState.addBreadcrumb).not.toHaveBeenCalled();
+    expect(sentryState.setTag).not.toHaveBeenCalled();
+  });
+
+  it('never shows a lens left over from an earlier visit against the next task opened', async () => {
+    // Visit one ends on `changes` and blurs. Visit two is a different task on
+    // the same route, arriving screen-first. Its trail entry must wait for ITS
+    // lens, never borrow the last one.
+    const reportContext = await loadFreshModule();
+    reportContext.setReportedScreen(TASK_SEGMENTS);
+    reportContext.setReportedLens('/task/[taskId]', 'changes', 'instance-a');
+    reportContext.clearReportedLens('/task/[taskId]', 'instance-a');
+    reportContext.setReportedScreen(['(tabs)']);
+    sentryState.addBreadcrumb.mockClear();
+
+    reportContext.setReportedScreen(TASK_SEGMENTS);
+    expect(tagValue('lens')).toBe('none');
+    reportContext.setReportedLens('/task/[taskId]', 'terminal', 'instance-b');
+
+    expect(navigationData()).toEqual([{ screen: '/task/[taskId]', lens: 'terminal' }]);
+  });
+
+  it("keeps a new instance's lens when the old instance of the same route blurs after it", async () => {
+    // One task opened over another from a notification: same route name, two
+    // instances. The new one reports, THEN the old one's blur runs. The
+    // mutation this guards is a clear that ignores who set the lens, which
+    // leaves the tag reading `none` for as long as the user stays there.
+    const reportContext = await loadFreshModule();
+    reportContext.setReportedScreen(TASK_SEGMENTS);
+    reportContext.setReportedLens('/task/[taskId]', 'chat', 'instance-a');
+
+    reportContext.setReportedLens('/task/[taskId]', 'terminal', 'instance-b');
+    reportContext.clearReportedLens('/task/[taskId]', 'instance-a');
+    // Something that makes the door look at the lens again.
+    reportContext.setReportedScreen(['settings']);
+    reportContext.setReportedScreen(TASK_SEGMENTS);
+
+    expect(tagValue('lens')).toBe('terminal');
+  });
+
+  it('comes back to a screen with its lens, whichever of the two reports first', async () => {
+    const screenFirst = await loadFreshModule();
+    screenFirst.setReportedScreen(TASK_SEGMENTS);
+    screenFirst.setReportedLens('/task/[taskId]', 'changes', 'instance-a');
+    screenFirst.clearReportedLens('/task/[taskId]', 'instance-a');
+    screenFirst.setReportedScreen(['task-actions']);
+    sentryState.addBreadcrumb.mockClear();
+    screenFirst.setReportedScreen(TASK_SEGMENTS);
+    screenFirst.setReportedLens('/task/[taskId]', 'changes', 'instance-a');
+    expect(navigationData()).toEqual([{ screen: '/task/[taskId]', lens: 'changes' }]);
+
+    const lensFirst = await loadFreshModule();
+    lensFirst.setReportedScreen(TASK_SEGMENTS);
+    lensFirst.setReportedLens('/task/[taskId]', 'changes', 'instance-a');
+    lensFirst.clearReportedLens('/task/[taskId]', 'instance-a');
+    lensFirst.setReportedScreen(['task-actions']);
+    sentryState.addBreadcrumb.mockClear();
+    lensFirst.setReportedLens('/task/[taskId]', 'changes', 'instance-a');
+    lensFirst.setReportedScreen(TASK_SEGMENTS);
+    expect(navigationData()).toEqual([{ screen: '/task/[taskId]', lens: 'changes' }]);
+  });
+
+  it('records a lens change on the showing screen as one breadcrumb, across the clear that precedes it', async () => {
+    // A focus effect re-runs as cleanup then setup, so a lens change reaches
+    // the door as a clear followed by a set.
+    const reportContext = await loadFreshModule();
+    reportContext.setReportedScreen(TASK_SEGMENTS);
+    reportContext.setReportedLens('/task/[taskId]', 'terminal', 'instance-a');
+    sentryState.addBreadcrumb.mockClear();
+
+    reportContext.clearReportedLens('/task/[taskId]', 'instance-a');
+    reportContext.setReportedLens('/task/[taskId]', 'chat', 'instance-a');
+
+    expect(navigationData()).toEqual([{ screen: '/task/[taskId]', lens: 'chat' }]);
+    expect(tagValue('lens')).toBe('chat');
+  });
+
+  it('records nothing for another task opened on the same route with the same lens', async () => {
+    // Only the ID changed, and the ID is the one thing a report may not carry.
+    const reportContext = await loadFreshModule();
+    reportContext.setReportedScreen(TASK_SEGMENTS);
+    reportContext.setReportedLens('/task/[taskId]', 'chat', 'instance-a');
+    sentryState.addBreadcrumb.mockClear();
+    sentryState.setTag.mockClear();
+
+    reportContext.setReportedScreen(TASK_SEGMENTS);
+    reportContext.setReportedLens('/task/[taskId]', 'chat', 'instance-b');
+    reportContext.clearReportedLens('/task/[taskId]', 'instance-a');
+
+    expect(sentryState.addBreadcrumb).not.toHaveBeenCalled();
+    expect(sentryState.setTag).not.toHaveBeenCalled();
+  });
+
+  it('refuses a lens or a screen outside the closed sets, whatever the caller cast', async () => {
+    const reportContext = await loadFreshModule();
+    reportContext.setReportedScreen(['settings']);
+    sentryState.addBreadcrumb.mockClear();
+    sentryState.setTag.mockClear();
+
+    reportContext.setReportedLens('/task/[taskId]', 'the task title' as never, 'instance-a');
+    reportContext.setReportedLens('/settings' as never, 'chat', 'instance-a');
+    reportContext.setReportedScreen(TASK_SEGMENTS);
+
+    // Neither refused call stored a lens: the session arrives with none known.
+    expect(tagValue('lens')).toBe('none');
+    expect(sentryState.addBreadcrumb).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when crash reporting never started', async () => {
+    crashReportingState.initialized = false;
+    const reportContext = await loadFreshModule();
+    reportContext.setReportedLens('/task/[taskId]', 'chat', 'instance-a');
+    reportContext.clearReportedLens('/task/[taskId]', 'instance-a');
 
     expect(sentryState.setTag).not.toHaveBeenCalled();
     expect(sentryState.addBreadcrumb).not.toHaveBeenCalled();
@@ -275,7 +410,10 @@ describe('recordConnectionState', () => {
       const breadcrumbs = breadcrumbsIn(CONNECTION_BREADCRUMB_CATEGORY);
       expect(breadcrumbs).toHaveLength(1);
       expect(breadcrumbs[0]?.data).toEqual({ state });
-      expect(Object.keys(breadcrumbs[0] ?? {}).sort()).toEqual(['category', 'data', 'level']);
+      // The message repeats the state so the CLI's trail view has something to
+      // print; it must add nothing to it.
+      expect(breadcrumbs[0]?.message).toBe(state);
+      expect(Object.keys(breadcrumbs[0] ?? {}).sort()).toEqual(['category', 'data', 'level', 'message']);
     },
   );
 

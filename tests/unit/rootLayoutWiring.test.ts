@@ -133,28 +133,35 @@ describe('app/_layout.tsx wiring', () => {
 
   /**
    * `<ScreenTracker />` is what puts the current screen on every crash report
-   * (task #152, from Sentry MOBILE-H). Two ways to lose it leave every other
+   * (task #152, from Sentry MOBILE-H). Not rendering it leaves every other
    * test green, because tests/components/ScreenTracker.test.tsx renders the
-   * component directly:
+   * component directly, and every event would then say `screen: none`.
    *
-   * - not rendering it at all, after which every event says `screen: none`;
-   * - rendering it BEFORE the Stack. Effects run in sibling order, and a screen
-   *   that owns a lens reports it from its own focus effect. After the Stack,
-   *   that lands first and the tracker's one breadcrumb carries it. Before the
-   *   Stack, every arrival on a lens screen records two crumbs, the first with
-   *   a stale lens.
+   * Exactly once, and outside the Stack: a second copy would report every
+   * navigation twice, and `<Stack>` children are route declarations.
+   *
+   * Its position RELATIVE to the Stack is deliberately not pinned. An earlier
+   * version of this test pinned it after the Stack, on the reasoning that a
+   * screen's lens would then be reported before the tracker reported the
+   * screen. The first delivered event showed the opposite order on a device,
+   * so the door was rebuilt to give the same result either way, and a position
+   * assertion here would only assert a reason that turned out to be false.
    */
   it('renders ScreenTracker exactly once', () => {
     const occurrences = strippedSource.match(/<ScreenTracker\b/g) ?? [];
     expect(occurrences).toHaveLength(1);
   });
 
-  it('renders ScreenTracker as a sibling AFTER the root Stack closes, so a screen reports its lens first', () => {
+  it('renders ScreenTracker outside the root Stack, whose children are route declarations', () => {
+    // `<Stack` followed by whitespace: the navigator's own opening tag, not a
+    // `<Stack.Screen` declaration inside it.
+    const stackOpenIndex = strippedSource.search(/<Stack\s/);
     const stackCloseIndex = strippedSource.indexOf('</Stack>');
     const trackerIndex = strippedSource.indexOf('<ScreenTracker');
-    expect(stackCloseIndex).toBeGreaterThan(0);
+    expect(stackOpenIndex).toBeGreaterThan(0);
+    expect(stackCloseIndex).toBeGreaterThan(stackOpenIndex);
     expect(trackerIndex).toBeGreaterThan(0);
-    expect(trackerIndex).toBeGreaterThan(stackCloseIndex);
+    expect(trackerIndex < stackOpenIndex || trackerIndex > stackCloseIndex).toBe(true);
   });
 });
 

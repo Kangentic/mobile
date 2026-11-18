@@ -148,7 +148,15 @@ describe('ScreenTracker', () => {
   });
 
   it('sends the task id nowhere: not on a tag, not on the trail', async () => {
-    await renderTracker(taskRouteState());
+    // With the session's lens reported too, so the breadcrumb is recorded and
+    // there is a trail entry to inspect (the door holds a lens screen's entry
+    // until its lens is known).
+    await render(
+      <RouteInfoContext.Provider value={getRouteInfoFromState(taskRouteState())}>
+        <ScreenTracker />
+        <LensReporter screenName="/task/[taskId]" lens="chat" />
+      </RouteInfoContext.Provider>,
+    );
 
     expect(mockSetTag).toHaveBeenCalled();
     expect(mockAddBreadcrumb).toHaveBeenCalled();
@@ -188,14 +196,35 @@ describe('ScreenTracker', () => {
 });
 
 describe('useReportedLens', () => {
-  it('puts the lens on the report when its screen reports it before the tracker reports the screen', async () => {
-    // The order the app runs them in: a screen under the Stack commits its
-    // effects before the tracker, a later sibling. One crumb, and it already
-    // carries the lens.
+  /**
+   * The tracker and the screen are different components, and which one's
+   * effect runs first is not something to rely on: the first device run showed
+   * the tracker first, where the reverse had been assumed, and the trail got
+   * two entries for one arrival. Effects run in tree order, so the two cases
+   * below are the two orders, by where each component sits. Both must leave
+   * ONE trail entry, carrying the real pair.
+   */
+  it('records one trail entry when the lens is reported before the screen', async () => {
     await render(
       <RouteInfoContext.Provider value={getRouteInfoFromState(taskRouteState())}>
         <LensReporter screenName="/task/[taskId]" lens="chat" />
         <ScreenTracker />
+      </RouteInfoContext.Provider>,
+    );
+
+    expect(tagValue('screen')).toBe('/task/[taskId]');
+    expect(tagValue('lens')).toBe('chat');
+    expect(mockAddBreadcrumb).toHaveBeenCalledTimes(1);
+    expect(mockAddBreadcrumb).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { screen: '/task/[taskId]', lens: 'chat' } }),
+    );
+  });
+
+  it('records one trail entry when the screen is reported before the lens, the order seen on a device', async () => {
+    await render(
+      <RouteInfoContext.Provider value={getRouteInfoFromState(taskRouteState())}>
+        <ScreenTracker />
+        <LensReporter screenName="/task/[taskId]" lens="chat" />
       </RouteInfoContext.Provider>,
     );
 
@@ -224,11 +253,17 @@ describe('useReportedLens', () => {
     );
 
     expect(tagValue('lens')).toBe('changes');
+    // One entry for the change. The focus effect re-runs as a cleanup then a
+    // setup, and the cleanup's clear must not put an entry of its own between.
+    expect(mockAddBreadcrumb).toHaveBeenLastCalledWith(
+      expect.objectContaining({ data: { screen: '/task/[taskId]', lens: 'changes' } }),
+    );
+    expect(mockAddBreadcrumb).toHaveBeenCalledTimes(2);
   });
 
-  it('leaves the lens in place when the screen that owns it unmounts, because nothing clears it', async () => {
-    // No cleanup, on purpose. A cleanup that cleared the lens would run AFTER
-    // a newly pushed screen of the same name had reported its own, and wipe it.
+  it('records nothing when the screen that owns the lens goes away: a blur only forgets', async () => {
+    // The screen that takes over reports itself. Recording from the blur would
+    // put a false "same screen, no lens" entry on the trail on every exit.
     const view = await render(
       <RouteInfoContext.Provider value={getRouteInfoFromState(taskRouteState())}>
         <LensReporter screenName="/task/[taskId]" lens="chat" />
@@ -247,6 +282,28 @@ describe('useReportedLens', () => {
     );
 
     expect(mockSetTag).not.toHaveBeenCalled();
+    expect(mockAddBreadcrumb).not.toHaveBeenCalled();
+  });
+
+  it('forgets the lens with the visit, so the next screen on that route waits for its own', async () => {
+    // Visit one, on `changes`, goes away. Visit two arrives screen-first: its
+    // lens tag must read `none` until IT reports, never the last visit's.
+    const firstVisit = await render(
+      <RouteInfoContext.Provider value={getRouteInfoFromState(taskRouteState())}>
+        <ScreenTracker />
+        <LensReporter screenName="/task/[taskId]" lens="changes" />
+      </RouteInfoContext.Provider>,
+    );
+    expect(tagValue('lens')).toBe('changes');
+    await firstVisit.unmount();
+    setReportedScreen(['devices']);
+    mockSetTag.mockClear();
+    mockAddBreadcrumb.mockClear();
+
+    await renderTracker(taskRouteState());
+
+    expect(tagValue('screen')).toBe('/task/[taskId]');
+    expect(tagValue('lens')).toBe('none');
     expect(mockAddBreadcrumb).not.toHaveBeenCalled();
   });
 });
