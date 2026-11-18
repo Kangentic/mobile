@@ -4661,7 +4661,9 @@ under 700. The library's default heading family is `sans-serif`, so 600 became 4
 heading span applied last and built its typeface in two steps, which kept the real weight.
 `MarkdownBlock` now passes an empty font family on an Android heading, which skips the by-name
 lookup. Seen on the next build: the headings are bold again and no line moved. By the same rule a
-700 heading was never affected, which is read and was not on screen. iOS was not checked.
+700 heading was never affected, which is read and was not on screen. Also read and not seen: the
+fix needs Android 9 (API 28), because below it `TypefaceStyle.apply` rounds to the nearest style
+on this path too, so a 600 heading stays regular there. iOS was not checked.
 
 **1.2.0's visible changes that stay (seen on the same builds).** Inline code inside a list item or
 a heading now draws in the monospace face the app always asked for, where 1.1.1 drew it in the
@@ -4669,13 +4671,16 @@ body face inside its box. A bullet nested under a numbered item sits at the norm
 its marker, where 1.1.1 left a wide gap. A fenced block's header gains a line wrap toggle by
 default, in the GitHub flavor only, and `MarkdownBlock` turns it off so an upgrade adds no control.
 
-**Board on pager-view 10.0.3 (seen on `control`, one screen recording per version at 30 frames a
-second).** A chip tap from To Do to Done on 10.0.0 jumps straight to the page beside the target and
-slides one page, in about a quarter of a second. On 10.0.3 it passes through all five pages in
-between, in about a third of a second, and lands with the chip and the page agreeing. Page swipes
-kept the chips in step, a vertical drag scrolled the list and left the pager alone, and pull to
-refresh and an adjacent chip tap behaved. A recording is not a frame-timing measurement, so nothing
-here says how smooth the longer scroll is on a phone.
+**Board on pager-view 10.0.3 (10.0.3 on `control`, 10.0.0 on a build from before that move; one
+screen recording per version at 30 frames a second).** A chip tap from To Do to Done on 10.0.0
+jumps straight to the page beside the target and slides one page, in about a quarter of a second.
+On 10.0.3 it passes through all five pages in between, in about a third of a second, and lands
+with the chip and the page agreeing. Each time is one recording on its own build, read at 33 ms a
+frame, so the two or three frames between them are not a result: the recordings show the path the
+pager takes, not that 10.0.3 is slower. Page swipes kept the chips in step, a vertical drag
+scrolled the list and left the pager alone, and pull to refresh and an adjacent chip tap behaved.
+A recording is not a frame-timing measurement, so nothing here says how smooth the longer scroll
+is on a phone.
 
 **Swap veil on reanimated 4.7.2 (seen on `control`).** The mock's `/respawn` leaves a task without
 a session for six seconds. The veil covered the terminal for that gap and cleared when the

@@ -111,12 +111,19 @@ export function MarkdownBlock({ markdown, testID, flavor = 'commonmark' }: Markd
  * paragraph above it. By the same rule a 700 heading keeps its bold, which is
  * read from that source and was not on screen to see.
  *
- * An empty family skips the by-name lookup, and the weight is applied to the
+ * An empty family skips the by-name lookup: the library hands React Native no
+ * family at all (`TextPaintExtensions.kt`), and the weight is applied to the
  * default typeface at its real value (`ReactTypefaceUtils.applyStyles`). That
- * typeface is the same sans-serif face, so nothing else moves.
+ * typeface is the same sans-serif face, so nothing else moves. Read from the
+ * same source and not seen: the real value needs Android 9 (API 28). Below it
+ * `TypefaceStyle.apply` rounds to the nearest style as well, so a 600 heading
+ * stays regular there.
  *
  * iOS keeps the library's default family: its renderer is separate and was
  * not checked on 1.2.0.
+ *
+ * The builds this was seen on are recorded in docs/developer-guide.md, under
+ * "Dependency upgrade, 2026-11 (task #151)".
  */
 const headingFont: { fontFamily?: string } = Platform.OS === 'android' ? { fontFamily: '' } : {};
 
