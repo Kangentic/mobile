@@ -258,9 +258,11 @@ paths in the flow, and the file names together;
   OS speech engine reports itself available, and the macOS runner's simulator
   has answered both ways with no app change between: the 2026-11-12 capture
   had no mic, run 44432745506 on 2026-11-18 had it. A real iPhone normally has
-  the engine, and the Android frames always show the mic, so an iPhone
-  `04-session-chat` without it is the wrong frame. Check for it in Step 5 and
-  re-run rather than commit one without it.
+  the engine, and the committed Android frames show the mic (the same check
+  gates it there), so an iPhone `04-session-chat` without it is the wrong
+  frame. Check for it in Step 5 and re-run once rather than commit one without
+  it; if the second run lacks it too, stop and report it instead of starting a
+  third 45-minute run.
 
 ## What this does NOT produce
 

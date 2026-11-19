@@ -488,9 +488,10 @@ store workflow before it lands.
   (run 43299818334). Stage 2 found the listing in sync and resubmitted the version (run
   43300066612).
 - **First run inside a release: v1.5.1, 2026-11-18.** On the App Store, the step after stage 1
-  (run 44440772099) uploaded the one frame that had changed (`04-session-chat.png`), placed it,
-  removed the stale placement and read all 7 back in listing order. Stage 2 then found the
-  listing in sync by content hash and submitted. On Play, `Listing images (Google Play)` (run
+  (in `Submit (TestFlight)`, run 44440772099) uploaded the one frame that had changed
+  (`04-session-chat.png`), placed it, removed the stale placement and read all 7 back in listing
+  order. Stage 2 (`Submit (App Review)`, the same run) then found the listing in sync by content
+  hash and submitted. On Play, `Listing images (Google Play)` (run
   44440767389) read all three shelves in sync and uploaded nothing, so the Play write path has
   run against the store only through `store-listing.yml` (run 43296915425 above).
 - **Not exercised against a store:** stage 2 refusing a listing that differs, and a Play edit
@@ -2564,16 +2565,19 @@ the resulting `.p12` and `.mobileprovision` were exported to `~/kangentic-secret
 GitHub secrets, and the build path is now Expo-free. Using EAS to obtain credentials is not the same
 as depending on EAS to build with them.
 
-**The SDK comes with the runner image, and Apple has set a deadline on it.** The jobs run on
-`macos-latest` with whatever Xcode that image defaults to: Xcode 26.5 and the iOS 26.5 SDK for
-v1.5.1 build 25. The upload of that build (run 44440772099) carried Apple's warning 90725:
-starting April 2027, apps must be built with the iOS 27 SDK or later (Xcode 27 or later) to be
-uploaded or submitted. Nothing fails today. Before April 2027, read the Xcode version in a
-`build-ios.yml` log; if the image has not moved to Xcode 27 by then, the workflow has to select it.
-
 `eas build --platform ios` still works from Windows and remains the fallback if the runner path ever
 breaks. It costs one of the 15 free monthly iOS cloud builds and enters a low-priority queue that
 can take hours, which is precisely why it is the fallback and not the path.
+
+**The SDK comes with the runner image, and Apple has set a deadline on it.** The jobs run on
+`macos-latest` with whatever Xcode that image defaults to: for v1.5.1 build 25 that was the
+`macos-26-arm64` image, Xcode 26.6 and the iOS 26.5 SDK. The upload of that build (run
+44440772099) carried Apple's warning 90725: starting April 2027, apps must be built with the iOS 27
+SDK or later (Xcode 27 or later) to be uploaded or submitted. Nothing fails today. Before April
+2027, read a `build-ios.yml` run's `Device (signed .ipa)` job: the Runner Image group in its setup
+names the image, and the `xcodebuild archive` line names the Xcode
+(`/Applications/Xcode_<version>.app`). If the image has not moved to Xcode 27 by then, the workflow
+has to select it.
 
 `cli.appVersionSource: "local"` is a CLI-wide setting, not an Android-only one, so `ios.buildNumber`
 in `app.config.ts` is hand-bumped for the same reason `android.versionCode` is. App Store Connect
@@ -5023,7 +5027,7 @@ testing needs no review at all.
 |---|---|---|---|
 | TestFlight internal | up to 100, must be App Store Connect users on the team | none | every build uploads here first |
 | TestFlight external | up to 10,000, by link or email | yes, a lighter Beta App Review | not used |
-| App Store | everyone | yes, full App Review | **live** (maintainer, 2026-10-07); since 2026-10-15 `submit=appstore` prepares the version and submits it through the API, releasing automatically after approval with no phased release (unexercised until its first run) |
+| App Store | everyone | yes, full App Review | **live** (maintainer, 2026-10-07); since 2026-10-15 `submit=appstore` prepares the version and submits it through the API, releasing automatically after approval with no phased release (first run end to end 2026-10-19: v1.2.0 build 19 reached WAITING_FOR_REVIEW, run 39182661900) |
 
 The ladder:
 
