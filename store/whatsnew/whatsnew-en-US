@@ -1,8 +1,1 @@
-- Tap a web link in the terminal to open it.
-- A pull request with failing checks says "checks failing" on its card.
-- A stopped workflow card can move to any column but To Do, as on the desktop.
-
-With the next desktop update:
-- Opening a paused task resumes it.
-- Cards show priority, place in the queue, and a mark when the board stopped the agent.
-- A task's links open from its long-press menu.
+This update brings stability fixes and updated libraries throughout the app.

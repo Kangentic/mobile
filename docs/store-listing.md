@@ -319,19 +319,12 @@ Google, because `Send app for review` stays disabled until the app dashboard rea
 Publishing overview before repeating a claim from this file: the Play API cannot see any of these
 declarations, so the Console is the only source of truth for them.
 
-> **PENDING, both consoles: add the screen-trail entry before the first release that carries
-> task #152 (2026-11-18).** A crash report now names the screens opened before a failure, and
-> that is declared as app-interaction data on both stores (the two entries are below, marked
-> PENDING). Only the maintainer can change a store console. Until both are done the store
-> answers are behind what the next build collects, and on iOS the build's own privacy manifest
-> will already say Product Interaction, so the App Privacy answers must change no later than the
-> submission. Remove this block, and the two PENDING markers, in the change that confirms them.
->
-> 1. **App Store Connect > App Privacy:** add *Usage Data > Product Interaction*. Not linked to
->    the user, not used for tracking, purposes App Functionality and Analytics.
-> 2. **Play Console > Data safety:** add *App activity > App interactions*. Collected, not
->    shared, purposes App functionality and Analytics, required (no in-app toggle), encrypted in
->    transit, not processed ephemerally.
+**The screen-trail entries from task #152 were applied on both consoles on 2026-11-18**, by the
+maintainer, before v1.5.1 (the first release that carries #152) was built. App Store Connect's
+App Privacy answers were published that day with five types, and Play's Data safety change was
+sent for review as the only change in Publishing overview. `/release` Step 1 stops on an open
+console step marked in this file, so a later change that collects something new marks its own
+here, and the release that confirms it removes the mark.
 
 The app collects three kinds of thing - crash
 diagnostics, a per-install device identifier the crash SDK attaches on its own, and (from task
@@ -341,8 +334,7 @@ three entries, App Store Connect takes five, because Apple splits Diagnostics in
 `app.config.ts`'s iOS privacy manifest declares all three. Source of truth for the wording is
 [privacy-policy.md](privacy-policy.md).
 
-**Play Console - Data safety.** Declare three collected types (the third is PENDING, see the
-block above):
+**Play Console - Data safety.** Declare three collected types:
 
 - **Crash logs** (under *App info and performance*). Collected: **yes**.
   Purpose: **App functionality** and **Analytics**. Not advertising, not personalisation, not
@@ -378,9 +370,10 @@ block above):
   Crash logs and for the same reason. Not linked to any other collected data, because there is
   none to link it to: no account, and no analytics or product-usage telemetry beyond the crash
   payload itself. Same transit/retention/required answers as Crash logs above.
-- **App interactions** (under *App activity*). **PENDING, added by task #152 on 2026-11-18.**
-  Collected: **yes**. Purpose: **App functionality** and **Analytics**, the same pair as Crash
-  logs. Same transit, retention and required answers as Crash logs above.
+- **App interactions** (under *App activity*). Added by task #152, and applied in the Console
+  on 2026-11-18. Collected: **yes**, shared: **no**. Purpose: **App functionality** and
+  **Analytics**, the same pair as Crash logs. Same transit, retention and required answers as
+  Crash logs above.
 
   What it covers: a crash report now carries the fixed name of the screen that was open and the
   names of the screens opened before it (`screen` and `lens` tags and `app.navigation`
@@ -440,7 +433,10 @@ block above):
   against the generated `PrivacyInfo.xcprivacy`, so answering App Functionality alone here while
   the manifest declares two would be a mismatch of Apple's own making.
 - **Diagnostics -> Performance Data** and **Diagnostics -> Other Diagnostic Data**, same answers.
-  These two are declared because `app.config.ts`'s `ios.privacyManifests` declares them (Sentry's
+  **The store did not carry these two until 2026-11-18**, although the manifest had declared
+  them for several releases and this file already listed them. The maintainer added them that
+  day, with Product Interaction, so the published answers now match the manifest. These two are
+  declared because `app.config.ts`'s `ios.privacyManifests` declares them (Sentry's
   own apple-privacy-manifest guidance lists all three Diagnostics types for its SDK), and Apple
   cross-checks the App Privacy answers against the generated `PrivacyInfo.xcprivacy`. Declaring
   them here is the conservative direction: over-declaring is allowed, under-declaring is the
@@ -451,10 +447,10 @@ block above):
   identifier sentry-android/sentry-cocoa attach independently of `sendDefaultPii`. Declared as
   Data Not Linked to You because there is no account or other data to link it to.
 - **Usage Data -> Product Interaction**, used for **App Functionality** and **Analytics**, and
-  **not** used for tracking. **PENDING, added by task #152 on 2026-11-18**; the manifest half
+  **not** used for tracking. Added by task #152, and published in App Store Connect on
+  2026-11-18, before the first submission built from it (v1.5.1). The manifest half
   (`NSPrivacyCollectedDataTypeProductInteraction` in `app.config.ts`, pinned by
-  `tests/unit/appConfigBrand.test.ts`) landed with that task, so this answer must be in App
-  Store Connect no later than the first submission built from it. It covers the same thing as
+  `tests/unit/appConfigBrand.test.ts`) landed with that task. It covers the same thing as
   Play's App interactions entry above: the fixed names of the screens opened before a failure,
   inside the crash report and nowhere else. Apple's definition, read 2026-11-18: "Such as app
   launches, taps, clicks, scrolling information, music listening data, video views, saved place

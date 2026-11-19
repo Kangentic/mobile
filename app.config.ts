@@ -22,7 +22,7 @@ const config: ExpoConfig = {
   name: 'Kangentic',
   slug: 'mobile',
   owner: 'kangentic',
-  version: '1.5.0',
+  version: '1.5.1',
   orientation: 'portrait',
   scheme: ['kangentic-pair', 'kangentic'],
   userInterfaceStyle: 'dark',
@@ -270,7 +270,18 @@ const config: ExpoConfig = {
     // and protocol 0.28.0: resume on open, queue place, the stopped mark,
     // priority, task links and a blocked start. Desktop v0.57.0 speaks 0.27.0,
     // so the 0.28.0 set waits for the next desktop.
-    buildNumber: '24',
+    //
+    // 25 is the v1.5.1 release cut 2026-11-18, for an App Store submission. 24
+    // is spent, tagged ios-b24, and 1.5.0 is live. It ships no feature and
+    // nothing iOS-only. Native dependencies moved: @sentry/react-native 8.36.0,
+    // react-native-reanimated 4.7.2, react-native-pager-view 10.0.3,
+    // react-native-enriched-markdown 1.2.0 (with the Android heading weight
+    // fix) and the SDK 58.0.26 mapping, plus lucide-react-native 1.75.0. Task
+    // #152's crash-report context rides with it: the screen and lens tags, the
+    // app.navigation and app.connection trails, and maxBreadcrumbs at 100. The
+    // privacy manifest's Product Interaction entry came with #152, so App
+    // Privacy declares it from this submission on.
+    buildNumber: '25',
     infoPlist: {
       // US export-compliance declaration. `false` asserts the app uses only
       // EXEMPT encryption, which is what App Store Connect stops asking about.
@@ -556,13 +567,18 @@ const config: ExpoConfig = {
     // R8 would strip. Nothing in it is Android-only; it is the cross-platform
     // list on ios.buildNumber's 24 above.
     //
+    // 22 is the v1.5.1 release cut 2026-11-18, going to the PRODUCTION track as
+    // a full release. 21 is spent, tagged android-vc21. Nothing in it is
+    // Android-only; it is the cross-platform list on ios.buildNumber's 25
+    // above. Data safety declares App interactions from this release on.
+    //
     // Keep this list current on the way OUT of a release, not the way in. The
     // iOS half of this file carried a stale "1 and 2 are spent, hence 3" note
     // into 2026-07-28 and cost a failed release run, because build 3 had in
     // fact already been uploaded. scripts/checkPlayVersionCode.mjs catches a
     // duplicate, but only in the submit job, which is after the ~25 minute
     // build AND after the approval gate.
-    versionCode: 21,
+    versionCode: 22,
     adaptiveIcon: {
       foregroundImage: './assets/brand/adaptive-icon-foreground.png',
       backgroundImage: './assets/brand/adaptive-icon-background.png',
