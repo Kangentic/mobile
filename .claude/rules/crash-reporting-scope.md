@@ -261,12 +261,21 @@ different strengths of evidence, kept apart on purpose (see
   when the hang ends or on the next launch. A watchdog-termination event is built on the next
   launch from tags (`readPreviousTagsFromDisk`) and from a breadcrumb file bounded by, and
   trimmed to, `options.maxBreadcrumbs`. So the persisted trail follows the same cap.
+- **Both source reads were repeated one upgrade later, and held.** Task #151 moved the app to
+  @sentry/react-native 8.36.0 (sentry-cocoa 9.35.0, sentry-android 8.64.0) while this work was in
+  review, so every line cited in the two bullets above was read again at those versions on
+  2026-11-18: unchanged. An SDK upgrade is exactly when to repeat this, because nothing in the
+  test suite can see the native half of the sync. The delivered events below were first read
+  from 8.34.0 builds and then repeated on both platforms from the rebased 8.36.0 build, with the
+  same result; the developer guide has both sets.
 - **Observed on a delivered event** (2026-11-18; the crash reporting section of
   `docs/developer-guide.md` has the runs, the event times and the trails): a native crash on
   Android (the Java uncaught path) and on the iOS simulator each carried `screen`, `lens` and
   the app's `app.navigation` and `app.connection` trail; a JS-captured handled event carried
-  them beside its `site` tags with the message still redacted; and **two iOS App Hang events
-  carried the tags and the trail**, which is the event kind MOBILE-H was. Those hangs were the
+  them beside its `site` tags with the message still redacted; and **iOS App Hang events
+  carried the tags and the trail**, which is the event kind MOBILE-H was. One of them, a hang on
+  the pairing screen, carried `screen: /pair` on its tag and no `/pair` entry on its trail,
+  which is the pairing split above seen on a native event. Those hangs were the
   simulator's own, not something a crash-test row can produce, so do not expect a run to
   reproduce them on demand.
 - **Still not observed:** a watchdog termination (no row causes one, and a simulator never

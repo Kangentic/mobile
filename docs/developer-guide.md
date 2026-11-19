@@ -3516,15 +3516,40 @@ sentry-cocoa 9.33.0. The workflow drove both flows itself and relaunched after e
   The first attempt (run 44404669700) never reached a flow: Maestro's driver was not ready in
   time, and the step now carries the `MAESTRO_DRIVER_STARTUP_TIMEOUT` the capture step has.
 
+*Repeated one SDK upgrade later, on the branch as it merged.* Task #151 moved the app from
+@sentry/react-native 8.34.0 to 8.36.0 (sentry-cocoa 9.33.0 to 9.35.0, sentry-android 8.62.0 to
+8.64.0) while this work was in review, and nothing in the test suite can see the native half of
+the scope sync. So after the rebase the source lines were read again at the new versions
+(unchanged) and both platforms were run again, from commit `991707b`, which carries every change
+above:
+
+- Android (run 44421077343, a throwaway emulator again): the native crash at 23:53:18Z, from
+  sentry-android 8.64.0, has `screen: /settings`, `lens: none` and the same trail, with a single
+  `/task/[taskId] chat` entry on arrival. The handled canary at 23:51:24Z, from the JS SDK at
+  8.36.0, was sent by a flow that paired from scratch: its trail goes `/`, `connected`,
+  `established`, `board-snapshot`, `/`, with no pairing screen between.
+- iOS (run 44421071728, the CI simulator): the native crash at 00:16:48Z on 2026-11-19, from
+  sentry-cocoa 9.35.0, has the same tags and trail. The canary at 00:09:43Z has no pairing
+  screen on its trail either, so the silence is confirmed on iOS and not only on Android.
+- **And one more App Hang, which shows the pairing split working as designed.** The simulator
+  hung again while the flow typed on the pairing screen (MOBILE-G, 00:07:19Z, sentry-cocoa
+  9.35.0). That event's tag says `screen: /pair`, so the hang says where it was, and the only
+  `app.navigation` entry on its trail is `/`: no `/pair` entry. On the earlier build the same
+  hang had carried one.
+
 *Still not observed, and why.* A watchdog termination: no row can cause one and a simulator
 build never reports one (`SentryWatchdogTerminationLogic` returns early on a simulator), so for
-that event the tags and trail rest on sentry-cocoa 9.33.0's source (tags are read back from
-disk onto the event, and the persisted trail is bounded by, and trimmed to, `maxBreadcrumbs`).
-Real iOS hardware: every iOS observation above is a simulator's. A real NDK signal crash on
-Android: `Sentry.nativeCrash()` is the Java uncaught path, and `enableNdkScopeSync` is pinned on
-for the other. And the pairing-screen silence on iOS specifically: it is JavaScript shared by
-both platforms and was confirmed on the Android event above, not re-run on iOS. A recurrence of
-MOBILE-H on a build carrying this change should be read for exactly these fields.
+that event the tags and trail rest on sentry-cocoa's source, read at 9.33.0 and again at 9.35.0
+(tags are read back from disk onto the event, and the persisted trail is bounded by, and trimmed
+to, `maxBreadcrumbs`). Real iOS hardware: every iOS observation above is a simulator's. A real
+NDK signal crash on Android: `Sentry.nativeCrash()` is the Java uncaught path, and
+`enableNdkScopeSync` is pinned on for the other. A recurrence of MOBILE-H on a build carrying
+this change should be read for exactly these fields.
+
+**Repeat this after any Sentry SDK upgrade that lands near a reporting change.** One
+`build-ios.yml -f crash_test=true` dispatch reads back in about forty minutes and costs nothing;
+the Android half needs an emulator and the two probe flows. The unit tests pin what the app
+hands the SDK. Only a delivered event says what the native SDK did with it.
 
 **What that verification actually found**, on a `preview`-profile (arm64-v8a, release-signed,
 non-debuggable) install, cross-checked with `adb logcat`, mitmproxy on the same device, and the
