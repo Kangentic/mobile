@@ -487,10 +487,14 @@ store workflow before it lands.
   and Apple's deprecated `sourceFileChecksum` read the committed files' MD5s in listing order
   (run 43299818334). Stage 2 found the listing in sync and resubmitted the version (run
   43300066612).
+- **First run inside a release: v1.5.1, 2026-11-18.** On the App Store, the step after stage 1
+  (run 44440772099) uploaded the one frame that had changed (`04-session-chat.png`), placed it,
+  removed the stale placement and read all 7 back in listing order. Stage 2 then found the
+  listing in sync by content hash and submitted. On Play, `Listing images (Google Play)` (run
+  44440767389) read all three shelves in sync and uploaded nothing, so the Play write path has
+  run against the store only through `store-listing.yml` (run 43296915425 above).
 - **Not exercised against a store:** stage 2 refusing a listing that differs, and a Play edit
-  lost to another edit, are covered by unit tests only. The two call sites inside a release (the
-  `Listing images (Google Play)` job and the step after stage 1) run the scripts proven above
-  with the same arguments, and first run in a release on the next one.
+  lost to another edit, are covered by unit tests only.
 
 ## Agent tooling (MCP servers)
 
@@ -2559,6 +2563,13 @@ certificate, generating the provisioning profile, and minting the APNs key. That
 the resulting `.p12` and `.mobileprovision` were exported to `~/kangentic-secrets/apple/` and set as
 GitHub secrets, and the build path is now Expo-free. Using EAS to obtain credentials is not the same
 as depending on EAS to build with them.
+
+**The SDK comes with the runner image, and Apple has set a deadline on it.** The jobs run on
+`macos-latest` with whatever Xcode that image defaults to: Xcode 26.5 and the iOS 26.5 SDK for
+v1.5.1 build 25. The upload of that build (run 44440772099) carried Apple's warning 90725:
+starting April 2027, apps must be built with the iOS 27 SDK or later (Xcode 27 or later) to be
+uploaded or submitted. Nothing fails today. Before April 2027, read the Xcode version in a
+`build-ios.yml` log; if the image has not moved to Xcode 27 by then, the workflow has to select it.
 
 `eas build --platform ios` still works from Windows and remains the fallback if the runner path ever
 breaks. It costs one of the 15 free monthly iOS cloud builds and enters a low-priority queue that
