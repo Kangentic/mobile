@@ -45,7 +45,7 @@ Then check the resolved release against the table below and **stop with an expla
 blocked.**
 
 **Every row is a claim about external state, so treat it as evidence with an age, not as fact.**
-The table was last revised **2026-11-12**, and each row carries its own date. This matters
+The table was last revised **2026-11-18**, and each row carries its own date. This matters
 because it has already been wrong three times in ways that cost real time: it asserted the Play
 API path was proven when nothing had ever exercised it, it listed data safety as unfilled after
 it had been submitted, and it still called both production paths blocked weeks after both apps
