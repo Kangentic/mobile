@@ -253,6 +253,14 @@ paths in the flow, and the file names together;
   the Board trigger would silently ignore the custom PNG.
 - **App Store Connect rejects PNGs with an alpha channel.** The captures have
   none; do not "optimise" them through a tool that adds one.
+- **The iPhone chat frame's dictation mic comes and goes with the simulator.**
+  `src/voice/useDictation.ts` shows the mic left of the composer only when the
+  OS speech engine reports itself available, and the macOS runner's simulator
+  has answered both ways with no app change between: the 2026-11-12 capture
+  had no mic, run 44432745506 on 2026-11-18 had it. A real iPhone normally has
+  the engine, and the Android frames always show the mic, so an iPhone
+  `04-session-chat` without it is the wrong frame. Check for it in Step 5 and
+  re-run rather than commit one without it.
 
 ## What this does NOT produce
 
