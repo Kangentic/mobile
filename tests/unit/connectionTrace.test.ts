@@ -112,6 +112,29 @@ describe('connectionTrace (non-trace build)', () => {
   });
 
   /**
+   * The MOBILE-J wait under the same bar: a store build reading false would ship
+   * every keepalive start straight out behind a STOP that has not run, which is
+   * the crash itself.
+   *
+   * The getter and the setter are each gated on the trace flag, and either gate
+   * alone keeps this green: dropping only the getter's ternary passed, because
+   * the setter then never moves the value. Mutation seen failing: dropping BOTH
+   * (`return stopSettleWaitOn;` and `if (stopSettleWaitOn === enabled) return;`)
+   * fails the second assertion with "expected false to be true".
+   */
+  it('stopSettleWaitEnabled is a hard true when the trace flag is unset', async () => {
+    delete process.env.EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE;
+    vi.resetModules();
+    const { setStopSettleWaitEnabled, stopSettleWaitEnabled } = await import('@/devsupport/connectionTrace');
+
+    expect(stopSettleWaitEnabled()).toBe(true);
+
+    setStopSettleWaitEnabled(false);
+
+    expect(stopSettleWaitEnabled()).toBe(true);
+  });
+
+  /**
    * Task #109's two switches, under the same bar. Either reading false in a
    * store build would ship a fix turned off: the phone dropping every desktop
    * frame sealed before a rekey reached it, or the foreground probe tearing
@@ -302,10 +325,41 @@ describe('connectionTrace (trace build, MOBILE-3 probe switches)', () => {
   });
 
   /**
-   * One listener set serves both switches, because the Settings screen
-   * subscribes both rows through subscribeKeepaliveProbe. So a single listener
-   * has to hear a real change from EACH setter, and each setter has its own
-   * notify loop that can be dropped independently.
+   * The third switch on the same listener set (MOBILE-J's control arm). It
+   * moves only its own getter, notifies on a real change and stays silent on a
+   * same-value set, like the two above.
+   *
+   * Mutations seen failing: changing `stopSettleWaitOn = enabled;` to
+   * `stopSettleWaitOn = nativeStopAlarmOn = enabled;` fails with "expected false
+   * to be true" at `expect(nativeStopAlarmEnabled()).toBe(true)`. Dropping its
+   * notify loop fails with "expected "vi.fn()" to be called 1 times, but got 0
+   * times" at the first listener count.
+   */
+  it('setStopSettleWaitEnabled moves only its own getter and notifies once per real change', async () => {
+    const { keepaliveCeilingEnabled, nativeStopAlarmEnabled, setStopSettleWaitEnabled, stopSettleWaitEnabled, subscribeKeepaliveProbe } =
+      await importTraceBuild();
+    const listener = vi.fn();
+    subscribeKeepaliveProbe(listener);
+
+    setStopSettleWaitEnabled(true);
+    expect(listener).not.toHaveBeenCalled();
+
+    setStopSettleWaitEnabled(false);
+
+    expect(stopSettleWaitEnabled()).toBe(false);
+    expect(nativeStopAlarmEnabled()).toBe(true);
+    expect(keepaliveCeilingEnabled()).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    setStopSettleWaitEnabled(false);
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * One listener set serves all three switches, because the Settings screen
+   * subscribes all three rows through subscribeKeepaliveProbe. So a single
+   * listener has to hear a real change from EACH setter, and each setter has
+   * its own notify loop that can be dropped independently.
    *
    * Mutation seen failing: dropping the `for (const listener of
    * keepaliveProbeListeners) listener();` line from setNativeStopAlarmEnabled
@@ -314,8 +368,9 @@ describe('connectionTrace (trace build, MOBILE-3 probe switches)', () => {
    * Dropping `keepaliveProbeListeners.add(listener);` from the subscribe fails
    * the first one - "expected "vi.fn()" to be called 1 times, but got 0 times".
    */
-  it('notifies a subscribed listener on a real change from either setter', async () => {
-    const { setKeepaliveCeilingEnabled, setNativeStopAlarmEnabled, subscribeKeepaliveProbe } = await importTraceBuild();
+  it('notifies a subscribed listener on a real change from each setter', async () => {
+    const { setKeepaliveCeilingEnabled, setNativeStopAlarmEnabled, setStopSettleWaitEnabled, subscribeKeepaliveProbe } =
+      await importTraceBuild();
     const listener = vi.fn();
     subscribeKeepaliveProbe(listener);
 
@@ -324,6 +379,9 @@ describe('connectionTrace (trace build, MOBILE-3 probe switches)', () => {
 
     setNativeStopAlarmEnabled(false);
     expect(listener).toHaveBeenCalledTimes(2);
+
+    setStopSettleWaitEnabled(false);
+    expect(listener).toHaveBeenCalledTimes(3);
   });
 
   /**

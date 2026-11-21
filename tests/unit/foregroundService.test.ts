@@ -33,20 +33,25 @@ vi.mock('@notifee/react-native', () => ({
 }));
 
 /**
- * The native stop alarm (MOBILE-3 on 0.8.0+13). Mocked at the JS wrapper, which
- * resolves to the same module the source imports: this file and
- * src/notifications/foregroundService.ts both sit two directories below the repo
- * root. What the alarm does once armed is Kotlin, which no JS tier can load. The
- * device run in the developer guide covers that half.
+ * The native stop alarm (MOBILE-3 on 0.8.0+13) and the stop-settle wait
+ * (MOBILE-J on 1.5.1+22). Mocked at the JS wrapper, which resolves to the same
+ * module the source imports: this file and src/notifications/foregroundService.ts
+ * both sit two directories below the repo root. What the alarm and the settle
+ * query do natively is Kotlin, which no JS tier can load. The device runs in the
+ * developer guide cover that half.
  */
 const stopAlarmMocks = vi.hoisted(() => ({
   armForegroundServiceStopAlarm: vi.fn<(delayMs: number) => void>(),
   disarmForegroundServiceStopAlarm: vi.fn<() => void>(),
+  awaitForegroundServiceStopped: vi.fn<(timeoutMs: number) => Promise<boolean>>(),
 }));
 vi.mock('../../modules/foreground-service-guard', () => stopAlarmMocks);
 
 /** Must match NATIVE_STOP_ALARM_DELAY_MS. A literal on purpose, so raising it towards hours fails here. */
 const EXPECTED_STOP_ALARM_DELAY_MS = 7 * 60_000;
+
+/** Must match STOP_SETTLE_TIMEOUT_MS. */
+const EXPECTED_STOP_SETTLE_TIMEOUT_MS = 2_000;
 
 type ForegroundServiceRunner = Parameters<typeof notifee.registerForegroundService>[0];
 type ForegroundServiceNotification = Parameters<ForegroundServiceRunner>[0];
@@ -65,6 +70,8 @@ async function loadForegroundService() {
   registerForegroundService.mockReset();
   stopAlarmMocks.armForegroundServiceStopAlarm.mockReset();
   stopAlarmMocks.disarmForegroundServiceStopAlarm.mockReset();
+  stopAlarmMocks.awaitForegroundServiceStopped.mockReset();
+  stopAlarmMocks.awaitForegroundServiceStopped.mockResolvedValue(true);
   return {
     ...moduleUnderTest,
     displayNotification,
@@ -72,7 +79,22 @@ async function loadForegroundService() {
     registerForegroundService,
     armStopAlarm: stopAlarmMocks.armForegroundServiceStopAlarm,
     disarmStopAlarm: stopAlarmMocks.disarmForegroundServiceStopAlarm,
+    awaitServiceStopped: stopAlarmMocks.awaitForegroundServiceStopped,
   };
+}
+
+/** A settle query held open until the test says the STOP has landed (or not). */
+function holdSettleQuery(awaitServiceStopped: typeof stopAlarmMocks.awaitForegroundServiceStopped): {
+  settle: (stopped: boolean) => void;
+} {
+  let settleQuery: (stopped: boolean) => void = () => undefined;
+  awaitServiceStopped.mockImplementationOnce(
+    () =>
+      new Promise<boolean>((resolve) => {
+        settleQuery = resolve;
+      }),
+  );
+  return { settle: (stopped) => settleQuery(stopped) };
 }
 
 describe('foregroundService', () => {
@@ -447,6 +469,302 @@ describe('foregroundService', () => {
 
         expect(service.armStopAlarm).not.toHaveBeenCalled();
       } finally {
+        delete process.env.EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE;
+        vi.resetModules();
+      }
+    });
+  });
+
+  /**
+   * Sentry MOBILE-J. notifee's stopForegroundService resolves once its STOP is
+   * SENT, and the STOP's stopSelf() is unconditional, so a start sent straight
+   * after it reached the system while the STOP was still queued and was torn
+   * down by it, with its startForeground still owed. The ordering these pin is
+   * "no start is sent while a stop that was sent may not have run yet". The
+   * opposite order needs nothing (see the file header of foregroundService.ts).
+   */
+  describe('the stop-settle wait', () => {
+    /**
+     * THE MOBILE-J assertion: the start waits for the native query to say the
+     * service is gone, and only then reaches notifee.
+     *
+     * Mutation seen failing: replacing `stopMayBeQueued && stopSettleWaitEnabled()`
+     * in runReconcileLoop with `false` (no wait at all) fails here with "expected
+     * "vi.fn()" to be called with arguments: [ 2000 ]" (Number of calls: 0). The
+     * same mutation fails the boot-sweep test below on its display assertion and
+     * the timed-out test with "expected "vi.fn()" to be called 1 times, but got
+     * 2 times", which is the second start going out behind the STOP.
+     */
+    it('does not send a start while an earlier stop may still be queued', async () => {
+      const service = await loadForegroundService();
+      service.setConnectedForegroundServiceDesired(true);
+      await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(1));
+      service.setConnectedForegroundServiceDesired(false);
+      await vi.waitFor(() => expect(service.stopForegroundService).toHaveBeenCalledTimes(1));
+
+      const settleQuery = holdSettleQuery(service.awaitServiceStopped);
+      service.setConnectedForegroundServiceDesired(true);
+      await vi.waitFor(() => expect(service.awaitServiceStopped).toHaveBeenCalledWith(EXPECTED_STOP_SETTLE_TIMEOUT_MS));
+      await flushMicrotasks();
+
+      expect(service.displayNotification).toHaveBeenCalledTimes(1);
+      expect(service.armStopAlarm).toHaveBeenCalledTimes(1);
+
+      settleQuery.settle(true);
+      await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(2));
+    });
+
+    /**
+     * The boot sweep's STOP reaches a service that is usually not running, which
+     * creates an instance only to stop it: the not-foreground shape MOBILE-J
+     * needs. So a start right after it has to wait the same way.
+     *
+     * Mutation seen failing: moving `stopMayBeQueued = true` out of
+     * stopConnectedForegroundService and into attemptStop (so only the reconcile
+     * loop's stops set it) fails with "expected "vi.fn()" to not be called at all,
+     * but actually been called 1 times".
+     */
+    it('waits behind the boot sweep\'s STOP too', async () => {
+      const service = await loadForegroundService();
+      service.stopOrphanedForegroundServiceAtBoot();
+      await vi.waitFor(() => expect(service.stopForegroundService).toHaveBeenCalledTimes(1));
+      await flushMicrotasks();
+
+      const settleQuery = holdSettleQuery(service.awaitServiceStopped);
+      service.setConnectedForegroundServiceDesired(true);
+      await flushMicrotasks();
+
+      expect(service.displayNotification).not.toHaveBeenCalled();
+
+      settleQuery.settle(true);
+      await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(1));
+    });
+
+    /**
+     * The field shape is a burst: active, background, active, background inside
+     * 80 ms. A declaration that lands while the start is waiting supersedes it,
+     * so a burst that ends stopped sends no start at all.
+     *
+     * Mutation seen failing: deleting the `sequence !== desiredSequence` check
+     * after the wait fails with "expected "vi.fn()" to be called 1 times, but
+     * got 2 times" on the display count.
+     */
+    it('sends no start when the burst ends stopped', async () => {
+      const service = await loadForegroundService();
+      service.setConnectedForegroundServiceDesired(true);
+      await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(1));
+      service.setConnectedForegroundServiceDesired(false);
+      await vi.waitFor(() => expect(service.stopForegroundService).toHaveBeenCalledTimes(1));
+
+      const settleQuery = holdSettleQuery(service.awaitServiceStopped);
+      service.setConnectedForegroundServiceDesired(true);
+      await vi.waitFor(() => expect(service.awaitServiceStopped).toHaveBeenCalledTimes(1));
+      service.setConnectedForegroundServiceDesired(false);
+      settleQuery.settle(true);
+
+      await vi.waitFor(() => expect(service.stopForegroundService).toHaveBeenCalledTimes(2));
+      await flushMicrotasks();
+      expect(service.displayNotification).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * Past the bound the service is still there: a stuck main thread with the
+     * STOP queued, or a STOP that was never delivered. Sending the start is the
+     * crash in the first case, so it is skipped. The alarm is armed anyway,
+     * because in the second case a service is still running with nothing native
+     * behind it. And the next start still waits, because nothing showed the STOP
+     * had run.
+     *
+     * Mutation seen failing: clearing stopMayBeQueued on a timed-out query as
+     * well as a settled one fails the last expectation with "expected "vi.fn()"
+     * to be called 2 times, but got 1 times".
+     */
+    it('skips the start but arms the alarm when the STOP does not land in time', async () => {
+      const service = await loadForegroundService();
+      service.setConnectedForegroundServiceDesired(true);
+      await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(1));
+      service.setConnectedForegroundServiceDesired(false);
+      await vi.waitFor(() => expect(service.disarmStopAlarm).toHaveBeenCalledTimes(1));
+
+      service.awaitServiceStopped.mockResolvedValueOnce(false);
+      service.setConnectedForegroundServiceDesired(true);
+      await vi.waitFor(() => expect(service.armStopAlarm).toHaveBeenCalledTimes(2));
+      await flushMicrotasks();
+      expect(service.armStopAlarm).toHaveBeenLastCalledWith(EXPECTED_STOP_ALARM_DELAY_MS);
+      expect(service.displayNotification).toHaveBeenCalledTimes(1);
+
+      // A re-declaration, with no stop in between, still has to wait.
+      service.setConnectedForegroundServiceDesired(true);
+      await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(2));
+      expect(service.awaitServiceStopped).toHaveBeenCalledTimes(2);
+    });
+
+    /**
+     * A start with no stop before it in this process pays nothing. Mutation seen
+     * failing: dropping `stopMayBeQueued &&` from the condition (always query)
+     * fails with "expected "vi.fn()" to not be called at all, but actually been
+     * called 1 times".
+     */
+    it('does not query before a start that no stop preceded', async () => {
+      const service = await loadForegroundService();
+
+      service.setConnectedForegroundServiceDesired(true);
+      await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(1));
+
+      expect(service.awaitServiceStopped).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The trace-build control arm for the device A/B (connectionTrace.ts): with
+     * the switch off the start goes out at once, which should reproduce MOBILE-J
+     * on demand. Mutation seen failing: dropping the stopSettleWaitEnabled() gate
+     * fails with "expected "vi.fn()" to not be called at all, but actually been
+     * called 1 times".
+     */
+    it('starts at once, without the query, when the trace-build switch is off', async () => {
+      process.env.EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE = '1';
+      try {
+        const service = await loadForegroundService();
+        const { setStopSettleWaitEnabled } = await import('@/devsupport/connectionTrace');
+        setStopSettleWaitEnabled(false);
+
+        service.setConnectedForegroundServiceDesired(true);
+        await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(1));
+        service.setConnectedForegroundServiceDesired(false);
+        await vi.waitFor(() => expect(service.stopForegroundService).toHaveBeenCalledTimes(1));
+        service.setConnectedForegroundServiceDesired(true);
+        await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(2));
+
+        expect(service.awaitServiceStopped).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE;
+        vi.resetModules();
+      }
+    });
+
+    /**
+     * A stop whose call REJECTS may still have sent its STOP, so the next start
+     * has to wait just as it does after a stop that resolved. The flag is set
+     * BEFORE the awaited native call for exactly this reason.
+     *
+     * Mutation seen failing: moving `stopMayBeQueued = true` to after the
+     * `await notifee.stopForegroundService()` line (so a rejected stop never sets
+     * it) fails the first expectation with "expected "vi.fn()" to be called with
+     * arguments: [ 2000 ]" (Number of calls: 0).
+     */
+    it('still waits before a start that follows a stop which rejected every attempt', async () => {
+      const service = await loadForegroundService();
+      service.setConnectedForegroundServiceDesired(true);
+      await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(1));
+
+      service.stopForegroundService.mockRejectedValue(new Error('native stop failed'));
+      service.setConnectedForegroundServiceDesired(false);
+      await vi.waitFor(() => expect(service.stopForegroundService).toHaveBeenCalledTimes(3));
+      await flushMicrotasks();
+      expect(service.awaitServiceStopped).not.toHaveBeenCalled();
+
+      service.setConnectedForegroundServiceDesired(true);
+      await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(2));
+
+      expect(service.awaitServiceStopped).toHaveBeenCalledWith(EXPECTED_STOP_SETTLE_TIMEOUT_MS);
+      expect(service.awaitServiceStopped.mock.invocationCallOrder[0]).toBeLessThan(
+        service.displayNotification.mock.invocationCallOrder[1],
+      );
+    });
+
+    /**
+     * A settled wait clears the flag: the STOP has run, so a later start with no
+     * stop in between has nothing to wait for and must not pay a second query.
+     *
+     * Mutation seen failing: deleting `if (settled) stopMayBeQueued = false` in
+     * awaitQueuedStop fails the query count with "expected "vi.fn()" to be called
+     * 1 times, but got 2 times".
+     */
+    it('does not query again for a re-declared start once a wait has settled', async () => {
+      const service = await loadForegroundService();
+      service.setConnectedForegroundServiceDesired(true);
+      await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(1));
+      service.setConnectedForegroundServiceDesired(false);
+      await vi.waitFor(() => expect(service.stopForegroundService).toHaveBeenCalledTimes(1));
+      service.setConnectedForegroundServiceDesired(true);
+      await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(2));
+      expect(service.awaitServiceStopped).toHaveBeenCalledTimes(1);
+
+      // No stop in between.
+      service.setConnectedForegroundServiceDesired(true);
+      await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(3));
+
+      expect(service.awaitServiceStopped).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * The timed-out branch arms the alarm only when the trace-build switch is on.
+     * With it off, nothing native may be armed, and the start is still skipped.
+     *
+     * Mutation seen failing: dropping the `nativeStopAlarmEnabled()` gate on the
+     * arm inside the `!settled` block fails with "expected "vi.fn()" to not be
+     * called at all, but actually been called 1 times".
+     */
+    it('does not arm the alarm on a timed-out wait when the alarm switch is off', async () => {
+      process.env.EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE = '1';
+      try {
+        const service = await loadForegroundService();
+        const { setNativeStopAlarmEnabled } = await import('@/devsupport/connectionTrace');
+        setNativeStopAlarmEnabled(false);
+
+        service.setConnectedForegroundServiceDesired(true);
+        await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(1));
+        service.setConnectedForegroundServiceDesired(false);
+        await vi.waitFor(() => expect(service.stopForegroundService).toHaveBeenCalledTimes(1));
+
+        service.awaitServiceStopped.mockResolvedValueOnce(false);
+        service.setConnectedForegroundServiceDesired(true);
+        await vi.waitFor(() => expect(service.awaitServiceStopped).toHaveBeenCalledTimes(1));
+        await flushMicrotasks();
+
+        expect(service.armStopAlarm).not.toHaveBeenCalled();
+        expect(service.displayNotification).toHaveBeenCalledTimes(1);
+      } finally {
+        delete process.env.EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE;
+        vi.resetModules();
+      }
+    });
+
+    /**
+     * The device A/B reads the wait's outcome from the trace line, so the event
+     * has to carry `settled` and a numeric `waitedMs`. It goes through
+     * console.log, which is where traceConnection writes (the real module, not a
+     * mock). waitedMs is only checked to be a number, never a value.
+     *
+     * Mutation seen failing: deleting the traceConnection('fgs-stop-settle', ...)
+     * call in awaitQueuedStop fails with "expected [] to have a length of 1 but
+     * got +0" on the matching-lines expectation.
+     */
+    it.each([true, false])('traces the wait with settled=%s and a numeric waitedMs', async (settled) => {
+      process.env.EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE = '1';
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      try {
+        const service = await loadForegroundService();
+        service.setConnectedForegroundServiceDesired(true);
+        await vi.waitFor(() => expect(service.displayNotification).toHaveBeenCalledTimes(1));
+        service.setConnectedForegroundServiceDesired(false);
+        await vi.waitFor(() => expect(service.stopForegroundService).toHaveBeenCalledTimes(1));
+
+        service.awaitServiceStopped.mockResolvedValueOnce(settled);
+        service.setConnectedForegroundServiceDesired(true);
+        await vi.waitFor(() => expect(service.awaitServiceStopped).toHaveBeenCalledTimes(1));
+        await flushMicrotasks();
+
+        const settleLines = logSpy.mock.calls
+          .map((callArguments) => String(callArguments[0]))
+          .filter((line) => line.startsWith('[connection-trace] fgs-stop-settle'));
+        expect(settleLines).toHaveLength(1);
+        expect(settleLines[0]).toContain(`settled=${String(settled)}`);
+        const waitedMatch = /waitedMs=(-?\d+)/.exec(settleLines[0]);
+        expect(waitedMatch).not.toBeNull();
+        expect(Number.isFinite(Number(waitedMatch?.[1]))).toBe(true);
+      } finally {
+        logSpy.mockRestore();
         delete process.env.EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE;
         vi.resetModules();
       }

@@ -100,7 +100,11 @@ modules/                      # LOCAL Expo modules, autolinked by CNG (no ios/ o
                               #   receiver stops the service with no JS involved. It sends
                               #   notifee's own STOP action, NEVER a bare stopService, which
                               #   leaves notifee's static id set until JS next stops, so a start
-                              #   landing first would skip startForeground and crash.
+                              #   landing first would skip startForeground and crash. It also
+                              #   holds the stop-settle query (Sentry MOBILE-J): a start that
+                              #   follows a stop waits, natively, until notifee's service record
+                              #   is gone, because a STOP that was only SENT still kills the next
+                              #   start when it runs.
                               #   Android-only; the receiver lives in the module's own manifest
 patches/                      # patch-package patches, applied by the `postinstall` script.
                               #   (react-native-enriched-markdown+0.7.4.patch is GONE: it removed

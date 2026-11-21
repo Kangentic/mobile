@@ -220,7 +220,26 @@ export function setNativeStopAlarmEnabled(enabled: boolean): void {
   for (const listener of keepaliveProbeListeners) listener();
 }
 
-/** For a useSyncExternalStore subscription in the two Settings switches. */
+/**
+ * The MOBILE-J probe switch. When off, foregroundService.ts skips the wait that keeps a keepalive
+ * start from reaching the system while an earlier notifee STOP is still queued. That is the control
+ * arm: with it off, a stop followed at once by a start should reproduce the crash on demand (the
+ * developer guide's recipe). It acts on the next start, and like the two switches above it
+ * collapses to `true` outside a trace build, so a store build can never ship with the wait off.
+ */
+let stopSettleWaitOn = true;
+
+export function stopSettleWaitEnabled(): boolean {
+  return traceEnabled ? stopSettleWaitOn : true;
+}
+
+export function setStopSettleWaitEnabled(enabled: boolean): void {
+  if (!traceEnabled || stopSettleWaitOn === enabled) return;
+  stopSettleWaitOn = enabled;
+  for (const listener of keepaliveProbeListeners) listener();
+}
+
+/** For a useSyncExternalStore subscription in the three Settings switches. */
 export function subscribeKeepaliveProbe(listener: () => void): () => void {
   keepaliveProbeListeners.add(listener);
   return () => {

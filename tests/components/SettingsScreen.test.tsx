@@ -89,6 +89,8 @@ const mockKeepaliveCeilingEnabled = jest.fn().mockReturnValue(true);
 const mockSetKeepaliveCeilingEnabled = jest.fn();
 const mockNativeStopAlarmEnabled = jest.fn().mockReturnValue(true);
 const mockSetNativeStopAlarmEnabled = jest.fn();
+const mockStopSettleWaitEnabled = jest.fn().mockReturnValue(true);
+const mockSetStopSettleWaitEnabled = jest.fn();
 // Captures what useSyncExternalStore hands the keepalive probe subscription, so
 // a test can fire the store's change notification by hand. Without it the
 // subscribe stub swallowed the listener, and a switch that never re-rendered on
@@ -122,6 +124,8 @@ jest.mock('@/devsupport/connectionTrace', () => ({
   setKeepaliveCeilingEnabled: (enabled: boolean) => mockSetKeepaliveCeilingEnabled(enabled),
   nativeStopAlarmEnabled: () => mockNativeStopAlarmEnabled(),
   setNativeStopAlarmEnabled: (enabled: boolean) => mockSetNativeStopAlarmEnabled(enabled),
+  stopSettleWaitEnabled: () => mockStopSettleWaitEnabled(),
+  setStopSettleWaitEnabled: (enabled: boolean) => mockSetStopSettleWaitEnabled(enabled),
   subscribeKeepaliveProbe: (listener: () => void) => mockSubscribeKeepaliveProbe(listener),
   retiredReceiveStreamsEnabled: () => mockRetiredReceiveStreamsEnabled(),
   setRetiredReceiveStreamsEnabled: (enabled: boolean) => mockSetRetiredReceiveStreamsEnabled(enabled),
@@ -198,6 +202,8 @@ describe('SettingsScreen', () => {
     mockSetKeepaliveCeilingEnabled.mockClear();
     mockNativeStopAlarmEnabled.mockReturnValue(true);
     mockSetNativeStopAlarmEnabled.mockClear();
+    mockStopSettleWaitEnabled.mockReturnValue(true);
+    mockSetStopSettleWaitEnabled.mockClear();
     mockSubscribeKeepaliveProbe.mockClear();
     mockKeepaliveProbeListeners.clear();
     mockRetiredReceiveStreamsEnabled.mockReturnValue(true);
@@ -619,6 +625,7 @@ describe('SettingsScreen', () => {
     expect(screen.queryByTestId('settings-connection-trace-foreground-kick')).toBeNull();
     expect(screen.queryByTestId('settings-connection-trace-keepalive-ceiling')).toBeNull();
     expect(screen.queryByTestId('settings-connection-trace-native-stop-alarm')).toBeNull();
+    expect(screen.queryByTestId('settings-connection-trace-stop-settle-wait')).toBeNull();
     expect(screen.queryByTestId('settings-connection-trace-retired-keys')).toBeNull();
     expect(screen.queryByTestId('settings-connection-trace-frame-liveness')).toBeNull();
   });
@@ -687,6 +694,34 @@ describe('SettingsScreen', () => {
 
     expect(mockSetKeepaliveCeilingEnabled).toHaveBeenCalledWith(false);
     expect(mockSetNativeStopAlarmEnabled).toHaveBeenCalledWith(false);
+  });
+
+  /**
+   * The MOBILE-J switch: the control arm of the device A/B (the developer
+   * guide's resume-and-pause burst). With it off a keepalive start goes out
+   * behind a STOP that has not run, which reproduced the crash on demand. It
+   * has to reach its setter and re-render from its own getter (the test below
+   * has the reasoning for the re-render half).
+   *
+   * Mutation seen failing: replacing `onValueChange={setStopSettleWaitEnabled}`
+   * with `onValueChange={() => {}}` fails with "Expected: false / Number of
+   * calls: 0" in both platform projects.
+   */
+  it('reveals the MOBILE-J switch, wires it to its setter, and re-renders it from its own getter', async () => {
+    mockConnectionTraceEnabled.mockReturnValue(true);
+    await renderSettings();
+    const readChecked = (testID: string): boolean => screen.getByTestId(testID).props.accessibilityState.checked;
+    expect(readChecked('settings-connection-trace-stop-settle-wait')).toBe(true);
+
+    await fireEvent.press(screen.getByTestId('settings-connection-trace-stop-settle-wait'));
+    expect(mockSetStopSettleWaitEnabled).toHaveBeenCalledWith(false);
+
+    mockStopSettleWaitEnabled.mockReturnValue(false);
+    await act(() => {
+      for (const listener of [...mockKeepaliveProbeListeners]) listener();
+    });
+    expect(readChecked('settings-connection-trace-stop-settle-wait')).toBe(false);
+    expect(readChecked('settings-connection-trace-native-stop-alarm')).toBe(true);
   });
 
   /**
