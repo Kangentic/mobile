@@ -362,9 +362,13 @@ a local Expo module):
   id in a static and skips `startForeground` while it is set. Only the STOP branch, or notifee's
   completion callback when the JS runner resolves, clears that static. A bare `stopService` would
   leave it set until JS next ran a stop, and a start arriving first would never call
-  `startForeground`, which is a crash of its own. The app's flow puts a JS stop before every
-  start, so this is a path avoided rather than one observed. The STOP intent makes the receiver
-  correct without relying on that.
+  `startForeground`, which is a crash of its own. This used to say "the app's flow puts a JS stop
+  before every start, so this is a path avoided rather than one observed". What the flow put
+  first was the stop's SEND, and MOBILE-J (below) is what the gap between a STOP's send and its
+  running costs. Since that fix every start waits for the STOP to have run, which also enforces
+  the ordering this path relied on. It is still a path avoided, not one observed: MOBILE-J's
+  timing rules it out (below). The STOP intent makes the receiver correct without relying on any
+  of that.
 
 That is a single start path to guard, and it is the only one: `asForegroundService` appears in
 `foregroundService.ts` and nowhere else (`tests/unit/foregroundServiceStartConfinement.test.ts`
@@ -393,6 +397,98 @@ the JS ceiling switched off and Android's budget shortened to 20 minutes, at the
 10-minute alarm setting: the alarm stopped the service at 17m29s and the budget passed with no
 crash, while the control arm (alarm off too) died at 20m10s with the exact MOBILE-3 exception. The
 procedure and the readings are in the developer guide's "Checking the foreground service directly".
+
+**MOBILE-J: a start that reached the system behind a STOP that had not run yet.** MOBILE-3 was a
+stop that never came. MOBILE-J (1.5.1+22, one event on one install, a Samsung on Android 17) is
+the other half of notifee's contract, `ForegroundServiceDidNotStartInTimeException`: a
+`startForegroundService` that was never followed by `startForeground`. The task that took it on
+offered two leads, and the event picked one.
+
+- **What the event shows** (its breadcrumbs, UTC). The app went to the background at 09:26:29
+  with the screen turning off, so the keepalive started. Two minutes later, starting at
+  09:28:31.769, MainActivity resumed and paused twice in about 80 ms around notifee's
+  notification-tap trampoline (`NotificationReceiverActivity`), so JS saw `active`,
+  `background`, `active`, `background`. The crash came at .851, 4 ms after the last lifecycle
+  crumb, with `screen` `/task/[taskId]` and `lens` `terminal`.
+- **Ruled out by that timing.** Three causes do not fit:
+  - **The start deadline.** An unanswered start fails "a few seconds" after it is sent (the FGS
+    troubleshooting page; no default was found in `ActiveServices.java`), and the last start
+    before the burst was two minutes earlier.
+  - **The native stop alarm.** It was armed at 09:26:30 and cannot fire before about 09:33.
+  - **The stale notifee static described above.** It skips `startForeground`, so it too would
+    fail at the deadline, not inside an 80 ms burst.
+- **Read from the notifee 9.1.8 bytecode.**
+  - `onStartCommand` calls `startForeground` synchronously.
+  - The STOP branch calls `stopSelf()` with no start id.
+  - `displayNotification` resolves after `startForegroundService()` returns.
+  - `stopForegroundService` resolves once `startService(STOP)` returns. "Resolved" means the STOP
+    was sent, not that it ran.
+- **Read from AOSP's `ActiveServices.java`** (main, through a fetch).
+  - `stopServiceTokenLocked` skips its last-start-id check for the -1 that `stopSelf()` passes.
+  - `bringDownServiceLocked` posts this exact crash when it brings down a service whose start is
+    still owed (`fgRequired`). The deadline path reaches the same place through
+    `stopServiceLocked`.
+  - `sendServiceArgsLocked` waives the obligation for a service that is already foreground.
+  - `startServiceInnerLocked` assigns `fgRequired` on every start, so a plain `startService`,
+    which is what the STOP is, clears an owed start.
+- **Read from the Android 17 behavior-change pages.** `behavior-changes-all`,
+  `behavior-changes-17`, the FGS `changes` page and the FGS `troubleshooting` page list nothing
+  about foreground services, start deadlines or background-start limits. Android 17 is not the
+  cause.
+- **The mechanism**, inferred from the reads above and reproduced on an emulator below.
+  - The reconcile loop serialized the SENDS of start and stop, not their running.
+  - A start declared straight after a stop therefore reached AMS while the STOP was still queued
+    on the main thread.
+  - The service was not foreground at that moment, for one of two reasons. Our stop releases
+    notifee's runner first, and its completion calls `stopForeground(true)`. Or a STOP delivered
+    to a stopped service creates an instance only to stop it.
+  - So AMS kept the start owed, the STOP's `stopSelf()` brought the service down, and the crash
+    was immediate.
+  - Had the service still been foreground, AMS would have waived the start, and the STOP would
+    have killed the keepalive silently instead.
+  - The reverse order is safe. A STOP sent after a start runs behind it on the same thread, and
+    its `startService` clears the start's obligation besides.
+- **The fix.** `foregroundService.ts` records every stop it issues, the boot sweep and the
+  reassert retry included. Before the next start it waits, natively, until notifee's service has
+  no record left: `awaitServiceStopped` in `modules/foreground-service-guard`, which polls
+  `getRunningServices` for the app's own record.
+  - **Why the record works as the signal.** `bringDownServiceLocked` removes it, so "absent"
+    means the STOP has run.
+  - **Why the wait is native.** RN stops servicing JS timers while the activity is paused unless
+    a headless task is running (inferred from RN's `JavaTimerManager`, not measured), which is
+    exactly the moment a keepalive starts.
+  - **If the bound (2 s) passes**, the start is skipped and the alarm is armed anyway. Sending the
+    start there is the crash. The keepalive degrades to a plain background socket, as it does when
+    the notification cannot post.
+  - **A declaration that lands while the start is waiting supersedes it**, so a burst that ends
+    in the foreground sends no start at all.
+  - `tests/unit/foregroundService.test.ts` ("the stop-settle wait") pins the ordering.
+- **Measured** on emulators (2026-11-21), with a trace release build of the fix and the demo
+  pairing. A trace-build Settings switch, **Stop-settle wait**, turns the wait off for the
+  control arm. The trigger was a burst of resume-and-pause pairs: `am start` of the app, then of
+  the launcher, sent back to back on the device.
+  - **API 36** (`default` image, the Settings screen):
+    - **Wait off:** the crash in 3 of 3 runs, each within the first few of 20 pairs, every one
+      preceded by ActivityManager's "Bringing down service while still waiting for start
+      foreground".
+    - **Wait on:** no crash over 60 pairs in one process, and the keepalive was foreground
+      afterwards.
+  - **Android 17** (API 37, `default` image):
+    - **The Settings screen:** 60 pairs did not crash with the wait off. Every STOP ran before the
+      next start arrived.
+    - **A task's terminal lens**, the screen the field event names: wait off crashed in 3 of 3
+      runs. The stack carries the field event's own frames (`Handler.dispatchMessageImpl:142`,
+      `dispatchMessage:125`). With the wait on, 80 pairs did not crash.
+  - **The waits.** Every wait settled. On API 36 they took 0 to 81 ms (median about 8). On the
+    Android 17 terminal lens they took 1 to 498 ms (median about 35). The 2 s bound is four times
+    the worst wait seen.
+  - **An idle app does not crash this way.** A stop and a start declared back to back with
+    nothing else going on did not crash with the wait off: the STOP ran first. The race needs
+    main-thread work queued ahead of the STOP, which is what a resume-and-pause burst supplies.
+  - **A crash can repeat itself.** After one control crash, Android restarted the crashed service
+    carrying the dead process's owed start and its STOP. It brought the service down again 0.4 s
+    into the new process, before any JS ran: a second identical crash, from a single burst.
+  - The procedure is in the developer guide's "Reproducing MOBILE-J".
 
 **That lingering channel does not hold remote push back for long.** This is read from the desktop
 and relay source, not measured. The desktop suppresses a push only while the phone's bridge

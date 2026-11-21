@@ -1,6 +1,7 @@
 /**
  * The native stop alarm on notifee's dataSync foreground service
- * (modules/foreground-service-guard, Sentry MOBILE-3 on 0.8.0+13).
+ * (modules/foreground-service-guard, Sentry MOBILE-3 on 0.8.0+13), and the
+ * stop-settle query beside it (Sentry MOBILE-J on 1.5.1+22).
  *
  * Two halves. The JS wrapper is tested by behaviour. The Kotlin cannot be loaded
  * by any JS tier, so the decisions that would fail SILENTLY on a device are
@@ -11,9 +12,11 @@
  *   startForeground);
  * - an alarm that needs no exact-alarm permission;
  * - a receiver nothing outside the app can fire;
+ * - a settle wait that suspends rather than blocks, and asks about notifee's
+ *   service in the app's own package;
  * - names that still match across the TS, Kotlin, manifest and plugin.
- * The device run in the developer guide proves the alarm actually stops the
- * service.
+ * The device runs in the developer guide prove the alarm actually stops the
+ * service and the settle wait actually holds a start behind a STOP.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -23,8 +26,14 @@ import { NOTIFEE_FOREGROUND_SERVICE } from '../../plugins/withAndroidPushService
 const platformMock = vi.hoisted(() => ({ OS: 'android' as 'android' | 'ios' }));
 vi.mock('react-native', () => ({ Platform: platformMock }));
 
+interface GuardNativeModuleDouble {
+  armStopAlarm: (delayMs: number) => void;
+  disarmStopAlarm: () => void;
+  awaitServiceStopped?: (timeoutMs: number) => Promise<boolean>;
+}
+
 const nativeModuleState = vi.hoisted(() => ({
-  module: null as null | { armStopAlarm: (delayMs: number) => void; disarmStopAlarm: () => void },
+  module: null as null | GuardNativeModuleDouble,
   requestedNames: [] as string[],
 }));
 vi.mock('expo-modules-core', () => ({
@@ -120,6 +129,53 @@ describe('foreground-service-guard JS wrapper', () => {
     guard.armForegroundServiceStopAlarm(123_456);
 
     expect(nativeModuleState.requestedNames).toEqual([]);
+    await expect(guard.awaitForegroundServiceStopped(1_234)).resolves.toBe(true);
+  });
+
+  /**
+   * The settle query's answer has to reach the reconcile loop as given: a
+   * timed-out `false` is what makes the loop skip a start that would crash.
+   *
+   * Mutation seen failing: making the wrapper return `true` after awaiting the
+   * native call fails the second expectation with "expected true to be false".
+   */
+  it('forwards the settle timeout and returns the native answer', async () => {
+    const awaitServiceStopped = vi.fn<(timeoutMs: number) => Promise<boolean>>();
+    nativeModuleState.module = { armStopAlarm: vi.fn(), disarmStopAlarm: vi.fn(), awaitServiceStopped };
+    const guard = await loadGuard();
+
+    awaitServiceStopped.mockResolvedValueOnce(true);
+    await expect(guard.awaitForegroundServiceStopped(1_234)).resolves.toBe(true);
+    awaitServiceStopped.mockResolvedValueOnce(false);
+    await expect(guard.awaitForegroundServiceStopped(1_234)).resolves.toBe(false);
+
+    expect(awaitServiceStopped).toHaveBeenCalledWith(1_234);
+  });
+
+  /**
+   * A query that fails tells the loop nothing, and `false` would withdraw the
+   * keepalive from that device for good. `true` puts it back where every device
+   * stood before the wait existed.
+   *
+   * Mutation seen failing: removing the try/catch around the native call fails
+   * with "promise rejected "Error: getRunningServices refused" instead of
+   * resolving".
+   */
+  it('treats a failed settle query as settled rather than withdrawing the keepalive', async () => {
+    nativeModuleState.module = {
+      armStopAlarm: vi.fn(),
+      disarmStopAlarm: vi.fn(),
+      awaitServiceStopped: () => Promise.reject(new Error('getRunningServices refused')),
+    };
+    const guard = await loadGuard();
+
+    await expect(guard.awaitForegroundServiceStopped(1_234)).resolves.toBe(true);
+  });
+
+  it('treats a missing module as settled, such as a build without it', async () => {
+    const guard = await loadGuard();
+
+    await expect(guard.awaitForegroundServiceStopped(1_234)).resolves.toBe(true);
   });
 });
 
@@ -278,20 +334,73 @@ describe('foreground-service-guard native source', () => {
     expect(moduleKotlin).toContain('Name("ForegroundServiceGuard")');
     expect(wrapperTypeScript).toContain("requireOptionalNativeModule<ForegroundServiceGuardNativeModule>('ForegroundServiceGuard')");
     // Synchronous Function, not AsyncFunction: the arm must have landed before
-    // displayNotification is issued.
+    // displayNotification is issued. `\b` keeps "AsyncFunction(" from matching.
     expect(moduleKotlin).toMatch(/\bFunction\("armStopAlarm"\)/);
     expect(moduleKotlin).toMatch(/\bFunction\("disarmStopAlarm"\)/);
-    expect(moduleKotlin).not.toContain('AsyncFunction');
+    expect(moduleKotlin).not.toMatch(/AsyncFunction\("(armStopAlarm|disarmStopAlarm)"\)/);
+    expect(wrapperTypeScript).toContain('nativeModule.awaitServiceStopped(timeoutMs)');
+  });
+
+  /**
+   * The settle wait (MOBILE-J) holds a keepalive start until notifee's STOP has
+   * RUN, and the STOP runs on the main thread. So the wait has to be async (a
+   * synchronous Function runs on the JS thread's call and would block it), and
+   * it has to SUSPEND: an AsyncFunction body runs on expo's modules queue, one
+   * HandlerThread every Expo module shares, and a Thread.sleep there would stall
+   * all of their async calls for up to the whole bound.
+   *
+   * Mutations seen failing: replacing `delay(SETTLE_POLL_INTERVAL_MS)` with
+   * `Thread.sleep(SETTLE_POLL_INTERVAL_MS)` (and dropping `suspend`) fails with
+   * "expected 'package expo.modules.foregroundservic…' to match
+   * /suspend fun awaitNotifeeServiceStopped\(context: Context, timeoutMs: Long\)…/".
+   * Appending `.runOnQueue(Queues.MAIN)` to the module's AsyncFunction, which
+   * the positive pattern above still matches, fails the `Queues.MAIN` line with
+   * "expected 'package expo.modules.foregroundservic…' not to match /Queues\.MAIN/".
+   * On a device that one is silent: the poll would wait on the thread that has
+   * to run the STOP, every wait would time out, and no keepalive would start
+   * after any stop.
+   */
+  it('waits for the STOP in a suspending coroutine, never a blocking sleep or the main thread', () => {
+    expect(moduleKotlin).toMatch(
+      /AsyncFunction\("awaitServiceStopped"\) Coroutine \{\s*timeoutMs: Double\s*->\s*ForegroundServiceGuard\.awaitNotifeeServiceStopped\(context, timeoutMs\.toLong\(\)\)/,
+    );
+    expect(moduleKotlin).not.toMatch(/Queues\.MAIN/);
+    expect(guardKotlin).toMatch(
+      /suspend fun awaitNotifeeServiceStopped\(context: Context, timeoutMs: Long\): Boolean \{[\s\S]*?delay\(SETTLE_POLL_INTERVAL_MS\)/,
+    );
+    expect(guardKotlin).not.toContain('Thread.sleep');
+    expect(guardKotlin).not.toMatch(/Dispatchers\.Main/);
+  });
+
+  /**
+   * "Absent" is the only answer that lets a start through, so the query must be
+   * asking about the right service. A wrong class name or a foreign package reads
+   * absent forever, and every start goes out behind its STOP again, silently.
+   *
+   * Mutation seen failing: changing `serviceInfo.service.className ==
+   * NOTIFEE_FOREGROUND_SERVICE` to compare against `"app.notifee.core.Other"`
+   * fails with "expected 'package expo.modules.foregroundservic…' to match
+   * /getRunningServices\(Int\.MAX_VALUE\)…/".
+   */
+  it('asks the system about notifee\'s service in the app\'s own package', () => {
+    expect(guardKotlin).toMatch(
+      /getRunningServices\(Int\.MAX_VALUE\)\.any \{ serviceInfo ->\s*serviceInfo\.service\.packageName == context\.packageName &&\s*serviceInfo\.service\.className == NOTIFEE_FOREGROUND_SERVICE\s*\}/,
+    );
   });
 
   /**
    * Everything above was read out of notifee 9.1.8's bytecode: the STOP action
    * string, START_NOT_STICKY after a start (why a sticky restart is not a start
    * path), the static id that a bare stopService leaves set, and the absence of
-   * an onTimeout override. None of that is public API. On any version change,
-   * re-run `javap -c -p` on app.notifee.core.ForegroundService from the new AAR's
-   * classes.jar and re-check all four. If the new version overrides onTimeout,
-   * this alarm may be replaceable. Then update the pinned version here.
+   * an onTimeout override. So were the settle wait's premises (MOBILE-J): the
+   * STOP branch calls stopSelf() with no start id, onStartCommand calls
+   * startForeground synchronously, and both displayNotification and
+   * stopForegroundService resolve once their intent is SENT (`app.notifee.core.c`
+   * and `app.notifee.core.Notifee`). None of that is public API. On any version
+   * change, re-run `javap -c -p` on those classes from the new AAR's classes.jar
+   * and re-check all of it. If the new version overrides onTimeout, this alarm
+   * may be replaceable; if its STOP stops by start id, the settle wait may be.
+   * Then update the pinned version here.
    */
   it('runs against the notifee version whose service internals were verified', () => {
     const installed = JSON.parse(

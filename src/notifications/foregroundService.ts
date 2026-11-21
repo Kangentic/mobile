@@ -1,6 +1,10 @@
 import notifee, { AndroidForegroundServiceType } from '@notifee/react-native';
-import { nativeStopAlarmEnabled } from '@/devsupport/connectionTrace';
-import { armForegroundServiceStopAlarm, disarmForegroundServiceStopAlarm } from '../../modules/foreground-service-guard';
+import { nativeStopAlarmEnabled, stopSettleWaitEnabled, traceConnection } from '@/devsupport/connectionTrace';
+import {
+  armForegroundServiceStopAlarm,
+  awaitForegroundServiceStopped,
+  disarmForegroundServiceStopAlarm,
+} from '../../modules/foreground-service-guard';
 import { CONNECTION_NOTIFICATION_ID } from './categoryCopy';
 import { ANDROID_NOTIFICATION_PRESENTATION, CONNECTION_CHANNEL_ID } from './channels';
 
@@ -24,8 +28,23 @@ import { ANDROID_NOTIFICATION_PRESENTATION, CONNECTION_CHANNEL_ID } from './chan
  * process was still alive 7 and 14 hours later.
  *
  * So: one desired state, one serialized reconcile loop, and a stop that is
- * retried rather than swallowed. Start and stop cannot interleave because the
- * loop only ever has one native call in flight.
+ * retried rather than swallowed. Start and stop cannot interleave their SENDS,
+ * because the loop only ever has one native call in flight.
+ *
+ * Their LANDING is a separate matter, and Sentry MOBILE-J (1.5.1+22) is what
+ * that difference costs. This used to say flatly that start and stop "cannot
+ * interleave", and of the sends it was true. But notifee's stopForegroundService
+ * resolves once its STOP intent is SENT (read from the 9.1.8 bytecode), and the
+ * STOP branch then calls stopSelf() with no start id, which AOSP's
+ * stopServiceTokenLocked treats as unconditional. So a start issued straight
+ * after a stop reached the system while the STOP still sat in the main thread's
+ * queue, the STOP ran, and bringDownServiceLocked crashed the app because the
+ * start's startForeground was still owed. The field trigger was a notification
+ * tap that resumed and paused the activity twice in about 80 ms. So a start that
+ * follows a stop now waits, natively, until the service record is gone, which
+ * means the STOP has run (awaitQueuedStop below). The opposite order needs no
+ * wait: a STOP sent after a start runs behind it on the same thread, and its
+ * startService clears the start's obligation in AMS besides.
  *
  * And a native stop alarm under all of it, because MOBILE-3 recurred on a build
  * that had everything above (0.8.0+13). Every start arms an AlarmManager alarm
@@ -79,6 +98,18 @@ const NATIVE_STOP_ALARM_DELAY_MS = 7 * 60_000;
  */
 const STOP_ATTEMPTS = 3;
 
+/**
+ * How long a start waits for an earlier STOP to have run (MOBILE-J). A STOP is a
+ * main-thread message, so it normally runs within a few frames. Measured on
+ * emulators during resume-and-pause bursts (2026-11-21, docs/architecture.md):
+ * 0 to 81 ms on API 36, and 1 to 498 ms on Android 17's terminal lens, so this is
+ * four times the worst wait seen. The bound only matters when the main thread is
+ * stuck, or when the STOP was never delivered. In both cases the start is skipped
+ * rather than sent, because sending it is the crash. See the timed-out branch in
+ * runReconcileLoop.
+ */
+const STOP_SETTLE_TIMEOUT_MS = 2_000;
+
 let runnerRegistered = false;
 let resolveServiceRunner: (() => void) | null = null;
 
@@ -93,6 +124,12 @@ let desiredSequence = 0;
 let appliedSequence = 0;
 /** Set when a stop exhausted its attempts, so the work stays owed rather than lost. */
 let stopFailed = false;
+/**
+ * Set whenever a stop is issued, and cleared only once the native query shows
+ * notifee's service gone. While it is set, a STOP may still be queued on the
+ * main thread, and a start must not be sent behind it (MOBILE-J).
+ */
+let stopMayBeQueued = false;
 let reconciling: Promise<void> | null = null;
 
 /**
@@ -239,6 +276,27 @@ async function runReconcileLoop(): Promise<void> {
       // has been issued the service may exist, so a later stop is owed whether
       // or not this call resolves.
       appliedSequence = sequence;
+      if (stopMayBeQueued && stopSettleWaitEnabled()) {
+        const settled = await awaitQueuedStop();
+        if (sequence !== desiredSequence) {
+          // Superseded while waiting, which is what a burst of foreground and
+          // background transitions looks like. Apply the newer declaration
+          // instead. A burst that ends stopped then sends no start at all.
+          continue;
+        }
+        if (!settled) {
+          // The service is still there after the bound: the main thread is
+          // stuck with the STOP queued, or the STOP was never delivered. Sending
+          // the start is the crash in the first case, so skip it in both. The
+          // keepalive degrades to a plain background socket, as it does when the
+          // notification fails to post. The alarm is still armed, because in the
+          // second case the service the STOP missed is still running, and the
+          // stop that preceded this start has already disarmed it. The flag
+          // stays set, so the next start waits again.
+          if (nativeStopAlarmEnabled()) armForegroundServiceStopAlarm(NATIVE_STOP_ALARM_DELAY_MS);
+          continue;
+        }
+      }
       try {
         await startConnectedForegroundService();
       } catch {
@@ -266,6 +324,23 @@ async function runReconcileLoop(): Promise<void> {
     stopFailed = true;
     return;
   }
+}
+
+/**
+ * Waits until the last STOP has actually run: notifee's service has no record
+ * left in the system. True when it is gone, false at STOP_SETTLE_TIMEOUT_MS.
+ *
+ * A native wait, never a JS poll. React Native stops servicing JS timers once
+ * the activity pauses unless a headless task is running (inferred from RN's
+ * JavaTimerManager), and a start runs on exactly that transition, just after the
+ * previous keepalive's runner was released. A native promise resolves either way.
+ */
+async function awaitQueuedStop(): Promise<boolean> {
+  const startedAtMs = Date.now();
+  const settled = await awaitForegroundServiceStopped(STOP_SETTLE_TIMEOUT_MS);
+  traceConnection('fgs-stop-settle', { settled, waitedMs: Date.now() - startedAtMs });
+  if (settled) stopMayBeQueued = false;
+  return settled;
 }
 
 async function attemptStop(): Promise<boolean> {
@@ -308,6 +383,10 @@ async function stopConnectedForegroundService(): Promise<void> {
   // JS task finish, and stopForegroundService is what tears the service down.
   resolveServiceRunner?.();
   resolveServiceRunner = null;
+  // Before the call, not after it resolves: a call that rejects may still have
+  // sent its STOP, and a STOP that may be queued is what the next start waits on.
+  // This covers every stop, the boot sweep and the reassert retry included.
+  stopMayBeQueued = true;
   await notifee.stopForegroundService();
   // Only AFTER the stop resolved, i.e. was sent. A stop that rejects leaves the
   // alarm armed, and an owed stop is precisely what the alarm is for.

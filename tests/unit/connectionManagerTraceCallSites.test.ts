@@ -45,6 +45,7 @@ const connectionTraceMocks = vi.hoisted(() => ({
   foregroundKickEnabled: vi.fn<() => boolean>(() => true),
   keepaliveCeilingEnabled: vi.fn<() => boolean>(() => true),
   nativeStopAlarmEnabled: vi.fn<() => boolean>(() => true),
+  stopSettleWaitEnabled: vi.fn<() => boolean>(() => true),
   markConnectionTraceForeground: vi.fn<() => void>(),
   // Read by the real SessionManager and CapabilityClient the second describe
   // runs, and by the foreground probe; these are the store-build values.
@@ -115,10 +116,12 @@ vi.mock('@notifee/react-native', () => ({
 
 // The native stop alarm's JS wrapper, whose real module needs expo-modules-core.
 // Same specifier the source uses: this file and src/notifications/ both sit two
-// directories below the repo root.
+// directories below the repo root. The settle query answers "the STOP has run"
+// at once, so a start behind an earlier stop is not held here.
 vi.mock('../../modules/foreground-service-guard', () => ({
   armForegroundServiceStopAlarm: vi.fn(),
   disarmForegroundServiceStopAlarm: vi.fn(),
+  awaitForegroundServiceStopped: vi.fn(async () => true),
 }));
 
 // The dev rig's in-process fake desktop, reduced to a loopback pair and the

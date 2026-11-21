@@ -2795,10 +2795,12 @@ is doing. Two more readings go with the `dumpsys activity services` one:
   `adb logcat -s KangenticFgsGuard`.
 
 To prove the alarm, JS must not be able to stop the service, and that has to be a condition you
-set rather than a hope. A trace build (`EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE=1`) has two
-switches in Settings, under Connection trace. **Keepalive ceiling** off disarms both JS halves of
-the ceiling. **Native stop alarm** off skips the arm, which is the control arm. Both act on the
-next keepalive, so flip them before pressing HOME. Then shorten Android's budget so the control
+set rather than a hope. A trace build (`EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE=1`) has three
+switches in Settings, under Connection trace, and two of them serve this run. **Keepalive
+ceiling** off disarms both JS halves of the ceiling. **Native stop alarm** off skips the arm,
+which is the control arm. Both act on the next keepalive, so flip them before pressing HOME. The
+third, **Stop-settle wait**, is MOBILE-J's control arm and is described under "Reproducing
+MOBILE-J" below; leave it on here. Then shorten Android's budget so the control
 arm reproduces MOBILE-3 within the session:
 
 ```
@@ -2856,6 +2858,58 @@ other. A phone that reached 6h of budget was awake roughly 72 times longer than 
 ceiling needed. The likelier cause is that the JS thread never ran the stop at all (hung, or a
 React instance gone while the service lived on), which neither an emulator nor a dark-phone run
 reproduces.
+
+**Reproducing MOBILE-J**, the other half of notifee's contract: a keepalive start that the system
+brought down before it reached `startForeground`, because the STOP sent just before it had not run
+yet. `docs/architecture.md` has the mechanism. Reproducing it needs three things: an established
+connection (the demo pairing does it), a trace build so the control arm can turn the fix off, and
+a burst of resume-and-pause pairs so the main thread is busy when the STOP is queued. **A stop and
+a start declared on an idle app do not reproduce it**: the STOP runs first. That was tried first
+and read "no crash" for exactly that reason.
+
+1. Build and install a trace release build:
+   `EXPO_PUBLIC_KANGENTIC_CONNECTION_TRACE=1 npx expo run:android --variant release --no-bundler`.
+   Grant notifications (`adb shell pm grant com.kangentic.mobile android.permission.POST_NOTIFICATIONS`)
+   so the keepalive gate opens, and demo-pair if the install is not paired.
+2. For the control arm, open Settings, turn **Stop-settle wait** off under Connection trace, then
+   go back and open a task (its terminal lens is the field event's screen, and its WebView makes
+   every resume heavier). The switch lives in memory, so a relaunch turns it back on.
+3. Background the app with the launcher, wait a few seconds for the keepalive, then send the
+   burst in ONE device shell, so no host round trip spaces the pairs out:
+
+   ```
+   adb shell "for round in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do am start -n com.kangentic.mobile/.MainActivity > /dev/null; am start -a android.intent.action.MAIN -c android.intent.category.HOME > /dev/null; done"
+   ```
+
+4. Read `adb logcat -b crash -d` for the exception, and `adb logcat -d -s ActivityManager:*` for
+   "Bringing down service while still waiting for start foreground", which is what names the path:
+   a stop ran while a start was owed. With the wait on, `[connection-trace] fgs-stop-settle` lines
+   under `ReactNativeJS` give each wait's `waitedMs`, and `dumpsys activity services
+   com.kangentic.mobile` after a burst that ends in the background should show the keepalive
+   `isForeground=true`, which rules out the silent version (a start the system waived because the
+   service was still foreground, then lost to the STOP).
+
+**Measured** on 2026-11-21, one trace release build of the fix, the demo pairing, Pixel 7 device
+profiles, `default` images. A run is one fresh launch and up to three bursts:
+
+| Image | Screen | Wait | Result |
+| --- | --- | --- | --- |
+| API 36 (`kangentic_profile`) | Settings | Off | Crash in 3 of 3 runs, each within the first few pairs |
+| API 36 (`kangentic_profile`) | Settings | On | No crash over 60 pairs; 44 waits, 0 to 81 ms, median about 8 ms |
+| Android 17, API 37 (throwaway AVD) | Settings | Off | No crash over 60 pairs; every STOP ran before the next start |
+| Android 17, API 37 (throwaway AVD) | Terminal lens | Off | Crash in 3 of 3 runs, with the field event's `Handler` frames (`dispatchMessageImpl:142`, `dispatchMessage:125`) |
+| Android 17, API 37 (throwaway AVD) | Terminal lens | On | No crash over 80 pairs; 38 waits, 1 to 498 ms, median about 35 ms |
+
+Two traps from the run:
+
+- **A control crash can repeat itself with no JS at all.** Android restarts a crashed service
+  with the dead process's owed start and its STOP, and in one API 36 run that brought the service
+  down again 0.4 s into the next process, before its JS started. Count crashes per burst, not per
+  log line.
+- **Maestro's `launchApp` force-stops the app**, which clears a pending restart like that one. Its
+  "Bringing down" line then appears at the start of the next arm's log with no crash after it,
+  because the process it belonged to is already gone. Check the timestamps against the arm's
+  `Start proc` line before counting it.
 
 The state you want is: launched at least once since any force-stop, then backgrounded or killed
 with `am kill`, with no established channel.
@@ -3191,10 +3245,10 @@ before an app question.
 
 `modules/foreground-service-guard` is a second local Expo module, built like `modules/memory-pressure`
 below: autolinked, Android-only, with no `android/` edit. It holds the native stop alarm on the keepalive foreground
-service. Its receiver is declared in the module's own `AndroidManifest.xml`, which the Gradle
+service, and the stop-settle query a keepalive start waits on (Sentry MOBILE-J). Its receiver is declared in the module's own `AndroidManifest.xml`, which the Gradle
 manifest merger folds in at build time. So `expo prebuild` output will not show it, and the merged
 manifest under `android/app/build/intermediates/` is where to confirm it shipped. Its device
-procedure is under "Checking the foreground service directly".
+procedures are under "Checking the foreground service directly" and "Reproducing MOBILE-J".
 
 **Android memory pressure is observable now, and `am send-trim-memory` is the way to drive it.**
 `modules/memory-pressure` is a local Expo module (autolinked, no `android/` edit) that forwards

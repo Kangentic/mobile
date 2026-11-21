@@ -41,6 +41,8 @@ import {
   setKeepaliveCeilingEnabled,
   setNativeStopAlarmEnabled,
   setRetiredReceiveStreamsEnabled,
+  setStopSettleWaitEnabled,
+  stopSettleWaitEnabled,
   subscribeBridgeLatencyProbe,
   subscribeForegroundKick,
   subscribeKeepaliveProbe,
@@ -262,6 +264,7 @@ export function SettingsScreen(): React.JSX.Element {
   const foregroundKickOn = useSyncExternalStore(subscribeForegroundKick, foregroundKickEnabled, foregroundKickEnabled);
   const keepaliveCeilingOn = useSyncExternalStore(subscribeKeepaliveProbe, keepaliveCeilingEnabled, keepaliveCeilingEnabled);
   const nativeStopAlarmOn = useSyncExternalStore(subscribeKeepaliveProbe, nativeStopAlarmEnabled, nativeStopAlarmEnabled);
+  const stopSettleWaitOn = useSyncExternalStore(subscribeKeepaliveProbe, stopSettleWaitEnabled, stopSettleWaitEnabled);
   const retiredReceiveStreamsOn = useSyncExternalStore(
     subscribeBridgeLatencyProbe,
     retiredReceiveStreamsEnabled,
@@ -532,6 +535,14 @@ export function SettingsScreen(): React.JSX.Element {
                   checked={nativeStopAlarmOn}
                   testID="settings-connection-trace-native-stop-alarm"
                   onValueChange={setNativeStopAlarmEnabled}
+                />
+                <RowDivider />
+                <SwitchRow
+                  label="Stop-settle wait"
+                  description="Off reproduces MOBILE-J"
+                  checked={stopSettleWaitOn}
+                  testID="settings-connection-trace-stop-settle-wait"
+                  onValueChange={setStopSettleWaitEnabled}
                 />
                 <RowDivider />
                 <SwitchRow

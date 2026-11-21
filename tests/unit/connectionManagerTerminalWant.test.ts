@@ -69,6 +69,7 @@ vi.mock('@notifee/react-native', () => ({
 vi.mock('../../modules/foreground-service-guard', () => ({
   armForegroundServiceStopAlarm: vi.fn(),
   disarmForegroundServiceStopAlarm: vi.fn(),
+  awaitForegroundServiceStopped: vi.fn(async () => true),
 }));
 
 const mockDesktopSeam = vi.hoisted(() => ({ stub: null as unknown }));

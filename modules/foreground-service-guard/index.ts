@@ -2,11 +2,12 @@ import { Platform } from 'react-native';
 import { requireOptionalNativeModule } from 'expo-modules-core';
 
 /**
- * The native stop alarm on notifee's dataSync foreground service (Sentry MOBILE-3). See the
- * Kotlin ForegroundServiceGuard for why a JS bound alone is not enough.
+ * The native stop alarm on notifee's dataSync foreground service (Sentry MOBILE-3), and the
+ * stop-settle wait a keepalive start makes behind an earlier stop (Sentry MOBILE-J). See the
+ * Kotlin ForegroundServiceGuard for why a JS bound alone is not enough for either.
  *
- * ANDROID ONLY. The service it guards exists only on Android, and elsewhere both calls are
- * no-ops.
+ * ANDROID ONLY. The service it guards exists only on Android, and elsewhere every call is a
+ * no-op.
  *
  * `requireOptionalNativeModule` rather than `requireNativeModule`, as in
  * `modules/memory-pressure`: this module exists only in a build that ran prebuild with it
@@ -15,6 +16,7 @@ import { requireOptionalNativeModule } from 'expo-modules-core';
 interface ForegroundServiceGuardNativeModule {
   armStopAlarm: (delayMs: number) => void;
   disarmStopAlarm: () => void;
+  awaitServiceStopped: (timeoutMs: number) => Promise<boolean>;
 }
 
 const nativeModule =
@@ -45,5 +47,27 @@ export function disarmForegroundServiceStopAlarm(): void {
   } catch {
     // A stale alarm that survives a failed cancel fires into a service that is already gone,
     // which only costs an occasional process start.
+  }
+}
+
+/**
+ * Resolves once notifee's service has no record in the system, meaning any STOP sent earlier has
+ * actually run, or `false` if it is still there after `timeoutMs` (Sentry MOBILE-J; see the Kotlin
+ * ForegroundServiceGuard for why a stop that was merely SENT is not enough).
+ *
+ * Resolves `true` where there is nothing to ask: off Android, and in a build without the module.
+ * It also resolves `true` when the native call fails, and that is a choice rather than a default.
+ * Before this wait existed nothing waited at all, so `true` puts a device whose query throws back
+ * exactly where every device stood before, while `false` would withdraw the keepalive from it for
+ * good. The same stance as the alarm above: a net under the keepalive, never a precondition for it.
+ */
+export async function awaitForegroundServiceStopped(timeoutMs: number): Promise<boolean> {
+  if (!nativeModule) return true;
+  try {
+    return await nativeModule.awaitServiceStopped(timeoutMs);
+  } catch {
+    // See above. Not reported: the only caller sits in src/notifications/, which
+    // crash-reporting-scope.md bans from reporting to Sentry.
+    return true;
   }
 }

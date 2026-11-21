@@ -109,6 +109,9 @@ vi.mock('@notifee/react-native', () => ({
 const stopAlarmMocks = vi.hoisted(() => ({
   armForegroundServiceStopAlarm: vi.fn<(delayMs: number) => void>(),
   disarmForegroundServiceStopAlarm: vi.fn<() => void>(),
+  // The MOBILE-J settle query, answering "the STOP has run" at once. What it
+  // holds back is pinned in foregroundService.test.ts.
+  awaitForegroundServiceStopped: vi.fn<(timeoutMs: number) => Promise<boolean>>(async () => true),
 }));
 vi.mock('../../modules/foreground-service-guard', () => stopAlarmMocks);
 
