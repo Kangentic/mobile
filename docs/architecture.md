@@ -131,7 +131,7 @@ decides *what* it may do:
 | `register-push` | Register/unregister this device's Expo push token plus its 32-byte notification-decrypt key with the desktop's push notifier (it only lets the desktop send the device ciphertext) |
 | `start-session` | Ask the desktop to start or resume a task's agent session (protocol 0.15.0). The desktop answers when the start is ACCEPTED, `outcome: 'starting'` or `'live'`, not when the agent is up; the successor then arrives as the same board and stream events a column move produces. The phone sends it for Resume on a paused task, gated on the board row's `resumable` flag (protocol 0.16.0, see Resume below), so no earlier desktop ever receives it, and with `trigger: 'open'` for the resume on open, gated on the snapshot's `resumeOnOpenOffered` (protocol 0.28.0, answered `not-eligible` when the desktop does nothing; see Resume on open below). The session screen's "Start again" for an ended session is a follow-up (a button on the swap veil during the waiting phase) |
 | `pause-session` | Ask the desktop to pause a task's LIVE session exactly as its Pause button does (protocol 0.18.0): keyed by task, the conversation kept for a later Resume, and the pause sticks on an auto-spawn column. The desktop answers `{ ok }` when the pause is ACCEPTED (recorded), while the agent shuts down behind it; the paused row then arrives as a board event. The phone sends it only from the long-press hub's Pause, gated on the board row's `pausable` (see Pause below) |
-| `command-terminal` | Start or stop a Command Terminal (protocol 0.20.0): the AGENT CLI the desktop's Ctrl+Shift+P layer runs at a project's root, with no task. `start` names only the project (no command, branch, model or effort); the desktop runs its own New terminal path unattended and answers `{ ok, sessionId, slot, name }` once the session exists. `stop` names the session and ends only a Command Terminal. Refusals carry typed codes (`command-terminal-limit`, `unknown-project`, `agent-unavailable`, `command-terminal-start-failed`, `not-command-terminal`, `unknown-session`). The phone shows Terminals only where a snapshot's `commandTerminalsOffered` says the desktop serves it AND this device holds it (see Command Terminals below) |
+| `command-terminal` | Start or stop a Command Terminal (protocol 0.20.0): the AGENT CLI the desktop's Ctrl+Shift+P layer runs at a project's root, with no task. `start` names only the project (no command, branch, model or effort); the desktop runs its own New terminal path unattended and answers `{ ok, sessionId, slot, name }` once the session exists. `stop` names the session and ends only a Command Terminal. Protocol 0.24.0 adds `list-earlier`, which names the project and answers the desktop panel's Earlier list (ended conversations that can still be resumed, newest first, none a live terminal holds), and `resume`, which names the project and an `agentSessionId` from that list and is answered as a start, with the conversation's own name. Refusals carry typed codes (`command-terminal-limit`, `unknown-project`, `agent-unavailable`, `command-terminal-start-failed`, `not-command-terminal`, `unknown-session`, and for a resume `conversation-gone` and `conversation-open`). The phone shows Terminals only where a snapshot's `commandTerminalsOffered` says the desktop serves it AND this device holds it, and sends the two 0.24.0 actions only where `earlierConversationsOffered` says so (see Command Terminals below) |
 
 **There is no shell, file-read, or arbitrary-command verb in the protocol.** It is absent, not
 filtered. `answer-permission-prompt` is the most sensitive verb: the phone renders exactly what
@@ -1633,7 +1633,8 @@ pause/resume toggle, which is the next surface if one is wanted.
 
 **Command Terminals** (protocol 0.20.0, task #113) are the desktop's Ctrl+Shift+P agents: the
 project's default agent at the project ROOT, on the default branch, with no task, four at most per
-project. The phone starts, opens and stops them over the `command-terminal` verb.
+project. The phone starts, opens and stops them over the `command-terminal` verb, and since
+protocol 0.24.0 (task #160) lists and resumes the conversations of ones that ended.
 
 - **Where they live.** Every board snapshot, either view, lists its project's live terminals
   (`commandTerminals`, by slot) and says whether this desktop offers the verb to this device
@@ -1647,14 +1648,45 @@ project. The phone starts, opens and stops them over the `command-terminal` verb
   agent, so its card goes in the pass that sees it unlisted). The desktop stamps a terminal's
   stream events with a made-up task id that names no board row; the store never records it.
 - **Starting.** The Board header's Terminals button (hidden unless offered) is the "new
-  terminal" mark with none running, and one tap starts one; otherwise the terminal mark and the
-  count, amber when any terminal is idle or asking (H1), green otherwise, and a tap opens the
-  Terminals sheet. A start goes through `launchCommandTerminal`, which opens the terminal's screen
+  terminal" mark with none running and nothing to resume, and one tap starts one; with none
+  running but Earlier conversations to resume, the terminal mark at rest with no count, and a
+  tap opens the sheet (task #160, decision A1); otherwise the terminal mark and the count, amber
+  when any terminal is idle or asking (H1), green otherwise, and a tap opens the Terminals sheet. A start goes through `launchCommandTerminal`, which opens the terminal's screen
   at once and records the start in `commandTerminalStore` (which outlives the screen), titled
   with the predicted lowest free slot until the answer carries the real one. The reconcile keeps
   a started terminal's stream wanted until a board lists it (`LAUNCH_LISTING_GRACE_MS`), because
   the screen subscribes a round trip before the board event lands. A refusal shows one plain
-  line by its typed code for `START_FAILURE_HOLD_MS`, then the screen routes back.
+  line by its typed code for `START_FAILURE_HOLD_MS`, then the screen routes back. A failure
+  other than the cap reached by a race reports through the handled-error door
+  (`command-terminal-launch`).
+- **Earlier** (protocol 0.24.0, task #160). Under New, the sheet lists the desktop panel's
+  Earlier conversations (`list-earlier`), each its name (the terminal's name when it ended, else
+  its first prompt, else "Untitled conversation") over when it ended ("2 hours ago",
+  "yesterday", then the date, the desktop's `endedLabel`), in a FlashList capped by
+  `terminalsSheetReservedHeight`, with a "Running" heading over the live rows while it shows. A
+  tap resumes it (`resumeCommandTerminal`): the same launch as a New, carrying the conversation,
+  so the screen opens at once titled by it on "Resuming conversation...", the row is hidden from
+  the tap, and a refusal reads "Couldn't resume conversation" over the desktop's own words
+  (`conversation-gone` drops the row; any other refusal re-reads the list). Sent only where a
+  snapshot's `earlierConversationsOffered` says so. The list lives in `commandTerminalStore`,
+  is read on the sheet opening and the Terminals button mounting, and is re-read, only where the
+  phone already holds it, on every `command-terminals-changed` (a conversation joins or leaves
+  Earlier when a terminal starts or ends), on a terminal's `session-ended`, when a stop is
+  answered, and after every bootstrap. Each of those re-reads starts BEFORE the board refresh
+  that drops an ended terminal, because the sheet stays open while the list loads and closes
+  only when nothing runs, nothing is in Earlier, no read is on its way and no failed read has
+  a line to show. An answer that predates a row the phone dropped itself (a resume, a gone
+  conversation) is read again (`commandTerminalEarlier.ts`), and one that lists exactly what
+  the phone already holds keeps the held rows, so nothing re-renders (`setEarlier`). A read
+  that fails with
+  nothing held shows "Earlier didn't load - check the connection" (the sheet stays open on it)
+  and reports as `command-terminal-earlier`; a held list stays as it was and reports nothing,
+  since its rows are still on screen. The mock desktop serves both actions, recording a conversation when a USED terminal ends,
+  so it starts with none and the store capture's one-tap start is unchanged. The sheet's route
+  turns off react-native-screens' animated `fitToContents` resize (`sheetResizeAnimationEnabled:
+  false`, Android only): measured on a release build, with it on the sheet never grew back after
+  the last terminal's row left, leaving the Earlier list below the screen (see the comment in
+  `app/_layout.tsx` for what was measured and what is only read from source).
 - **The terminal's screen** (`CommandTerminalScreen`, its own route, not a mode of the task
   SessionScreen, whose swap, Resume and archive machinery a terminal has none of) has the three
   lenses: Terminal, Chat (the reading view, since a terminal has no transcript record) and
@@ -1680,7 +1712,13 @@ project. The phone starts, opens and stops them over the `command-terminal` verb
   no branch shown or switched (E1); no model or effort change; no "limit reached" text (New greys
   out at four); a working terminal's mark is drawn static, not blinking, since a blink on every
   working row would be an animation that never stops; and a stopped or failed terminal sends the
-  user back rather than closing a window.
+  user back rather than closing a window. In Earlier: no search field and no Rename or Remove
+  (the protocol carries none of them); no hover tip with a cut name in full (it is in the
+  screen-reader label, and is the terminal's title once resumed); no reason line at four (the
+  rows grey out, as New does); a resume always takes a new terminal, never an unused one in
+  place; a rename or removal made in the desktop's Earlier list sends no event, so it shows the
+  next time the sheet opens; and resume failures show on the terminal's failure face rather than
+  in a toast.
 
 **The Home feed's sections** are the desktop Agent Monitor's groups in its order, Idle (waiting on
 you), Active, then the two statuses that are not running: Queued, its own section, and Paused,

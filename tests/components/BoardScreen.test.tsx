@@ -65,8 +65,13 @@ const mockLoadArchivedTasks = jest.fn().mockResolvedValue(undefined);
 // The header's Terminals button starts a terminal when none is running, so the
 // action mock below has to carry it or a press would throw "not a function".
 const mockLaunchCommandTerminal = jest.fn().mockReturnValue('launch-from-header');
+// It also reads the project's Earlier list on mounting wherever the desktop
+// offers it (protocol 0.24.0), so a board seeded with that offer would
+// otherwise throw "not a function" at render.
+const mockFetchEarlierConversations = jest.fn().mockResolvedValue(undefined);
 jest.mock('@/connection/actions', () => ({
   launchCommandTerminal: (projectId: string) => mockLaunchCommandTerminal(projectId),
+  fetchEarlierConversations: (projectId: string) => mockFetchEarlierConversations(projectId),
   moveTaskOptimistic: (input: unknown) => mockMoveTaskOptimistic(input),
   openProjectBoard: (projectId: string) => mockOpenProjectBoard(projectId),
   // The Done column's own read: completed tasks are in neither board
@@ -139,6 +144,7 @@ function seedBoard(): void {
         taskCountsByColumnId: {},
         commandTerminals: [],
         commandTerminalsOffered: false,
+        earlierConversationsOffered: false,
         resumeOnOpenOffered: false,
         priorities: null,
       },
@@ -1020,6 +1026,7 @@ describe('BoardScreen', () => {
           taskCountsByColumnId: {},
           commandTerminals: [],
           commandTerminalsOffered: false,
+          earlierConversationsOffered: false,
           resumeOnOpenOffered: false,
           priorities: null,
         },
@@ -1034,6 +1041,7 @@ describe('BoardScreen', () => {
           taskCountsByColumnId: {},
           commandTerminals: [],
           commandTerminalsOffered: false,
+          earlierConversationsOffered: false,
           resumeOnOpenOffered: false,
           priorities: null,
         },
@@ -1084,6 +1092,7 @@ describe('BoardScreen', () => {
         taskCountsByColumnId: {},
         commandTerminals: [],
         commandTerminalsOffered,
+        earlierConversationsOffered: false,
         resumeOnOpenOffered: false,
         priorities: null,
       };
@@ -1219,6 +1228,7 @@ describe('BoardScreen', () => {
             taskCountsByColumnId: {},
             commandTerminals: [],
             commandTerminalsOffered: false,
+            earlierConversationsOffered: false,
             resumeOnOpenOffered: false,
             priorities: null,
           },

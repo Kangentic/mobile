@@ -75,6 +75,7 @@ function seedBoard(): void {
         taskCountsByColumnId: {},
         commandTerminals: [],
         commandTerminalsOffered: false,
+        earlierConversationsOffered: false,
         resumeOnOpenOffered: false,
         priorities: null,
       },

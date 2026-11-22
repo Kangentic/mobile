@@ -2,26 +2,36 @@
  * The Command Terminal actions (protocol 0.20.0): the one plain line a failed
  * start shows, a start that returns its launch id at once and settles it in the
  * background, and a Stop that reads "Stopping..." until the board drops the
- * terminal.
+ * terminal. Protocol 0.24.0 adds the Earlier list's read and a resume of one of
+ * its conversations, which settles the way a start does.
  *
  * The failure line is read off the refusal's TYPED code, never parsed out of its
  * text, so every case here gives the error text that would send a text-parser
  * the wrong way. connectionManager is mocked the way resumeTaskSession.test.ts
  * does it, plus the one thing its mock leaves out: `NotConnectedError`, which
- * the failure line `instanceof`-checks.
+ * the failure line `instanceof`-checks. The handled-error door is mocked so the
+ * reports a failure sends, and the ones it must not, can be read.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   AGENT_UNAVAILABLE_ERROR_CODE,
   COMMAND_TERMINAL_LIMIT_ERROR_CODE,
   COMMAND_TERMINAL_START_FAILED_ERROR_CODE,
+  CONVERSATION_GONE_ERROR_CODE,
+  CONVERSATION_OPEN_ERROR_CODE,
   UNKNOWN_PROJECT_ERROR_CODE,
   UNKNOWN_SESSION_ERROR_CODE,
   UNSUPPORTED_VERB_ERROR_CODE,
 } from '@kangentic/protocol';
 import { CapabilityTimeoutError, ChannelDisconnectedError } from '@/channel/capabilityClient';
 import { CapabilityError } from '@/channel/verbClient';
-import { commandTerminalStartFailureLine, launchCommandTerminal, stopCommandTerminal } from '@/connection/actions';
+import {
+  commandTerminalStartFailureLine,
+  fetchEarlierConversations,
+  launchCommandTerminal,
+  resumeCommandTerminal,
+  stopCommandTerminal,
+} from '@/connection/actions';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useCommandTerminalStore } from '@/state/commandTerminalStore';
@@ -40,13 +50,18 @@ const mocks = vi.hoisted(() => {
     NotConnectedError,
     startCommandTerminal: vi.fn(),
     stopCommandTerminal: vi.fn(),
+    resumeCommandTerminal: vi.fn(),
+    listEarlierCommandTerminalConversations: vi.fn(),
     requireVerbClient: vi.fn(),
     getActiveConnection: vi.fn(),
     requireSubscriptions: vi.fn(),
     reconcileSessionsFromBoards: vi.fn(),
     refreshBoard: vi.fn(),
+    reportHandledError: vi.fn(),
   };
 });
+
+vi.mock('@/observability/crashReporting', () => ({ reportHandledError: mocks.reportHandledError }));
 
 vi.mock('@/connection/connectionManager', () => ({
   NotConnectedError: mocks.NotConnectedError,
@@ -88,22 +103,37 @@ function onlyLaunch() {
   return launches[0];
 }
 
+const verbClient = {
+  startCommandTerminal: mocks.startCommandTerminal,
+  stopCommandTerminal: mocks.stopCommandTerminal,
+  resumeCommandTerminal: mocks.resumeCommandTerminal,
+  listEarlierCommandTerminalConversations: mocks.listEarlierCommandTerminalConversations,
+};
+
 beforeEach(() => {
   mocks.startCommandTerminal.mockReset();
   mocks.stopCommandTerminal.mockReset();
+  mocks.resumeCommandTerminal.mockReset();
+  mocks.listEarlierCommandTerminalConversations.mockReset();
+  mocks.listEarlierCommandTerminalConversations.mockResolvedValue({ ok: true, projectId: PROJECT_ID, conversations: [] });
   mocks.requireVerbClient.mockReset();
-  mocks.requireVerbClient.mockReturnValue({
-    startCommandTerminal: mocks.startCommandTerminal,
-    stopCommandTerminal: mocks.stopCommandTerminal,
-  });
+  mocks.requireVerbClient.mockReturnValue(verbClient);
   mocks.getActiveConnection.mockReset();
-  mocks.getActiveConnection.mockReturnValue({ subscriptions: connectionSubscriptions });
+  mocks.getActiveConnection.mockReturnValue({ subscriptions: connectionSubscriptions, verbs: verbClient });
   mocks.reconcileSessionsFromBoards.mockReset();
   mocks.refreshBoard.mockReset();
+  mocks.reportHandledError.mockReset();
   useBoardStore.getState().reset();
   useActivityStore.getState().reset();
   useCommandTerminalStore.getState().reset();
 });
+
+/** The project's board, with the desktop offering (or not) the Earlier list. */
+function seedBoard(earlierOffered: boolean): void {
+  useBoardStore.getState().applyBoardSnapshot(
+    boardSnapshotFixture({ projectId: PROJECT_ID, tasks: [], commandTerminalsOffered: true, earlierConversationsOffered: earlierOffered }),
+  );
+}
 
 describe('commandTerminalStartFailureLine', () => {
   it('says the desktop did not answer for a timeout', () => {
@@ -281,6 +311,202 @@ describe('launchCommandTerminal', () => {
     expect(onlyLaunch()).toMatchObject({ phase: 'failed', failureMessage: 'Not connected to the desktop.' });
     expect(mocks.refreshBoard).not.toHaveBeenCalled();
   });
+
+  /**
+   * A failed start shows its failure face, so it reports through the
+   * handled-error door (crash-reporting-scope.md), except the cap reached by a
+   * race, which is ordinary use. Mutation seen failing: removing the
+   * reportHandledError call from the launch's catch.
+   */
+  it('reports a failed start through the handled-error door', async () => {
+    const failure = new CapabilityError('command-terminal', 'Claude is not installed', AGENT_UNAVAILABLE_ERROR_CODE);
+    mocks.startCommandTerminal.mockRejectedValue(failure);
+
+    launchCommandTerminal(PROJECT_ID);
+    await flushMicrotasks();
+
+    expect(mocks.reportHandledError).toHaveBeenCalledWith('command-terminal-launch', failure);
+  });
+
+  it('reports neither a successful start nor the cap reached by a race', async () => {
+    mocks.startCommandTerminal.mockResolvedValueOnce(answered);
+    launchCommandTerminal(PROJECT_ID);
+    await flushMicrotasks();
+
+    mocks.startCommandTerminal.mockRejectedValueOnce(new CapabilityError('command-terminal', 'No room', COMMAND_TERMINAL_LIMIT_ERROR_CODE));
+    launchCommandTerminal(PROJECT_ID);
+    await flushMicrotasks();
+
+    expect(mocks.reportHandledError).not.toHaveBeenCalled();
+  });
+});
+
+describe('fetchEarlierConversations', () => {
+  const conversation = { agentSessionId: 'conversation-a', name: 'Audit image sizes', endedAt: '2026-11-22T08:00:00.000Z' };
+
+  it('sends nothing when the project\'s desktop does not offer Earlier, which an older desktop would refuse as malformed', async () => {
+    seedBoard(false);
+
+    await fetchEarlierConversations(PROJECT_ID);
+
+    expect(mocks.listEarlierCommandTerminalConversations).not.toHaveBeenCalled();
+    expect(launchStore().earlierByProjectId).toEqual({});
+  });
+
+  it('reads the list into the store when it is offered', async () => {
+    seedBoard(true);
+    mocks.listEarlierCommandTerminalConversations.mockResolvedValue({ ok: true, projectId: PROJECT_ID, conversations: [conversation] });
+
+    await fetchEarlierConversations(PROJECT_ID);
+
+    expect(mocks.listEarlierCommandTerminalConversations).toHaveBeenCalledWith(PROJECT_ID);
+    expect(launchStore().earlierByProjectId[PROJECT_ID]).toMatchObject({ status: 'ready', conversations: [conversation] });
+  });
+
+  it('marks the list failed when not connected, sending and reporting nothing, so the next bootstrap re-reads it', async () => {
+    seedBoard(true);
+    mocks.requireVerbClient.mockImplementation(() => {
+      throw new mocks.NotConnectedError();
+    });
+
+    await fetchEarlierConversations(PROJECT_ID);
+
+    expect(mocks.listEarlierCommandTerminalConversations).not.toHaveBeenCalled();
+    expect(mocks.reportHandledError).not.toHaveBeenCalled();
+    expect(launchStore().earlierByProjectId[PROJECT_ID]).toEqual({ status: 'failed', conversations: null, revision: 0 });
+  });
+
+  it('rethrows any other failure to get a verb client, and does not mark the list failed', () => {
+    seedBoard(true);
+    const unexpectedError = new Error('verb client construction failed');
+    mocks.requireVerbClient.mockImplementation(() => {
+      throw unexpectedError;
+    });
+
+    expect(() => fetchEarlierConversations(PROJECT_ID)).toThrow(unexpectedError);
+
+    expect(mocks.listEarlierCommandTerminalConversations).not.toHaveBeenCalled();
+    expect(launchStore().earlierByProjectId).toEqual({});
+  });
+});
+
+describe('resumeCommandTerminal', () => {
+  const conversation = { agentSessionId: 'conversation-a', name: 'Audit image sizes', endedAt: '2026-11-22T08:00:00.000Z' };
+  const otherConversation = { agentSessionId: 'conversation-b', name: null, endedAt: '2026-11-14T08:00:00.000Z' };
+  const answered = { ok: true as const, sessionId: 'sess-terminal-3', slot: 3, name: 'Audit image sizes' };
+
+  beforeEach(() => {
+    seedBoard(true);
+    launchStore().setEarlier(PROJECT_ID, [conversation, otherConversation]);
+  });
+
+  function heldConversations() {
+    return launchStore().earlierByProjectId[PROJECT_ID]?.conversations?.map((held) => held.agentSessionId);
+  }
+
+  it('sends nothing, and returns no launch, when the project\'s desktop does not offer Earlier', async () => {
+    seedBoard(false);
+
+    expect(resumeCommandTerminal(PROJECT_ID, conversation)).toBeNull();
+    await flushMicrotasks();
+
+    expect(mocks.resumeCommandTerminal).not.toHaveBeenCalled();
+    expect(launchStore().launchesById).toEqual({});
+  });
+
+  it('returns the launch id at once, titled by the conversation, and asks the desktop to resume it', async () => {
+    mocks.resumeCommandTerminal.mockReturnValue(deferred().promise);
+
+    const launchId = resumeCommandTerminal(PROJECT_ID, conversation);
+
+    expect(launchId).not.toBeNull();
+    expect(launchStore().launchesById[launchId!]).toMatchObject({
+      projectId: PROJECT_ID,
+      phase: 'starting',
+      name: 'Audit image sizes',
+      resumeAgentSessionId: 'conversation-a',
+    });
+    await flushMicrotasks();
+    expect(mocks.resumeCommandTerminal).toHaveBeenCalledWith(PROJECT_ID, 'conversation-a');
+    expect(mocks.startCommandTerminal).not.toHaveBeenCalled();
+  });
+
+  it('sends one request for a double tap, handing the second tap the first one\'s launch', async () => {
+    mocks.resumeCommandTerminal.mockReturnValue(deferred().promise);
+
+    const first = resumeCommandTerminal(PROJECT_ID, conversation);
+    const second = resumeCommandTerminal(PROJECT_ID, conversation);
+    await flushMicrotasks();
+
+    expect(second).toBe(first);
+    expect(mocks.resumeCommandTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it('on success marks the launch started, takes the conversation out of Earlier, and re-reads the board', async () => {
+    mocks.resumeCommandTerminal.mockResolvedValue(answered);
+
+    const launchId = resumeCommandTerminal(PROJECT_ID, conversation);
+    await flushMicrotasks();
+
+    expect(launchStore().launchesById[launchId!]).toMatchObject({ phase: 'started', sessionId: answered.sessionId, slot: 3 });
+    expect(heldConversations()).toEqual(['conversation-b']);
+    expect(mocks.reconcileSessionsFromBoards).toHaveBeenCalledWith(connectionSubscriptions);
+    expect(mocks.refreshBoard).toHaveBeenCalledWith(PROJECT_ID);
+    expect(mocks.reportHandledError).not.toHaveBeenCalled();
+  });
+
+  it('drops a gone conversation\'s row, shows the desktop\'s own words, and neither re-reads the list nor reports', async () => {
+    mocks.resumeCommandTerminal.mockRejectedValue(
+      new CapabilityError('command-terminal', 'That conversation can no longer be resumed.', CONVERSATION_GONE_ERROR_CODE),
+    );
+
+    resumeCommandTerminal(PROJECT_ID, conversation);
+    await flushMicrotasks();
+
+    expect(onlyLaunch()).toMatchObject({ phase: 'failed', failureMessage: 'That conversation can no longer be resumed.' });
+    expect(heldConversations()).toEqual(['conversation-b']);
+    expect(mocks.listEarlierCommandTerminalConversations).not.toHaveBeenCalled();
+    expect(mocks.reportHandledError).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['open in another terminal', new CapabilityError('command-terminal', 'That conversation is already open in another terminal.', CONVERSATION_OPEN_ERROR_CODE), 'That conversation is already open in another terminal.'],
+    ['refused at the cap', new CapabilityError('command-terminal', 'No room', COMMAND_TERMINAL_LIMIT_ERROR_CODE), 'This project already runs four.'],
+  ])('keeps the row for a conversation %s, re-reads the list, and reports nothing', async (_label, failure, line) => {
+    mocks.resumeCommandTerminal.mockRejectedValue(failure);
+
+    resumeCommandTerminal(PROJECT_ID, conversation);
+    await flushMicrotasks();
+
+    expect(onlyLaunch()).toMatchObject({ phase: 'failed', failureMessage: line });
+    expect(mocks.listEarlierCommandTerminalConversations).toHaveBeenCalledWith(PROJECT_ID);
+    expect(mocks.reportHandledError).not.toHaveBeenCalled();
+  });
+
+  it('re-reads the board and the list after a timeout, since the resume may have started, and reports it', async () => {
+    const timeout = new CapabilityTimeoutError('command-terminal');
+    mocks.resumeCommandTerminal.mockRejectedValue(timeout);
+
+    resumeCommandTerminal(PROJECT_ID, conversation);
+    await flushMicrotasks();
+
+    expect(onlyLaunch()).toMatchObject({ phase: 'failed', failureMessage: "The desktop didn't answer." });
+    expect(mocks.refreshBoard).toHaveBeenCalledWith(PROJECT_ID);
+    expect(mocks.listEarlierCommandTerminalConversations).toHaveBeenCalledWith(PROJECT_ID);
+    expect(mocks.reportHandledError).toHaveBeenCalledWith('command-terminal-launch', timeout);
+  });
+
+  it('lets the same conversation be resumed again once the first attempt failed', async () => {
+    mocks.resumeCommandTerminal.mockRejectedValueOnce(new CapabilityTimeoutError('command-terminal'));
+    resumeCommandTerminal(PROJECT_ID, conversation);
+    await flushMicrotasks();
+
+    mocks.resumeCommandTerminal.mockReturnValueOnce(deferred().promise);
+    resumeCommandTerminal(PROJECT_ID, conversation);
+    await flushMicrotasks();
+
+    expect(mocks.resumeCommandTerminal).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('stopCommandTerminal', () => {
@@ -360,5 +586,35 @@ describe('stopCommandTerminal', () => {
 
     expect(launchStore().stopsBySessionId['sess-unregistered']).toBe('stopping');
     expect(mocks.refreshBoard).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A used terminal that ends joins Earlier, and the sheet stays open while
+   * its Earlier list is loading (task #160 design change 2). So the held list
+   * must be loading BEFORE the board refresh can drop the last terminal.
+   * Mutation seen failing: moving the Earlier refresh after refreshBoard.
+   */
+  it('puts a held Earlier list into loading before it re-reads the board', async () => {
+    seedBoard(true);
+    launchStore().setEarlier(PROJECT_ID, []);
+    mocks.stopCommandTerminal.mockResolvedValue(undefined);
+    let earlierStatusAtBoardRefresh: string | undefined;
+    mocks.refreshBoard.mockImplementation(() => {
+      earlierStatusAtBoardRefresh = launchStore().earlierByProjectId[PROJECT_ID]?.status;
+    });
+
+    await stopCommandTerminal(SESSION_ID);
+
+    expect(earlierStatusAtBoardRefresh).toBe('loading');
+    expect(mocks.listEarlierCommandTerminalConversations).toHaveBeenCalledWith(PROJECT_ID);
+  });
+
+  it('reads no Earlier list the phone does not already hold', async () => {
+    seedBoard(true);
+    mocks.stopCommandTerminal.mockResolvedValue(undefined);
+
+    await stopCommandTerminal(SESSION_ID);
+
+    expect(mocks.listEarlierCommandTerminalConversations).not.toHaveBeenCalled();
   });
 });

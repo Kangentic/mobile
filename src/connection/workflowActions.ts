@@ -2,6 +2,7 @@ import { CapabilityError, CapabilityTimeoutError } from '@/channel';
 import { useWorkflowStore } from '@/state/workflowStore';
 import { parseWorkflowDetail, parseWorkflowList } from '@/workflow/workflowView';
 import { DESKTOP_REFUSAL_MESSAGE_MAX_LENGTH, refreshSnapshots } from './actions';
+import { coalesced } from './coalescedRead';
 import { requireVerbClient } from './connectionManager';
 
 /**
@@ -16,31 +17,6 @@ import { requireVerbClient } from './connectionManager';
 /** The desktop's own lines for a Pause or Resume that failed without a sentence of its own (WorkflowsView). */
 export const WORKFLOW_PAUSE_FAILED_MESSAGE = 'Could not pause the workflow';
 export const WORKFLOW_RESUME_FAILED_MESSAGE = 'Could not resume the workflow';
-
-/**
- * One read per key at a time. A request that arrives while the same read is in
- * flight runs once more after it, so the newest state is always read without
- * stacking a request per board event.
- */
-const readsInFlight = new Map<string, { rerun: boolean }>();
-
-async function coalesced(key: string, read: () => Promise<void>): Promise<void> {
-  const inFlight = readsInFlight.get(key);
-  if (inFlight) {
-    inFlight.rerun = true;
-    return;
-  }
-  const marker = { rerun: false };
-  readsInFlight.set(key, marker);
-  try {
-    do {
-      marker.rerun = false;
-      await read();
-    } while (marker.rerun);
-  } finally {
-    readsInFlight.delete(key);
-  }
-}
 
 /** A project's unfinished workflows (`list_workflows`), drafts included. */
 export function fetchProjectWorkflows(projectId: string): Promise<void> {

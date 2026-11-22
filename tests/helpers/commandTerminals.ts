@@ -13,7 +13,9 @@ export function commandTerminalWireFixture(overrides: Partial<CommandTerminalWir
 
 /**
  * Seeds one project's board with the given terminals. `offered` is the
- * desktop's `commandTerminalsOffered` flag (the verb is on offer to this phone).
+ * desktop's `commandTerminalsOffered` flag (the verb is on offer to this phone),
+ * and `earlierOffered` its `earlierConversationsOffered` (protocol 0.24.0's
+ * Earlier list and resume), off by default so the sheet reads as it did before.
  * The board has no columns or tasks: every component under test here reads the
  * terminals and the project list only.
  */
@@ -22,11 +24,13 @@ export function seedCommandTerminalBoard({
   projectName = 'Alpha',
   terminals = [],
   offered = true,
+  earlierOffered = false,
 }: {
   projectId?: string;
   projectName?: string;
   terminals?: CommandTerminalWire[];
   offered?: boolean;
+  earlierOffered?: boolean;
 } = {}): void {
   useBoardStore.setState({
     projects: [{ id: projectId, name: projectName }],
@@ -41,6 +45,7 @@ export function seedCommandTerminalBoard({
         taskCountsByColumnId: {},
         commandTerminals: terminals,
         commandTerminalsOffered: offered,
+        earlierConversationsOffered: earlierOffered,
         resumeOnOpenOffered: false,
         priorities: null,
       },

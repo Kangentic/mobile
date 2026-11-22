@@ -1,7 +1,8 @@
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
-import { ThemeProvider } from '@/components';
-import { CommandTerminalsScreen, STOP_FAILED_MESSAGE } from '@/screens/CommandTerminalsScreen';
+import { NOW_TICK_MS, ThemeProvider } from '@/components';
+import { CommandTerminalsScreen, EARLIER_READ_FAILED_MESSAGE, STOP_FAILED_MESSAGE } from '@/screens/CommandTerminalsScreen';
 import { useActivityStore } from '@/state/activityStore';
 import { useBoardStore } from '@/state/boardStore';
 import { useCommandTerminalStore } from '@/state/commandTerminalStore';
@@ -26,9 +27,13 @@ jest.mock('expo-router', () => ({
 
 const mockLaunchCommandTerminal = jest.fn();
 const mockStopCommandTerminal = jest.fn();
+const mockResumeCommandTerminal = jest.fn();
+const mockFetchEarlierConversations = jest.fn();
 jest.mock('@/connection/actions', () => ({
   launchCommandTerminal: (projectId: string) => mockLaunchCommandTerminal(projectId),
   stopCommandTerminal: (sessionId: string) => mockStopCommandTerminal(sessionId),
+  resumeCommandTerminal: (projectId: string, conversation: unknown) => mockResumeCommandTerminal(projectId, conversation),
+  fetchEarlierConversations: (projectId: string) => mockFetchEarlierConversations(projectId),
 }));
 
 const PROJECT_ID = 'project-1';
@@ -57,6 +62,8 @@ describe('CommandTerminalsScreen', () => {
     mockParams = { projectId: PROJECT_ID };
     mockLaunchCommandTerminal.mockReturnValue('launch-from-sheet');
     mockStopCommandTerminal.mockResolvedValue(undefined);
+    mockResumeCommandTerminal.mockReturnValue('launch-resume');
+    mockFetchEarlierConversations.mockResolvedValue(undefined);
     useBoardStore.getState().reset();
     useActivityStore.getState().reset();
     useCommandTerminalStore.getState().reset();
@@ -462,6 +469,348 @@ describe('CommandTerminalsScreen', () => {
       await renderSheet();
 
       expect(mockBack).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Protocol 0.24.0's Earlier list (task #160, design changes 1 to 7, picks
+   * A1, B1, C1): the desktop panel's ended conversations, under New, with the
+   * Running heading over the live rows while it shows.
+   */
+  describe('the Earlier list', () => {
+    const twoHoursAgo = (): string => new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const yesterday = (): string => new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString();
+    const audit = { agentSessionId: 'conversation-a', name: 'Audit image sizes on the product grid', endedAt: '' };
+    const untitled = { agentSessionId: 'conversation-b', name: null, endedAt: '' };
+
+    function holdEarlier(conversations: { agentSessionId: string; name: string | null; endedAt: string }[]): void {
+      useCommandTerminalStore.getState().setEarlier(PROJECT_ID, conversations);
+    }
+
+    beforeEach(() => {
+      seedCommandTerminalBoard({ terminals: [terminalFixture(1)], earlierOffered: true });
+      holdEarlier([
+        { ...audit, endedAt: twoHoursAgo() },
+        { ...untitled, endedAt: yesterday() },
+      ]);
+    });
+
+    it('reads the list on opening', async () => {
+      await renderSheet();
+
+      expect(mockFetchEarlierConversations).toHaveBeenCalledWith(PROJECT_ID);
+    });
+
+    it('reads nothing from a desktop that does not offer Earlier, and reads once the offer arrives', async () => {
+      seedCommandTerminalBoard({ terminals: [terminalFixture(1)], earlierOffered: false });
+      await renderSheet();
+      expect(mockFetchEarlierConversations).not.toHaveBeenCalled();
+
+      await act(() => {
+        seedCommandTerminalBoard({ terminals: [terminalFixture(1)], earlierOffered: true });
+      });
+
+      expect(mockFetchEarlierConversations).toHaveBeenCalledWith(PROJECT_ID);
+    });
+
+    it('draws each conversation as its name over when it ended, newest first, under the rule and the Earlier heading', async () => {
+      await renderSheet();
+
+      expect(screen.getByTestId('command-terminals-earlier-rule')).toBeTruthy();
+      expect(screen.getByTestId('command-terminals-earlier-heading')).toHaveTextContent('Earlier');
+      expect(screen.getByTestId('command-terminal-earlier-row-conversation-a-name')).toHaveTextContent('Audit image sizes on the product grid');
+      expect(screen.getByTestId('command-terminal-earlier-row-conversation-a-ended')).toHaveTextContent('2 hours ago');
+      expect(screen.getByTestId('command-terminal-earlier-row-conversation-b-ended')).toHaveTextContent('yesterday');
+      const rowIds = screen.getAllByTestId(/^command-terminal-earlier-row-conversation-[ab]$/).map((row) => row.props.testID as string);
+      expect(rowIds).toEqual(['command-terminal-earlier-row-conversation-a', 'command-terminal-earlier-row-conversation-b']);
+    });
+
+    it('reads a conversation with no name as "Untitled conversation", the desktop\'s words, and labels the row to resume it', async () => {
+      await renderSheet();
+
+      expect(screen.getByTestId('command-terminal-earlier-row-conversation-b-name')).toHaveTextContent('Untitled conversation');
+      expect(screen.getByTestId('command-terminal-earlier-row-conversation-b').props.accessibilityLabel).toBe('Resume Untitled conversation');
+    });
+
+    it('heads the live rows "Running" while the Earlier list shows (decision B1)', async () => {
+      await renderSheet();
+
+      expect(screen.getByTestId('command-terminals-running-heading')).toHaveTextContent('Running');
+    });
+
+    it('draws today\'s sheet, with no heading, rule or list, when the desktop does not offer Earlier', async () => {
+      seedCommandTerminalBoard({ terminals: [terminalFixture(1)], earlierOffered: false });
+      await renderSheet();
+
+      expect(screen.queryByTestId('command-terminals-running-heading')).toBeNull();
+      expect(screen.queryByTestId('command-terminals-earlier-rule')).toBeNull();
+      expect(screen.queryByTestId('command-terminals-earlier-heading')).toBeNull();
+      expect(screen.queryByTestId('command-terminal-earlier-row-conversation-a')).toBeNull();
+    });
+
+    it('draws no Earlier section, and no Running heading, when nothing has ended (the desktop\'s own empty state)', async () => {
+      holdEarlier([]);
+      await renderSheet();
+
+      expect(screen.queryByTestId('command-terminals-earlier-heading')).toBeNull();
+      expect(screen.queryByTestId('command-terminals-running-heading')).toBeNull();
+    });
+
+    it('draws nothing of it before its first read lands', async () => {
+      useCommandTerminalStore.getState().reset();
+      useCommandTerminalStore.getState().markEarlierLoading(PROJECT_ID);
+      await renderSheet();
+
+      expect(screen.queryByTestId('command-terminals-earlier-heading')).toBeNull();
+      expect(screen.queryByTestId('command-terminals-earlier-failed')).toBeNull();
+    });
+
+    it('says the list did not load when its read failed with nothing held (design change 7)', async () => {
+      useCommandTerminalStore.getState().reset();
+      useCommandTerminalStore.getState().markEarlierFailed(PROJECT_ID);
+      await renderSheet();
+
+      expect(screen.getByTestId('command-terminals-earlier-heading')).toBeTruthy();
+      expect(screen.getByTestId('command-terminals-earlier-failed')).toHaveTextContent("Earlier didn't load - check the connection");
+      expect(EARLIER_READ_FAILED_MESSAGE).toBe("Earlier didn't load - check the connection");
+    });
+
+    it('keeps the rows it holds, with no failure line, when a later read fails', async () => {
+      useCommandTerminalStore.getState().markEarlierFailed(PROJECT_ID);
+      await renderSheet();
+
+      expect(screen.getByTestId('command-terminal-earlier-row-conversation-a')).toBeTruthy();
+      expect(screen.queryByTestId('command-terminals-earlier-failed')).toBeNull();
+    });
+
+    it('resumes a conversation on a tap, replacing the sheet with its screen on the launch (decision C1)', async () => {
+      await renderSheet();
+
+      await fireEvent.press(screen.getByTestId('command-terminal-earlier-row-conversation-a'));
+
+      expect(mockResumeCommandTerminal).toHaveBeenCalledTimes(1);
+      expect(mockResumeCommandTerminal).toHaveBeenCalledWith(PROJECT_ID, expect.objectContaining({ agentSessionId: 'conversation-a' }));
+      expect(mockReplace).toHaveBeenCalledWith({ pathname: '/command-terminal', params: { launchId: 'launch-resume', projectId: PROJECT_ID } });
+    });
+
+    it('stays put when the resume sends nothing (the desktop stopped offering Earlier)', async () => {
+      mockResumeCommandTerminal.mockReturnValue(null);
+      await renderSheet();
+
+      await fireEvent.press(screen.getByTestId('command-terminal-earlier-row-conversation-a'));
+
+      expect(mockReplace).not.toHaveBeenCalled();
+    });
+
+    it('greys every row out at four terminals, and a tap resumes nothing (design change 6)', async () => {
+      seedCommandTerminalBoard({
+        terminals: [terminalFixture(1), terminalFixture(2), terminalFixture(3), terminalFixture(4)],
+        earlierOffered: true,
+      });
+      await renderSheet();
+
+      const row = screen.getByTestId('command-terminal-earlier-row-conversation-a');
+      expect(row.props.accessibilityState).toEqual(expect.objectContaining({ disabled: true }));
+      await fireEvent.press(row);
+
+      expect(mockResumeCommandTerminal).not.toHaveBeenCalled();
+      expect(mockReplace).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Design change 4: a resume in flight is a Running row under the
+     * conversation's own name, and its Earlier row is gone from the tap, so the
+     * same conversation cannot be sent twice from a reopened sheet.
+     */
+    it('hides a conversation being resumed and shows it as a starting Running row under its own name', async () => {
+      useCommandTerminalStore.getState().beginLaunch(PROJECT_ID, 2, { agentSessionId: 'conversation-a', name: audit.name });
+      await renderSheet();
+
+      expect(screen.queryByTestId('command-terminal-earlier-row-conversation-a')).toBeNull();
+      expect(screen.getByTestId('command-terminal-earlier-row-conversation-b')).toBeTruthy();
+      expect(screen.getByTestId('command-terminal-row-starting-2')).toBeTruthy();
+      expect(screen.getByText('Audit image sizes on the product grid')).toBeTruthy();
+      expect(screen.getByTestId('command-terminal-row-starting-2-activity')).toHaveTextContent('Starting...');
+    });
+
+    it('reads a blank or whitespace-only name as "Untitled conversation", and labels the row to resume it so', async () => {
+      holdEarlier([
+        { agentSessionId: 'conversation-empty', name: '', endedAt: twoHoursAgo() },
+        { agentSessionId: 'conversation-spaces', name: '   ', endedAt: twoHoursAgo() },
+      ]);
+      await renderSheet();
+
+      for (const agentSessionId of ['conversation-empty', 'conversation-spaces']) {
+        const rowTestId = `command-terminal-earlier-row-${agentSessionId}`;
+        expect(screen.getByTestId(`${rowTestId}-name`)).toHaveTextContent('Untitled conversation');
+        expect(screen.getByTestId(rowTestId).props.accessibilityLabel).toBe('Resume Untitled conversation');
+      }
+    });
+
+    describe('the list\'s height', () => {
+      const ROW_GAP = 4;
+
+      function conversations(count: number): { agentSessionId: string; name: string | null; endedAt: string }[] {
+        return Array.from({ length: count }, (_unused, index) => ({
+          agentSessionId: `conversation-${index}`,
+          name: `Conversation ${index}`,
+          endedAt: twoHoursAgo(),
+        }));
+      }
+
+      function listHeight(): number {
+        // The host scroll view carries the testID but not the style: FlashList
+        // puts `style` on its own container, so read the nearest ancestor that has it.
+        let node = screen.getByTestId('command-terminals-earlier-list').parent;
+        while (node !== null) {
+          const flattened = StyleSheet.flatten(node.props.style) as { height?: number } | undefined;
+          if (flattened?.height !== undefined) return flattened.height;
+          node = node.parent;
+        }
+        throw new Error('the Earlier list carries no explicit height');
+      }
+
+      async function layOutFirstRow(height: number): Promise<void> {
+        await fireEvent(screen.getByTestId('command-terminal-earlier-row-conversation-0'), 'layout', { nativeEvent: { layout: { height } } });
+      }
+
+      it('becomes the rows\' measured height plus the gaps once the first row is laid out', async () => {
+        holdEarlier(conversations(3));
+        await renderSheet();
+
+        await layOutFirstRow(100);
+
+        expect(listHeight()).toBe(3 * 100 + 2 * ROW_GAP);
+      });
+
+      it('ignores a zero-height layout, keeping the last measured height', async () => {
+        holdEarlier(conversations(3));
+        await renderSheet();
+        await layOutFirstRow(100);
+
+        await layOutFirstRow(0);
+
+        expect(listHeight()).toBe(3 * 100 + 2 * ROW_GAP);
+      });
+
+      it('is capped at the sheet\'s room, however many rows there are', async () => {
+        holdEarlier(conversations(50));
+        await renderSheet();
+
+        await layOutFirstRow(100);
+        const cappedHeight = listHeight();
+
+        expect(cappedHeight).toBeGreaterThan(0);
+        expect(cappedHeight).toBeLessThan(50 * 100 + 49 * ROW_GAP);
+        // Taller rows do not move a list that is already at the cap.
+        await layOutFirstRow(200);
+        expect(listHeight()).toBe(cappedHeight);
+      });
+    });
+
+    /**
+     * The Earlier rows' "ended" labels share the sheet's clock. With no terminal
+     * needing you, only the `earlierRows.length > 0` half of the provider's
+     * `enabled` keeps it running. Mutation seen failing: `enabled={anyNeedsYou}`.
+     */
+    describe('the clock', () => {
+      afterEach(() => {
+        jest.useRealTimers();
+      });
+
+      it('moves an ended label on while no terminal needs you', async () => {
+        jest.useFakeTimers();
+        holdEarlier([{ ...audit, endedAt: new Date(Date.now() - 59 * 60 * 1000).toISOString() }]);
+        await renderSheet();
+        expect(screen.getByTestId('command-terminal-earlier-row-conversation-a-ended')).toHaveTextContent('59 minutes ago');
+
+        await act(() => {
+          jest.advanceTimersByTime(2 * 60 * 1000 + NOW_TICK_MS);
+        });
+
+        expect(screen.getByTestId('command-terminal-earlier-row-conversation-a-ended')).toHaveTextContent('1 hour ago');
+      });
+    });
+
+    describe('closing (design change 2)', () => {
+      /**
+       * A failed read with nothing held shows its line, so closing would hide
+       * it. Mutation seen failing: dropping `&& !earlierReadFailed` from `empty`.
+       */
+      it('stays open on the failure line when nothing runs, the offer is on and the read failed with nothing held', async () => {
+        seedCommandTerminalBoard({ terminals: [], earlierOffered: true });
+        useCommandTerminalStore.getState().reset();
+        useCommandTerminalStore.getState().markEarlierFailed(PROJECT_ID);
+        await renderSheet();
+
+        expect(mockBack).not.toHaveBeenCalled();
+        expect(screen.getByTestId('command-terminals-earlier-failed')).toBeTruthy();
+      });
+
+      it('stays open when the last terminal leaves the board and THEN the read fails', async () => {
+        useCommandTerminalStore.getState().reset();
+        useCommandTerminalStore.getState().markEarlierLoading(PROJECT_ID);
+        await renderSheet();
+
+        await act(() => {
+          setBoardCommandTerminals(PROJECT_ID, []);
+        });
+        expect(mockBack).not.toHaveBeenCalled();
+
+        await act(() => {
+          useCommandTerminalStore.getState().markEarlierFailed(PROJECT_ID);
+        });
+
+        expect(mockBack).not.toHaveBeenCalled();
+        expect(screen.getByTestId('command-terminals-earlier-failed')).toBeTruthy();
+      });
+
+      it('stays open with nothing running while Earlier has rows, and draws no Running heading then', async () => {
+        seedCommandTerminalBoard({ terminals: [], earlierOffered: true });
+        await renderSheet();
+
+        expect(mockBack).not.toHaveBeenCalled();
+        expect(screen.queryByTestId('command-terminals-running-heading')).toBeNull();
+        expect(screen.getByTestId('command-terminal-earlier-row-conversation-a')).toBeTruthy();
+      });
+
+      /**
+       * The last terminal ends with the sheet open: its conversation arrives on
+       * the Earlier read the end set off, so the sheet waits for it rather than
+       * closing on the board's drop. Mutation seen failing: dropping
+       * `!earlierLoading` from the close rule - the sheet pops while loading.
+       */
+      it('waits for an Earlier read in flight when the last terminal leaves, then closes only if it brings nothing', async () => {
+        holdEarlier([]);
+        await renderSheet();
+
+        await act(() => {
+          useCommandTerminalStore.getState().markEarlierLoading(PROJECT_ID);
+          setBoardCommandTerminals(PROJECT_ID, []);
+        });
+        expect(mockBack).not.toHaveBeenCalled();
+
+        await act(() => {
+          holdEarlier([]);
+        });
+        expect(mockBack).toHaveBeenCalledTimes(1);
+      });
+
+      it('stays open on the ended terminal\'s conversation when the read brings it', async () => {
+        holdEarlier([]);
+        await renderSheet();
+
+        await act(() => {
+          useCommandTerminalStore.getState().markEarlierLoading(PROJECT_ID);
+          setBoardCommandTerminals(PROJECT_ID, []);
+        });
+        await act(() => {
+          holdEarlier([{ agentSessionId: 'conversation-c', name: 'Fix the flaky checkout e2e test', endedAt: new Date().toISOString() }]);
+        });
+
+        expect(mockBack).not.toHaveBeenCalled();
+        expect(screen.getByTestId('command-terminal-earlier-row-conversation-c-ended')).toHaveTextContent('just now');
+      });
     });
   });
 });

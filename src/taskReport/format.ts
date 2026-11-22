@@ -98,6 +98,28 @@ export function formatMonthDayTime(value: string | null, now: Date = new Date())
   return date.toLocaleString(undefined, { year, month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
+/** "Oct 12", with the year when it is not the current one: the desktop's `formatMonthDay`. Empty for a missing or unreadable time. */
+export function formatMonthDay(value: string | null, now: Date = new Date()): string {
+  const date = toDate(value);
+  if (date === null) return '';
+  const year = date.getFullYear() === now.getFullYear() ? undefined : 'numeric';
+  return date.toLocaleDateString(undefined, { year, month: 'short', day: 'numeric' });
+}
+
+/** How long an ended Command Terminal conversation reads as recent (the desktop rail's RECENT_MS). */
+const ENDED_RECENT_MS = 2 * DAY_MS;
+
+/**
+ * When an Earlier conversation ended, as the desktop's Command Terminal rail
+ * says it (`endedLabel` in CommandTerminalRail.tsx): "2 hours ago" or
+ * "yesterday" while recent, then the date, "Oct 21".
+ */
+export function formatEndedLabel(endedAt: string, nowMs: number = Date.now()): string {
+  const date = toDate(endedAt);
+  if (date === null) return '';
+  return nowMs - date.getTime() < ENDED_RECENT_MS ? formatTimeAgo(endedAt, nowMs) : formatMonthDay(endedAt, new Date(nowMs));
+}
+
 type RelativeUnit = 'year' | 'month' | 'week' | 'day' | 'hour' | 'minute';
 
 const RELATIVE_UNITS: readonly { unit: RelativeUnit; unitMs: number }[] = [

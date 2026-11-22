@@ -14,8 +14,10 @@ jest.mock('expo-router', () => ({
 }));
 
 const mockLaunchCommandTerminal = jest.fn();
+const mockFetchEarlierConversations = jest.fn();
 jest.mock('@/connection/actions', () => ({
   launchCommandTerminal: (projectId: string) => mockLaunchCommandTerminal(projectId),
+  fetchEarlierConversations: (projectId: string) => mockFetchEarlierConversations(projectId),
 }));
 
 const PROJECT_ID = 'project-1';
@@ -38,6 +40,7 @@ describe('TerminalsButton', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockLaunchCommandTerminal.mockReturnValue('launch-from-button');
+    mockFetchEarlierConversations.mockResolvedValue(undefined);
     useBoardStore.getState().reset();
     useActivityStore.getState().reset();
     useCommandTerminalStore.getState().reset();
@@ -250,6 +253,86 @@ describe('TerminalsButton', () => {
 
       expect(mockLaunchCommandTerminal).not.toHaveBeenCalled();
       expect(mockPush).toHaveBeenCalledWith({ pathname: '/command-terminals', params: { projectId: PROJECT_ID } });
+    });
+  });
+
+  /**
+   * Protocol 0.24.0 (task #160, decision A1): with nothing running, a project
+   * with Earlier conversations to resume opens the sheet, where both New and
+   * the Earlier list are, rather than starting a terminal. Nothing to resume
+   * keeps the one-tap start above.
+   */
+  describe('with nothing running and Earlier conversations to resume', () => {
+    const conversation = { agentSessionId: 'conversation-a', name: 'Audit image sizes', endedAt: '2026-11-22T08:00:00.000Z' };
+
+    it('reads the project\'s Earlier list on mounting, so it knows before the tap', async () => {
+      seedCommandTerminalBoard({ earlierOffered: true });
+      await renderButton();
+
+      expect(mockFetchEarlierConversations).toHaveBeenCalledWith(PROJECT_ID);
+    });
+
+    it('reads no Earlier list from a desktop that does not offer one', async () => {
+      seedCommandTerminalBoard({ earlierOffered: false });
+      await renderButton();
+
+      expect(mockFetchEarlierConversations).not.toHaveBeenCalled();
+    });
+
+    it('reads no Earlier list when Earlier is offered but the verb itself is not', async () => {
+      seedCommandTerminalBoard({ offered: false, earlierOffered: true });
+      await renderButton();
+
+      expect(mockFetchEarlierConversations).not.toHaveBeenCalled();
+    });
+
+    it('shows the terminal mark at rest with no count, and opens the sheet on a tap instead of starting one', async () => {
+      seedCommandTerminalBoard({ earlierOffered: true });
+      useCommandTerminalStore.getState().setEarlier(PROJECT_ID, [conversation]);
+      await renderButton();
+
+      expect(screen.getByTestId('header-terminals-earlier')).toBeTruthy();
+      expect(screen.queryByTestId('header-terminals-new')).toBeNull();
+      expect(screen.queryByTestId('header-terminals-count')).toBeNull();
+      expect(screen.getByTestId('header-terminals-button').props.accessibilityLabel).toBe('Command Terminals, none running');
+
+      await fireEvent.press(screen.getByTestId('header-terminals-button'));
+
+      expect(mockLaunchCommandTerminal).not.toHaveBeenCalled();
+      expect(mockPush).toHaveBeenCalledWith({ pathname: '/command-terminals', params: { projectId: PROJECT_ID } });
+    });
+
+    it('keeps the one-tap start when the list it read is empty', async () => {
+      seedCommandTerminalBoard({ earlierOffered: true });
+      useCommandTerminalStore.getState().setEarlier(PROJECT_ID, []);
+      await renderButton();
+
+      expect(screen.getByTestId('header-terminals-new')).toBeTruthy();
+      await fireEvent.press(screen.getByTestId('header-terminals-button'));
+      expect(mockLaunchCommandTerminal).toHaveBeenCalledWith(PROJECT_ID);
+    });
+
+    it('ignores a held list once the desktop stops offering Earlier', async () => {
+      seedCommandTerminalBoard({ earlierOffered: false });
+      useCommandTerminalStore.getState().setEarlier(PROJECT_ID, [conversation]);
+      await renderButton();
+
+      expect(screen.getByTestId('header-terminals-new')).toBeTruthy();
+    });
+
+    it('goes back to the new-terminal mark while the only conversation is being resumed', async () => {
+      seedCommandTerminalBoard({ earlierOffered: true });
+      useCommandTerminalStore.getState().setEarlier(PROJECT_ID, [conversation]);
+      await renderButton();
+      expect(screen.getByTestId('header-terminals-earlier')).toBeTruthy();
+
+      await act(() => {
+        useCommandTerminalStore.getState().beginLaunch(PROJECT_ID, 1, { agentSessionId: 'conversation-a', name: conversation.name });
+      });
+
+      // The resume is a terminal starting: the button counts it as running.
+      expect(screen.getByTestId('header-terminals-count')).toHaveTextContent('1');
+      expect(screen.queryByTestId('header-terminals-earlier')).toBeNull();
     });
   });
 });

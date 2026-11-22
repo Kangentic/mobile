@@ -158,8 +158,24 @@ function RootStack(): React.JSX.Element {
         <Stack.Screen name="section-filter" options={formSheetOptions} />
         {/* Command Terminals (task #113): a project's terminals as a sheet, a
             terminal's long-press actions as another, and the open terminal as
-            a full screen with its own header, like a task's session. */}
-        <Stack.Screen name="command-terminals" options={formSheetOptions} />
+            a full screen with its own header, like a task's session.
+
+            The terminals sheet turns off the default animated resize
+            (Android only; task #160). It GROWS after it opens: its Earlier
+            list (protocol 0.24.0) arrives on a read of its own, and stopping
+            the last terminal shrinks it and then grows it again. MEASURED on
+            a release build (kangentic_profile, react-native-screens 4.30.1):
+            with the animation on, the sheet kept its shrunk height and the
+            Earlier list sat below the screen, identically with the animator
+            duration scale at 0 (so not two animations overlapping); with it
+            off, the same flow passed. READ from source: the switch selects
+            Screen.kt's updateSheetContentHeightWithoutAnimation, which also
+            pushes the new size into the shadow tree, where the animated
+            expand path only lays out the native view. That this is WHY the
+            animated path fails is inferred. Other sheets keep the default:
+            none was observed failing, so none is changed unmeasured. Pinned
+            by tests/unit/formSheetBackground.test.ts. */}
+        <Stack.Screen name="command-terminals" options={{ ...formSheetOptions, sheetResizeAnimationEnabled: false }} />
         <Stack.Screen name="command-terminal-actions" options={formSheetOptions} />
         <Stack.Screen name="command-terminal" options={{ headerShown: false, title: 'Command Terminal' }} />
         {/* Workflows (protocol 0.21.0, task #116): a project's workflows as a

@@ -136,8 +136,11 @@ describe('root stack route titles', () => {
     // A bare `/\btitle:/` presence check is satisfied by `title: ''`, which
     // renders the same empty back label this test exists to catch. Require a
     // quoted string with at least one character instead.
+    // A sheet is either `options={formSheetOptions}` or the one-line spread
+    // `options={{ ...formSheetOptions, ... }}` a sheet uses for a per-route
+    // option (tests/unit/formSheetBackground.test.ts reads the same two forms).
     const untitled = registrations
-      .filter((registration) => !/options=\{formSheetOptions\}/.test(registration.source))
+      .filter((registration) => !/options=\{(?:formSheetOptions\}|\{\s*\.\.\.formSheetOptions,)/.test(registration.source))
       .filter((registration) => !/\btitle:\s*['"][^'"]+['"]/.test(registration.source))
       .map((registration) => registration.name);
     expect(untitled).toEqual([]);

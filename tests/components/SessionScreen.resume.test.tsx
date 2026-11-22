@@ -198,6 +198,7 @@ function seedBoard({
         taskCountsByColumnId: {},
         commandTerminals: [],
         commandTerminalsOffered: false,
+        earlierConversationsOffered: false,
         resumeOnOpenOffered,
         priorities: null,
       },

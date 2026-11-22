@@ -3725,6 +3725,31 @@ interface MockCommandTerminal {
   scrollback: string;
   /** Keys typed since the last Enter, for spotting `/exit` and the first prompt. */
   promptBuffer: string;
+  /**
+   * The agent's own conversation id (protocol 0.24.0): what an Earlier row and
+   * a `resume` name. Minted at a start; a resumed terminal carries its
+   * conversation's.
+   */
+  agentSessionId: string;
+  /**
+   * The first prompt the conversation was asked, on one line, or null while
+   * nothing has reached it. Only a USED terminal leaves an Earlier entry when
+   * it ends, as the desktop keeps only used conversations.
+   */
+  firstPrompt: string | null;
+}
+
+/**
+ * One ended conversation in the mock desktop's Earlier list (protocol 0.24.0).
+ * `label` is the terminal's name when it ended, if it had been named; the row
+ * reads `label ?? firstPrompt`, as the desktop's `commandTerminalHistoryName`.
+ */
+interface MockEarlierConversation {
+  agentSessionId: string;
+  projectId: string;
+  label: string | null;
+  firstPrompt: string | null;
+  endedAt: string;
 }
 
 /** A terminal's activity as the desktop reports it, the same in its board listing and its stream snapshot. */
@@ -3953,6 +3978,13 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
    */
   const commandTerminals: MockCommandTerminal[] = [];
   let commandTerminalCounter = 0;
+  /**
+   * The ended conversations a `list-earlier` answers with (protocol 0.24.0),
+   * newest first. None are seeded either: a terminal joins it when it ends
+   * after being used, so the store capture's one-tap start (nothing to resume)
+   * and the shipped demo open as they always did. Reset per connection.
+   */
+  const earlierConversations: MockEarlierConversation[] = [];
 
   function emit(event: BridgeEvent): void {
     if (!peer.isEstablished) return;
@@ -4061,8 +4093,14 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
    * four, otherwise the lowest free slot, answered before the agent has drawn
    * anything. The agent "arrives" a beat later, which is when the phone's held
    * input opens (its first activity event).
+   *
+   * Given an Earlier conversation it is a resume (protocol 0.24.0): the
+   * terminal carries that conversation and is named by its label, or reads as
+   * its slot's terminal when it had none, as the desktop's
+   * `commandTerminalDisplayName` does. A named one stays named, so its next
+   * prompt does not rename it.
    */
-  function startMockCommandTerminal(projectId: string): MockCommandTerminal | null {
+  function startMockCommandTerminal(projectId: string, resumed: MockEarlierConversation | null = null): MockCommandTerminal | null {
     if (commandTerminals.filter((candidate) => candidate.projectId === projectId).length >= MOCK_COMMAND_TERMINAL_LIMIT) return null;
     const takenSlots = new Set(commandTerminals.filter((candidate) => candidate.projectId === projectId).map((candidate) => candidate.slot));
     let slot = 1;
@@ -4072,14 +4110,20 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       sessionId: `mock-command-terminal-${commandTerminalCounter}`,
       projectId,
       slot,
-      name: `Command Terminal ${slot}`,
-      named: false,
+      name: resumed?.label ?? `Command Terminal ${slot}`,
+      named: resumed !== null && resumed.label !== null,
       transientTaskId: `mock-command-terminal-task-${commandTerminalCounter}`,
       activityState: null,
       idleSince: Date.now(),
       scrollback: '',
       promptBuffer: '',
+      agentSessionId: resumed?.agentSessionId ?? `mock-agent-conversation-${commandTerminalCounter}`,
+      firstPrompt: resumed?.firstPrompt ?? null,
     };
+    if (resumed !== null) {
+      const resumedIndex = earlierConversations.indexOf(resumed);
+      if (resumedIndex >= 0) earlierConversations.splice(resumedIndex, 1);
+    }
     commandTerminals.push(terminal);
     announceCommandTerminalsChanged(terminal);
     later(MOCK_COMMAND_TERMINAL_READY_MS, () => {
@@ -4093,11 +4137,28 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
     return terminal;
   }
 
-  /** Stop, or the agent exiting: decision C2 ends the terminal with its agent, and the board drops it in the same edge. */
+  /**
+   * Stop, or the agent exiting: decision C2 ends the terminal with its agent,
+   * and the board drops it in the same edge. A used terminal's conversation
+   * joins the top of Earlier in that edge too (protocol 0.24.0), before the
+   * board event goes out, as the desktop's history records it on the same
+   * session removal.
+   */
   function endMockCommandTerminal(terminal: MockCommandTerminal): void {
     const index = commandTerminals.indexOf(terminal);
     if (index < 0) return;
     commandTerminals.splice(index, 1);
+    if (terminal.firstPrompt !== null) {
+      const earlierIndex = earlierConversations.findIndex((conversation) => conversation.agentSessionId === terminal.agentSessionId);
+      if (earlierIndex >= 0) earlierConversations.splice(earlierIndex, 1);
+      earlierConversations.unshift({
+        agentSessionId: terminal.agentSessionId,
+        projectId: terminal.projectId,
+        label: terminal.named ? terminal.name : null,
+        firstPrompt: terminal.firstPrompt,
+        endedAt: new Date().toISOString(),
+      });
+    }
     emit({ kind: 'activity', sessionId: terminal.sessionId, taskId: terminal.transientTaskId, payload: { type: 'session-ended', intentional: true } });
     announceCommandTerminalsChanged(terminal);
   }
@@ -4121,6 +4182,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       later(800, () => endMockCommandTerminal(terminal));
       return;
     }
+    if (terminal.firstPrompt === null) terminal.firstPrompt = prompt.replace(/\s+/g, ' ');
     emitCommandTerminalActivity(terminal, 'thinking');
     showCommandTerminalFrame(terminal, COMMAND_TERMINAL_TURN.submitted);
     if (!terminal.named) {
@@ -5025,6 +5087,8 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       // grant on a current desktop offers it.
       commandTerminals: commandTerminals.filter((terminal) => terminal.projectId === servedProjectId).map(mockCommandTerminalWire),
       commandTerminalsOffered: true,
+      // Protocol 0.24.0: the Earlier list and its resume, served below.
+      earlierConversationsOffered: true,
       // Protocol 0.28.0: the resume on open is offered (see start-session's
       // `trigger: 'open'` below), and the desktop's default priority scale.
       resumeOnOpenOffered: true,
@@ -5716,8 +5780,10 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       case 'command-terminal': {
         // Mirrors the desktop's handler (protocol 0.20.0): a start names only
         // the project and is answered with the session the moment it exists;
-        // a stop ends only a Command Terminal. Every refusal carries the
-        // desktop's typed code, which is all the phone reads.
+        // a stop ends only a Command Terminal. Protocol 0.24.0 adds the Earlier
+        // list and a resume of one of its conversations, answered as a start.
+        // Every refusal carries the desktop's typed code, which is all the
+        // phone reads.
         const payload = parseCapabilityRequestPayload('command-terminal', request.payload);
         if (payload.action === 'stop') {
           const stopped = commandTerminals.find((terminal) => terminal.sessionId === payload.sessionId);
@@ -5733,7 +5799,35 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         if (payload.projectId !== MOCK_PROJECT.id && payload.projectId !== MOCK_PROJECT_2.id) {
           return failWithCode(request, 'unknown-project', `No such project: ${payload.projectId}`);
         }
-        const started = startMockCommandTerminal(payload.projectId);
+        const projectId = payload.projectId;
+        if (payload.action === 'list-earlier') {
+          // Protocol 0.24.0: newest first, and never one a live terminal holds.
+          const conversations = earlierConversations
+            .filter(
+              (conversation) =>
+                conversation.projectId === projectId &&
+                !commandTerminals.some((terminal) => terminal.agentSessionId === conversation.agentSessionId),
+            )
+            .map((conversation) => ({
+              agentSessionId: conversation.agentSessionId,
+              name: conversation.label ?? conversation.firstPrompt,
+              endedAt: conversation.endedAt,
+            }));
+          return ok(request, { ok: true, projectId, conversations });
+        }
+        if (payload.action === 'resume') {
+          // The desktop's own refusal words, with its typed codes.
+          const resumeId = payload.agentSessionId;
+          if (commandTerminals.some((terminal) => terminal.agentSessionId === resumeId)) {
+            return failWithCode(request, 'conversation-open', 'That conversation is already open in another terminal.');
+          }
+          const resumable = earlierConversations.find((conversation) => conversation.projectId === projectId && conversation.agentSessionId === resumeId);
+          if (resumable === undefined) return failWithCode(request, 'conversation-gone', 'That conversation can no longer be resumed.');
+          const resumed = startMockCommandTerminal(projectId, resumable);
+          if (resumed === null) return failWithCode(request, 'command-terminal-limit', 'Command Terminal limit reached');
+          return ok(request, { ok: true, sessionId: resumed.sessionId, slot: resumed.slot, name: resumed.name });
+        }
+        const started = startMockCommandTerminal(projectId);
         if (started === null) return failWithCode(request, 'command-terminal-limit', 'Command Terminal limit reached');
         return ok(request, { ok: true, sessionId: started.sessionId, slot: started.slot, name: started.name });
       }

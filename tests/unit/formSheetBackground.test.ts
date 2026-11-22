@@ -57,11 +57,18 @@ function readFormSheetOptions(): string {
   return match?.[1] ?? '';
 }
 
-/** Route names registered with the shared sheet options. */
+/**
+ * Route names registered with the shared sheet options: the plain
+ * `options={formSheetOptions}` form, or the one-line spread
+ * `options={{ ...formSheetOptions, <overrides> }}` a sheet uses to add a
+ * per-route option (the Terminals sheet's resize switch).
+ */
 function readSheetRouteNames(): string[] {
-  return [...rootLayoutSource.matchAll(/<Stack\.Screen\s+name="([^"]+)"\s+options=\{formSheetOptions\}\s*\/>/g)].map(
-    (match) => match[1],
-  );
+  return [
+    ...rootLayoutSource.matchAll(
+      /<Stack\.Screen\s+name="([^"]+)"\s+options=\{(?:formSheetOptions|\{\s*\.\.\.formSheetOptions,[^{}\n]*\})\}\s*\/>/g,
+    ),
+  ].map((match) => match[1]);
 }
 
 /** The screen file each sheet route renders, by the repo's naming: `create-task` -> CreateTaskScreen. */
@@ -99,9 +106,9 @@ describe('form sheet background', () => {
   });
 
   it('reads every route registered with formSheetOptions', () => {
-    // The route parser only reads the plain `<Stack.Screen name="..." options={formSheetOptions} />`
-    // form. A sheet registered as `options={{ ...formSheetOptions, x }}`, with the braces split
-    // across lines, or with its attributes reordered would drop out of the per-screen loop
+    // The route parser reads the plain `<Stack.Screen name="..." options={formSheetOptions} />`
+    // form and the one-line `options={{ ...formSheetOptions, x }}` spread. A sheet with the braces
+    // split across lines, or with its attributes reordered, would drop out of the per-screen loop
     // silently, so every reference to formSheetOptions has to be a route the parser found.
     const declarationCount = rootLayoutSource.match(/\bconst formSheetOptions\b/g)?.length ?? 0;
     const referenceCount = (rootLayoutSource.match(/\bformSheetOptions\b/g)?.length ?? 0) - declarationCount;
@@ -121,5 +128,23 @@ describe('form sheet background', () => {
 
   it.each(sheetRouteNames)('the %s sheet screen paints its content that same surface', (routeName) => {
     expect(screenSourceFor(routeName)).toMatch(/backgroundColor:\s*theme\.colors\.surfaceOverlay/);
+  });
+});
+
+/**
+ * The Terminals sheet grows after it opens (its Earlier list arrives on a read
+ * of its own, task #160), and on Android the default animated resize of a
+ * 'fitToContents' sheet left it at its shrunk height with the list below the
+ * screen: seen on a release build (the stop-then-Earlier flow failed with the
+ * Earlier heading off screen, and passed once this switch was off). The switch
+ * is a per-route override, so it is pinned here rather than trusted to survive
+ * a refactor of the shared options.
+ */
+describe('the Terminals sheet resize', () => {
+  it('is registered with the shared sheet options and the default resize animation off', () => {
+    expect(sheetRouteNames).toContain('command-terminals');
+    expect(rootLayoutSource).toMatch(
+      /<Stack\.Screen\s+name="command-terminals"\s+options=\{\{\s*\.\.\.formSheetOptions,\s*sheetResizeAnimationEnabled:\s*false\s*\}\}\s*\/>/,
+    );
   });
 });

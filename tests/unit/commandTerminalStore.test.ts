@@ -7,7 +7,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LAUNCH_LISTING_GRACE_MS,
+  isResumeInFlight,
+  selectEarlierList,
   selectLaunch,
+  selectResumeInFlight,
   selectStartingSlots,
   selectUnlistedStartedLaunches,
   useCommandTerminalStore,
@@ -41,11 +44,33 @@ describe('commandTerminalStore', () => {
         phase: 'starting',
         slot: 3,
         name: 'Command Terminal 3',
+        resumeAgentSessionId: null,
         sessionId: null,
         failureMessage: null,
         settledAt: null,
         listedOnce: false,
       });
+    });
+
+    it('beginLaunch with a resume carries the conversation and is titled by its name, capped (protocol 0.24.0)', () => {
+      const named = store().beginLaunch('project-1', 2, { agentSessionId: 'conversation-a', name: 'z'.repeat(COMMAND_TERMINAL_NAME_MAX_LENGTH * 2) });
+
+      expect(store().launchesById[named]).toMatchObject({ phase: 'starting', slot: 2, resumeAgentSessionId: 'conversation-a' });
+      expect(store().launchesById[named]?.name).toHaveLength(COMMAND_TERMINAL_NAME_MAX_LENGTH);
+    });
+
+    it('beginLaunch titles a resume of a conversation with no name by its predicted slot', () => {
+      const launchId = store().beginLaunch('project-1', 3, { agentSessionId: 'conversation-b', name: null });
+
+      expect(store().launchesById[launchId]?.name).toBe('Command Terminal 3');
+    });
+
+    it('beginLaunch titles a resume of a conversation with a blank name by its predicted slot, as with no name', () => {
+      const emptyLaunchId = store().beginLaunch('project-1', 3, { agentSessionId: 'conversation-c', name: '' });
+      const whitespaceLaunchId = store().beginLaunch('project-1', 4, { agentSessionId: 'conversation-d', name: '   ' });
+
+      expect(store().launchesById[emptyLaunchId]?.name).toBe('Command Terminal 3');
+      expect(store().launchesById[whitespaceLaunchId]?.name).toBe('Command Terminal 4');
     });
 
     it('markLaunchListed latches once a board has listed the terminal, keeping the object when already set', () => {
@@ -226,13 +251,138 @@ describe('commandTerminalStore', () => {
     });
   });
 
-  it('reset empties both maps', () => {
+  describe('resumes in flight', () => {
+    it('selectResumeInFlight finds a resume while it starts and until a board lists its terminal', () => {
+      const launchId = store().beginLaunch('project-1', 1, { agentSessionId: 'conversation-a', name: null });
+      expect(selectResumeInFlight(store(), 'project-1', 'conversation-a')?.launchId).toBe(launchId);
+
+      store().markLaunchStarted(launchId, { sessionId: 'sess-1', slot: 1, name: 'Command Terminal 1' });
+      expect(selectResumeInFlight(store(), 'project-1', 'conversation-a')?.launchId).toBe(launchId);
+
+      store().markLaunchListed(launchId);
+      expect(selectResumeInFlight(store(), 'project-1', 'conversation-a')).toBeNull();
+    });
+
+    it('selectResumeInFlight lets go of a failed resume, and never matches a New or another project', () => {
+      const failed = store().beginLaunch('project-1', 1, { agentSessionId: 'conversation-a', name: null });
+      store().markLaunchFailed(failed, 'x');
+      store().beginLaunch('project-1', 2);
+      store().beginLaunch('project-2', 1, { agentSessionId: 'conversation-a', name: null });
+
+      expect(selectResumeInFlight(store(), 'project-1', 'conversation-a')).toBeNull();
+    });
+
+    it('isResumeInFlight is false for a New, whatever its phase', () => {
+      const launchId = store().beginLaunch('project-1', 1);
+
+      expect(isResumeInFlight(store().launchesById[launchId]!)).toBe(false);
+    });
+  });
+
+  describe('Earlier lists', () => {
+    const conversation = { agentSessionId: 'conversation-a', name: 'Audit image sizes', endedAt: '2026-11-22T08:00:00.000Z' };
+    const another = { agentSessionId: 'conversation-b', name: null, endedAt: '2026-11-14T08:00:00.000Z' };
+
+    it('is loading with nothing held before its first read lands', () => {
+      store().markEarlierLoading('project-1');
+
+      expect(selectEarlierList(store(), 'project-1')).toEqual({ status: 'loading', conversations: null, revision: 0 });
+      expect(selectEarlierList(store(), 'project-2')).toBeNull();
+      expect(selectEarlierList(store(), null)).toBeNull();
+    });
+
+    it('keeps the rows last read through a reload and through a failed read', () => {
+      store().setEarlier('project-1', [conversation]);
+      store().markEarlierLoading('project-1');
+      expect(selectEarlierList(store(), 'project-1')).toMatchObject({ status: 'loading', conversations: [conversation] });
+
+      store().markEarlierFailed('project-1');
+      expect(selectEarlierList(store(), 'project-1')).toMatchObject({ status: 'failed', conversations: [conversation] });
+    });
+
+    it('markEarlierFailed before any read leaves a held list with nothing in it, which a bootstrap re-reads', () => {
+      store().markEarlierFailed('project-1');
+
+      expect(selectEarlierList(store(), 'project-1')).toEqual({ status: 'failed', conversations: null, revision: 0 });
+    });
+
+    it('markEarlierLoading leaves the list object alone when it is already loading', () => {
+      store().markEarlierLoading('project-1');
+      const before = store().earlierByProjectId['project-1'];
+
+      store().markEarlierLoading('project-1');
+
+      expect(store().earlierByProjectId['project-1']).toBe(before);
+    });
+
+    describe('setEarlier with an answer that may not have changed', () => {
+      /** The same conversations, as fresh objects in a fresh array, the way a re-read decodes them. */
+      function freshCopy<Conversation extends object>(conversations: Conversation[]): Conversation[] {
+        return conversations.map((held) => ({ ...held }));
+      }
+
+      it('keeps the held array and leaves the state object alone when a ready list is answered with the same conversations', () => {
+        store().setEarlier('project-1', [conversation, another]);
+        const heldArray = store().earlierByProjectId['project-1']?.conversations;
+        const stateBefore = store().earlierByProjectId;
+
+        store().setEarlier('project-1', freshCopy([conversation, another]));
+
+        expect(store().earlierByProjectId['project-1']?.conversations).toBe(heldArray);
+        expect(store().earlierByProjectId).toBe(stateBefore);
+      });
+
+      it('returns a reloading list to ready with the same array when the answer is the same', () => {
+        store().setEarlier('project-1', [conversation, another]);
+        const heldArray = store().earlierByProjectId['project-1']?.conversations;
+        store().markEarlierLoading('project-1');
+        expect(selectEarlierList(store(), 'project-1')?.status).toBe('loading');
+
+        store().setEarlier('project-1', freshCopy([conversation, another]));
+
+        expect(selectEarlierList(store(), 'project-1')?.status).toBe('ready');
+        expect(store().earlierByProjectId['project-1']?.conversations).toBe(heldArray);
+      });
+
+      it.each([
+        ['agentSessionId', [{ ...conversation, agentSessionId: 'conversation-z' }, another]],
+        ['name', [{ ...conversation, name: 'Renamed' }, another]],
+        ['endedAt', [{ ...conversation, endedAt: '2026-11-22T09:00:00.000Z' }, another]],
+        ['length', [conversation]],
+        ['order', [another, conversation]],
+      ])('replaces the held array when the answer differs in %s', (_difference, answer) => {
+        store().setEarlier('project-1', [conversation, another]);
+        const heldArray = store().earlierByProjectId['project-1']?.conversations;
+
+        store().setEarlier('project-1', answer);
+
+        expect(store().earlierByProjectId['project-1']?.conversations).toBe(answer);
+        expect(store().earlierByProjectId['project-1']?.conversations).not.toBe(heldArray);
+        expect(selectEarlierList(store(), 'project-1')?.status).toBe('ready');
+      });
+    });
+
+    it('dropEarlierConversation takes one row out and bumps the revision, and leaves an unread project alone', () => {
+      store().setEarlier('project-1', [conversation, another]);
+
+      store().dropEarlierConversation('project-1', 'conversation-a');
+      expect(selectEarlierList(store(), 'project-1')).toMatchObject({ conversations: [another], revision: 1 });
+
+      const before = store().earlierByProjectId;
+      store().dropEarlierConversation('project-unread', 'conversation-a');
+      expect(store().earlierByProjectId).toBe(before);
+    });
+  });
+
+  it('reset empties every map, the Earlier lists included', () => {
     store().beginLaunch('project-1', 1);
     store().markStopping('sess-1');
+    store().setEarlier('project-1', []);
 
     store().reset();
 
     expect(store().launchesById).toEqual({});
     expect(store().stopsBySessionId).toEqual({});
+    expect(store().earlierByProjectId).toEqual({});
   });
 });

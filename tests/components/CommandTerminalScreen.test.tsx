@@ -7,6 +7,8 @@ import { ThemeProvider, darkTerminalTheme } from '@/components';
 import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
 import {
   CommandTerminalScreen,
+  RESUME_FAILED_TITLE,
+  RESUMING_CONVERSATION_CAPTION,
   START_FAILURE_HOLD_MS,
   STARTING_COMMAND_TERMINAL_CAPTION,
   START_FAILED_TITLE,
@@ -420,6 +422,75 @@ describe('CommandTerminalScreen', () => {
       await unmount();
 
       expect(useCommandTerminalStore.getState().launchesById[launchId]).toBeUndefined();
+    });
+  });
+
+  /**
+   * Protocol 0.24.0 (task #160, design changes 3 and 5): a resume opens the
+   * terminal's screen the way a start does, titled by its conversation, in the
+   * desktop's own words for a resume.
+   */
+  describe('opened from a resume of an Earlier conversation', () => {
+    let launchId: string;
+
+    beforeEach(() => {
+      seedCommandTerminalBoard({ terminals: [], earlierOffered: true });
+      launchId = useCommandTerminalStore.getState().beginLaunch(PROJECT_ID, 2, {
+        agentSessionId: 'conversation-a',
+        name: 'Why does the cart badge lag behind checkout?',
+      });
+      mockParams = { launchId, projectId: PROJECT_ID };
+    });
+
+    it('opens at once on "Resuming conversation...", titled by the conversation', async () => {
+      await renderScreen();
+
+      expect(screen.getByTestId('command-terminal-starting').props.accessibilityLabel).toBe(RESUMING_CONVERSATION_CAPTION);
+      expect(screen.getByTestId('command-terminal-starting-caption')).toHaveTextContent('Resuming conversation...');
+      expect(screen.getByTestId('command-terminal-title')).toHaveTextContent('Why does the cart badge lag behind checkout?');
+    });
+
+    /**
+     * The launch is cleared once a board lists the terminal, and the starting
+     * face can outlast that (the first frame has not painted). Mutation seen
+     * failing: reading `launch.resumeAgentSessionId` at render time instead of
+     * the latch - the caption falls back to the start's words.
+     */
+    it('keeps saying it is resuming after its launch is cleared, until the first frame paints', async () => {
+      await renderScreen();
+      await act(() => {
+        useCommandTerminalStore.getState().markLaunchStarted(launchId, { sessionId: 'terminal-9', slot: 2, name: 'Why does the cart badge lag behind checkout?' });
+      });
+
+      await act(() => {
+        useCommandTerminalStore.getState().clearLaunch(launchId);
+      });
+
+      expect(screen.getByTestId('command-terminal-starting-caption')).toHaveTextContent('Resuming conversation...');
+    });
+
+    it('shows the desktop\'s title for a refused resume over the desktop\'s own words', async () => {
+      await renderScreen();
+
+      await act(() => {
+        useCommandTerminalStore.getState().markLaunchFailed(launchId, 'That conversation can no longer be resumed.');
+      });
+
+      expect(screen.getByTestId('command-terminal-start-failed-title')).toHaveTextContent(RESUME_FAILED_TITLE);
+      expect(RESUME_FAILED_TITLE).toBe("Couldn't resume conversation");
+      expect(screen.getByTestId('command-terminal-start-failed-reason')).toHaveTextContent('That conversation can no longer be resumed.');
+    });
+
+    it('leaves a New\'s words alone (the control)', async () => {
+      const newLaunchId = useCommandTerminalStore.getState().beginLaunch(PROJECT_ID, 3);
+      mockParams = { launchId: newLaunchId, projectId: PROJECT_ID };
+      await renderScreen();
+
+      expect(screen.getByTestId('command-terminal-starting-caption')).toHaveTextContent(STARTING_COMMAND_TERMINAL_CAPTION);
+      await act(() => {
+        useCommandTerminalStore.getState().markLaunchFailed(newLaunchId, 'x');
+      });
+      expect(screen.getByTestId('command-terminal-start-failed-title')).toHaveTextContent(START_FAILED_TITLE);
     });
   });
 

@@ -1,15 +1,20 @@
 import {
   COMMAND_TERMINAL_LIMIT_ERROR_CODE,
+  CONVERSATION_GONE_ERROR_CODE,
+  CONVERSATION_OPEN_ERROR_CODE,
   UNKNOWN_PROJECT_ERROR_CODE,
   UNKNOWN_SESSION_ERROR_CODE,
   UNSUPPORTED_VERB_ERROR_CODE,
+  type CommandTerminalEarlierConversationWire,
+  type CommandTerminalStartResponsePayload,
   type JsonValue,
   type ReadDiffScope,
   type StartSessionOutcome,
 } from '@kangentic/protocol';
-import { CapabilityError, CapabilityTimeoutError, ChannelDisconnectedError } from '@/channel';
+import { CapabilityError, CapabilityTimeoutError, ChannelDisconnectedError, type VerbClient } from '@/channel';
 import { collapseToSnippetText, findAwaitedToolUse, lastAssistantText, type AwaitedToolUse } from '@/conversation/pendingPromptSummary';
 import { traceConnection } from '@/devsupport/connectionTrace';
+import { reportHandledError } from '@/observability/crashReporting';
 import { useActivityStore } from '@/state/activityStore';
 import { useChannelStore } from '@/state/channelStore';
 import {
@@ -18,10 +23,11 @@ import {
   lowestFreeCommandTerminalSlot,
   selectCommandTerminal,
   selectCommandTerminals,
+  selectEarlierConversationsOffered,
   selectTaskRow,
   useBoardStore,
 } from '@/state/boardStore';
-import { selectStartingSlots, useCommandTerminalStore } from '@/state/commandTerminalStore';
+import { selectResumeInFlight, selectStartingSlots, useCommandTerminalStore, type LaunchResume } from '@/state/commandTerminalStore';
 import { diffKeyFor, useDiffStore, type DiffTarget } from '@/state/diffStore';
 import { useReadingViewStore } from '@/state/readingViewStore';
 import { resumeProgress, useResumeStore, type ResumeAttempt, type ResumeOrigin } from '@/state/resumeStore';
@@ -39,6 +45,7 @@ import {
   type ConnectionTeardownIntent,
 } from './connectionManager';
 import { runBootstrap } from './bootstrap';
+import { readEarlierConversations, refreshHeldEarlierConversations } from './commandTerminalEarlier';
 import { reconcileSessionsFromBoards } from './storeFeed';
 
 /**
@@ -361,30 +368,55 @@ export function commandTerminalStartFailureLine(error: unknown): string {
 }
 
 /**
- * Starts a Command Terminal in a project and returns its launch id at once
- * (protocol 0.20.0). The tap opens the terminal's screen straight away (design
- * change 4); the screen follows the launch in `useCommandTerminalStore`, which
- * outlives it, so leaving before the answer cannot lose the terminal or start
- * a second one on a remount.
+ * Refusals a start or resume meets in ordinary use, which say nothing about a
+ * defect, so they are shown but not reported: the four-terminal cap reached by
+ * a race (the phone greys New and the Earlier rows out at four), and the two
+ * conversation codes, which mean the Earlier row the user tapped was out of
+ * date.
+ */
+function isExpectedLaunchRefusal(error: unknown): boolean {
+  return (
+    error instanceof CapabilityError &&
+    (error.code === COMMAND_TERMINAL_LIMIT_ERROR_CODE || error.code === CONVERSATION_GONE_ERROR_CODE || error.code === CONVERSATION_OPEN_ERROR_CODE)
+  );
+}
+
+/**
+ * What a start and a resume share: the launch the screen follows, the slot
+ * prediction, and how the answer settles. Returns the launch id at once.
  *
  * The predicted slot is the lowest one neither the board nor another start in
  * flight holds, for the screen's title until the answer carries the real one.
  * On success the session joins the wanted streams at once (the reconcile
  * reads the launch) and the board is re-read; the desktop's own
- * `command-terminals-changed` follows anyway. A timeout re-reads the board as
- * well, because the terminal may be running after all.
+ * `command-terminals-changed` follows anyway. A resumed conversation leaves the
+ * held Earlier list at once: the desktop's list leaves out any conversation a
+ * live terminal holds, so a re-read would drop it too.
+ *
+ * A failure holds its one line on the screen. A timeout re-reads the board,
+ * because the terminal may be running after all. A failed resume gives its
+ * Earlier row back, except `conversation-gone`, whose row is dropped; any
+ * other failed resume re-reads the list, so a conversation a live terminal
+ * holds (`conversation-open`) leaves it. A failure that is not an expected
+ * refusal is reported through the handled-error door (its message is never
+ * sent).
  */
-export function launchCommandTerminal(projectId: string): string {
+function beginCommandTerminalLaunch(
+  projectId: string,
+  resume: LaunchResume | null,
+  send: (verbs: VerbClient) => Promise<CommandTerminalStartResponsePayload>,
+): string {
   const occupiedSlots = new Set<number>([
     ...selectCommandTerminals(useBoardStore.getState(), projectId).map((terminal) => terminal.slot),
     ...selectStartingSlots(useCommandTerminalStore.getState(), projectId),
   ]);
   const predictedSlot = lowestFreeCommandTerminalSlot(occupiedSlots) ?? COMMAND_TERMINAL_LIMIT;
-  const launchId = useCommandTerminalStore.getState().beginLaunch(projectId, predictedSlot);
+  const launchId = useCommandTerminalStore.getState().beginLaunch(projectId, predictedSlot, resume);
   void (async () => {
     try {
-      const started = await requireVerbClient().startCommandTerminal(projectId);
+      const started = await send(requireVerbClient());
       useCommandTerminalStore.getState().markLaunchStarted(launchId, started);
+      if (resume !== null) useCommandTerminalStore.getState().dropEarlierConversation(projectId, resume.agentSessionId);
       const connection = getActiveConnection();
       if (connection !== null) {
         reconcileSessionsFromBoards(connection.subscriptions);
@@ -392,10 +424,72 @@ export function launchCommandTerminal(projectId: string): string {
       }
     } catch (error) {
       useCommandTerminalStore.getState().markLaunchFailed(launchId, commandTerminalStartFailureLine(error));
+      if (!isExpectedLaunchRefusal(error)) reportHandledError('command-terminal-launch', error);
       if (error instanceof CapabilityTimeoutError) getActiveConnection()?.subscriptions.refreshBoard(projectId);
+      if (resume === null) return;
+      if (error instanceof CapabilityError && error.code === CONVERSATION_GONE_ERROR_CODE) {
+        useCommandTerminalStore.getState().dropEarlierConversation(projectId, resume.agentSessionId);
+      } else {
+        void fetchEarlierConversations(projectId);
+      }
     }
   })();
   return launchId;
+}
+
+/**
+ * Starts a Command Terminal in a project and returns its launch id at once
+ * (protocol 0.20.0). The tap opens the terminal's screen straight away (design
+ * change 4); the screen follows the launch in `useCommandTerminalStore`, which
+ * outlives it, so leaving before the answer cannot lose the terminal or start
+ * a second one on a remount. See `beginCommandTerminalLaunch` for how it
+ * settles.
+ */
+export function launchCommandTerminal(projectId: string): string {
+  return beginCommandTerminalLaunch(projectId, null, (verbs) => verbs.startCommandTerminal(projectId));
+}
+
+/**
+ * Resumes an Earlier conversation in a new terminal (protocol 0.24.0, task
+ * #160 design change 3) and returns its launch id at once, so the tap opens
+ * the terminal's screen straight away, as New does (decision C1). The launch
+ * carries the conversation, so the screen is titled by it and says "Resuming
+ * conversation...", and its Earlier row is hidden from the tap.
+ *
+ * A second resume of the same conversation while one is in flight sends
+ * nothing and returns the first one's launch (the double tap). Returns null,
+ * and sends nothing, when the project's desktop does not offer Earlier: an
+ * older desktop refuses the action as malformed.
+ */
+export function resumeCommandTerminal(projectId: string, conversation: CommandTerminalEarlierConversationWire): string | null {
+  if (!selectEarlierConversationsOffered(useBoardStore.getState(), projectId)) return null;
+  const inFlight = selectResumeInFlight(useCommandTerminalStore.getState(), projectId, conversation.agentSessionId);
+  if (inFlight !== null) return inFlight.launchId;
+  return beginCommandTerminalLaunch(projectId, { agentSessionId: conversation.agentSessionId, name: conversation.name }, (verbs) =>
+    verbs.resumeCommandTerminal(projectId, conversation.agentSessionId),
+  );
+}
+
+/**
+ * Reads a project's Earlier list (protocol 0.24.0) into the store: the sheet
+ * on opening, and the Board's Terminals button on mounting, so it knows
+ * whether a tap with nothing running has anything to resume (decision A1).
+ * Sends nothing unless the project's desktop offers Earlier. Not connected,
+ * the list is marked failed rather than read: that is the truth the sheet can
+ * show, and it makes the list a held one, which the bootstrap after the next
+ * connect re-reads.
+ */
+export function fetchEarlierConversations(projectId: string): Promise<void> {
+  if (!selectEarlierConversationsOffered(useBoardStore.getState(), projectId)) return Promise.resolve();
+  let verbs: VerbClient;
+  try {
+    verbs = requireVerbClient();
+  } catch (error) {
+    if (!(error instanceof NotConnectedError)) throw error;
+    useCommandTerminalStore.getState().markEarlierFailed(projectId);
+    return Promise.resolve();
+  }
+  return readEarlierConversations(verbs, projectId);
 }
 
 /**
@@ -406,6 +500,11 @@ export function launchCommandTerminal(projectId: string): string {
  * what was asked for. Any other failure marks the Stop failed, which brings
  * the row back with the sheet's failure line, and re-reads the board: a Stop
  * that timed out may still have landed.
+ *
+ * A held Earlier list is re-read BEFORE the board (task #160 design change 2):
+ * a used terminal that ends joins Earlier, and the sheet stays open while its
+ * list is loading, so it must be loading by the time a snapshot drops the last
+ * terminal.
  */
 export async function stopCommandTerminal(sessionId: string): Promise<void> {
   const terminalStore = useCommandTerminalStore.getState();
@@ -419,7 +518,11 @@ export async function stopCommandTerminal(sessionId: string): Promise<void> {
       useCommandTerminalStore.getState().markStopFailed(sessionId);
     }
   }
-  if (projectId !== null) getActiveConnection()?.subscriptions.refreshBoard(projectId);
+  if (projectId === null) return;
+  const connection = getActiveConnection();
+  if (connection === null) return;
+  void refreshHeldEarlierConversations(connection.verbs, projectId);
+  connection.subscriptions.refreshBoard(projectId);
 }
 
 export async function moveTaskOptimistic(input: {

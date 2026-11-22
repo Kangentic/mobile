@@ -541,6 +541,121 @@ describe('VerbClient', () => {
 
       await expect(verbs.stopCommandTerminal('sess-terminal-1')).rejects.toThrowError(CapabilityError);
     });
+
+    // Protocol 0.24.0: the Earlier list and a resume of one of its conversations.
+
+    it('resumeCommandTerminal sends the resume action with the conversation and parses the start-shaped answer', async () => {
+      const resumedPayload = { ok: true, sessionId: 'sess-terminal-3', slot: 3, name: 'Audit image sizes' };
+      const { verbs, requests } = await establishedHarness((request) => okResponse(request, resumedPayload));
+
+      await expect(verbs.resumeCommandTerminal('project-1', 'conversation-a')).resolves.toEqual(resumedPayload);
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0].verb).toBe('command-terminal');
+      expect(requests[0].payload).toEqual({ action: 'resume', projectId: 'project-1', agentSessionId: 'conversation-a' });
+    });
+
+    /**
+     * A resume runs the desktop's start, git steps and all, so it waits as long
+     * as a start does. Mutation seen failing: dropping the timeout option from
+     * resumeCommandTerminal - the resume has already settled a millisecond
+     * before the start's bound.
+     */
+    it('gives a resume the start\'s longer timeout', async () => {
+      const { verbs } = await establishedHarness(() => null);
+      vi.useFakeTimers();
+      try {
+        let resumeHasSettled = false;
+        const resumeSettled = verbs.resumeCommandTerminal('project-1', 'conversation-a').then(
+          () => 'resolved',
+          (error: unknown) => error,
+        );
+        void resumeSettled.then(() => {
+          resumeHasSettled = true;
+        });
+
+        await vi.advanceTimersByTimeAsync(COMMAND_TERMINAL_START_TIMEOUT_MS - 1);
+        expect(resumeHasSettled).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(resumeSettled).resolves.toBeInstanceOf(CapabilityTimeoutError);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it.each(['conversation-gone', 'conversation-open', 'command-terminal-limit', 'unknown-project'] as const)(
+      'resumeCommandTerminal surfaces the refusal code %s on the CapabilityError',
+      async (code) => {
+        const { verbs } = await establishedHarness((request) => ({
+          type: 'capability-response',
+          requestId: request.requestId,
+          ok: false,
+          error: 'That conversation can no longer be resumed.',
+          code,
+        }));
+
+        const refusal = await verbs.resumeCommandTerminal('project-1', 'conversation-a').catch((error: unknown) => error);
+
+        expect(refusal).toBeInstanceOf(CapabilityError);
+        expect((refusal as CapabilityError).code).toBe(code);
+        expect((refusal as CapabilityError).message).toBe('That conversation can no longer be resumed.');
+      },
+    );
+
+    it('listEarlierCommandTerminalConversations sends list-earlier for the project and parses the conversations', async () => {
+      const listPayload = {
+        ok: true,
+        projectId: 'project-1',
+        conversations: [
+          { agentSessionId: 'conversation-a', name: 'Audit image sizes', endedAt: '2026-11-22T08:00:00.000Z' },
+          { agentSessionId: 'conversation-b', name: null, endedAt: '2026-11-14T08:00:00.000Z' },
+        ],
+      };
+      const { verbs, requests } = await establishedHarness((request) => okResponse(request, listPayload));
+
+      await expect(verbs.listEarlierCommandTerminalConversations('project-1')).resolves.toEqual(listPayload);
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0].verb).toBe('command-terminal');
+      expect(requests[0].payload).toEqual({ action: 'list-earlier', projectId: 'project-1' });
+    });
+
+    it('listEarlierCommandTerminalConversations drops a malformed row and keeps the rest', async () => {
+      const { verbs } = await establishedHarness((request) =>
+        okResponse(request, {
+          ok: true,
+          projectId: 'project-1',
+          conversations: [
+            { agentSessionId: '', name: 'No id', endedAt: '2026-11-22T08:00:00.000Z' },
+            { agentSessionId: 'conversation-b', name: 42, endedAt: '2026-11-22T08:00:00.000Z' },
+            { agentSessionId: 'conversation-c', name: 'Kept', endedAt: '2026-11-22T08:00:00.000Z' },
+          ],
+        }),
+      );
+
+      const answer = await verbs.listEarlierCommandTerminalConversations('project-1');
+
+      expect(answer.conversations.map((conversation) => conversation.agentSessionId)).toEqual(['conversation-c']);
+    });
+
+    it('listEarlierCommandTerminalConversations throws CapabilityError for an answer with no conversations', async () => {
+      const { verbs } = await establishedHarness((request) => okResponse(request, { ok: true, projectId: 'project-1' }));
+
+      await expect(verbs.listEarlierCommandTerminalConversations('project-1')).rejects.toThrowError(CapabilityError);
+    });
+
+    it('listEarlierCommandTerminalConversations surfaces unknown-project', async () => {
+      const { verbs } = await establishedHarness((request) => ({
+        type: 'capability-response',
+        requestId: request.requestId,
+        ok: false,
+        error: 'No such project: project-1',
+        code: 'unknown-project',
+      }));
+
+      await expect(verbs.listEarlierCommandTerminalConversations('project-1')).rejects.toMatchObject({ verb: 'command-terminal', code: 'unknown-project' });
+    });
   });
 
   /**

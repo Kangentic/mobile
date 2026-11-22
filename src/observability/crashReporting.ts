@@ -201,6 +201,8 @@ export function reportCaughtError(error: Error, boundary: CaughtErrorBoundary): 
  */
 export type HandledErrorSite =
   | 'board-archived-read'
+  | 'command-terminal-earlier'
+  | 'command-terminal-launch'
   | 'completed-task-report'
   | 'composer-send'
   | 'connection-open'
