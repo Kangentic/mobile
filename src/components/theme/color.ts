@@ -88,7 +88,7 @@ export function hexWithAlpha(hex: string, alpha: number): string {
 /**
  * The desktop's tinted pill (TINTED_PILL_FILL / TINTED_PILL_EDGE): its color at
  * 14% for the fill and 35% for the hairline edge, through `hexWithAlpha`. The
- * priority pill and the queued panel's count pill both draw it.
+ * queued panel's count pill draws it.
  */
 export const TINTED_PILL_FILL_ALPHA = 0.14;
 export const TINTED_PILL_EDGE_ALPHA = 0.35;
