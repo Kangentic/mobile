@@ -25,8 +25,11 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppState } from 'react-native';
-import { SessionManager } from '@/channel';
+import { SessionManager, VerbClient } from '@/channel';
+import { boardSnapshotFixture } from '@/devsupport/desktopFixtures';
 import type { StubSessionInitiator } from '@/devsupport/stubDesktopPeer';
+import { useBoardStore } from '@/state/boardStore';
+import { useCommandTerminalStore } from '@/state/commandTerminalStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import { useChannelStore } from '@/state/channelStore';
 import { waitUntil } from '../helpers/async';
@@ -364,6 +367,116 @@ describe('connectionManager teardown intent', () => {
 
     expect(sendFinalFrameSpy).not.toHaveBeenCalled();
     expect(getActiveConnection()).toBeNull();
+  });
+});
+
+describe('connectionManager Earlier list wiring (protocol 0.24.0)', () => {
+  const EARLIER_PROJECT_ID = 'project-earlier';
+
+  /** The desktop's answer to a list-earlier read; the verb is spied on the prototype so it can be installed before any connection exists. */
+  function spyOnEarlierRead() {
+    return vi
+      .spyOn(VerbClient.prototype, 'listEarlierCommandTerminalConversations')
+      .mockResolvedValue({ ok: true, projectId: EARLIER_PROJECT_ID, conversations: [] });
+  }
+
+  /** A project whose desktop offers Earlier, and whose Earlier list the phone already holds. */
+  function holdEarlierList(): void {
+    useBoardStore
+      .getState()
+      .applyBoardSnapshot(boardSnapshotFixture({ projectId: EARLIER_PROJECT_ID, tasks: [], commandTerminalsOffered: true, earlierConversationsOffered: true }));
+    useCommandTerminalStore.getState().setEarlier(EARLIER_PROJECT_ID, []);
+  }
+
+  beforeEach(() => {
+    (globalThis as { __DEV__?: boolean }).__DEV__ = true;
+    process.env.EXPO_PUBLIC_KANGENTIC_MOCK = '1';
+    useSettingsStore.setState({ backgroundNotificationsMode: 'off' });
+    mockRunBootstrap.mockReset();
+    mockDesktopSeam.stub = null;
+    useBoardStore.getState().reset();
+    useCommandTerminalStore.getState().reset();
+  });
+
+  afterEach(async () => {
+    const { stopConnectionLifecycle } = await import('@/connection/connectionManager');
+    stopConnectionLifecycle();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    delete (globalThis as { __DEV__?: boolean }).__DEV__;
+    delete process.env.EXPO_PUBLIC_KANGENTIC_MOCK;
+    useChannelStore.getState().reset();
+    useBoardStore.getState().reset();
+    useCommandTerminalStore.getState().reset();
+  });
+
+  it('re-reads a held Earlier list on a command-terminals-changed board event, and on no other change', async () => {
+    const { startConnectionLifecycle } = await import('@/connection/connectionManager');
+    const earlierRead = spyOnEarlierRead();
+    // A bootstrap that never settles, so its own re-read cannot be what is counted.
+    mockRunBootstrap.mockImplementation(() => new Promise<void>(() => undefined));
+    holdEarlierList();
+
+    startConnectionLifecycle();
+    await waitUntil(() => mockRunBootstrap.mock.calls.length === 1);
+    const stub = mockDesktopSeam.stub as StubSessionInitiator;
+
+    // Events arrive in order, so once the second one has read, the first has been seen and ignored.
+    stub.emitEvent({ kind: 'board', projectId: EARLIER_PROJECT_ID, payload: { change: 'task-updated', ids: ['task-1'] } });
+    stub.emitEvent({ kind: 'board', projectId: EARLIER_PROJECT_ID, payload: { change: 'command-terminals-changed', ids: ['terminal-1'] } });
+    await waitUntil(() => earlierRead.mock.calls.length >= 1, { label: 'list-earlier after command-terminals-changed' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(earlierRead).toHaveBeenCalledTimes(1);
+    expect(earlierRead).toHaveBeenCalledWith(EARLIER_PROJECT_ID);
+  });
+
+  it('re-reads every held Earlier list when the bootstrap completes', async () => {
+    const { startConnectionLifecycle } = await import('@/connection/connectionManager');
+    const earlierRead = spyOnEarlierRead();
+    mockRunBootstrap.mockResolvedValue(undefined);
+    holdEarlierList();
+
+    startConnectionLifecycle();
+    await waitUntil(() => earlierRead.mock.calls.length >= 1, { label: 'list-earlier after bootstrap' });
+
+    expect(earlierRead).toHaveBeenCalledWith(EARLIER_PROJECT_ID);
+  });
+
+  /**
+   * Mutation seen failing: running refreshAllHeldEarlierConversations in the
+   * bootstrap's then-handler before (or regardless of) the generation check,
+   * which makes the superseded bootstrap's completion read as well.
+   */
+  it('leaves the Earlier re-read to the current bootstrap when a superseded one completes', async () => {
+    const { startConnectionLifecycle, getActiveConnection } = await import('@/connection/connectionManager');
+    const earlierRead = spyOnEarlierRead();
+    const settleBootstraps: (() => void)[] = [];
+    mockRunBootstrap.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          settleBootstraps.push(resolve);
+        }),
+    );
+    holdEarlierList();
+
+    startConnectionLifecycle();
+    await waitUntil(() => mockRunBootstrap.mock.calls.length === 1);
+    // A fresh establish while the first bootstrap is in flight supersedes it.
+    const activeConnection = getActiveConnection();
+    if (!activeConnection) throw new Error('expected an active connection after establishment');
+    activeConnection.controller.session.reset();
+    (mockDesktopSeam.stub as StubSessionInitiator).beginHandshake();
+    await waitUntil(() => mockRunBootstrap.mock.calls.length === 2);
+
+    settleBootstraps[0]();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(earlierRead).not.toHaveBeenCalled();
+
+    settleBootstraps[1]();
+    await waitUntil(() => earlierRead.mock.calls.length >= 1, { label: 'list-earlier after the current bootstrap' });
+    expect(earlierRead).toHaveBeenCalledTimes(1);
+    expect(earlierRead).toHaveBeenCalledWith(EARLIER_PROJECT_ID);
   });
 });
 
