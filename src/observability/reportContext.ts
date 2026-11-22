@@ -3,6 +3,7 @@ import { isCrashReportingInitialized } from './crashReporting';
 import {
   isConnectionBreadcrumbState,
   isLensScreenName,
+  isRelayDialId,
   isScreenLens,
   isTrailSilentScreen,
   screenNameFromSegments,
@@ -63,7 +64,11 @@ import { CONNECTION_BREADCRUMB_CATEGORY, NAVIGATION_BREADCRUMB_CATEGORY } from '
  * NOTHING HERE IS CONTENT, and the callers cannot make it so. Every value is a
  * member of a closed set in reportVocabulary.ts and is checked against that
  * set HERE, at runtime, whatever the type system was told: a screen name is a
- * route template and never a path, so never one of the desktop's task IDs. No
+ * route template and never a path, so never one of the desktop's task IDs. The
+ * one value that is not a set member is the relay dial id (`relay_dial_id`,
+ * and `dial` on the connection crumbs): random by design, minted fresh per
+ * dial attempt, and checked here against its pinned 16-hex format instead, so
+ * a slot id or anything carrying text is refused. No
  * capture call is added, so the "exactly two capture calls" invariant in
  * .claude/rules/crash-reporting-scope.md is untouched: a tag and a breadcrumb
  * are scope data riding an event that was already going to be sent.
@@ -74,6 +79,16 @@ import { CONNECTION_BREADCRUMB_CATEGORY, NAVIGATION_BREADCRUMB_CATEGORY } from '
 
 const SCREEN_TAG = 'screen';
 const LENS_TAG = 'lens';
+/**
+ * Pinned, and identical in the desktop's Sentry project, because the /sentry
+ * join step reads one tag name across both (the desktop repo's
+ * docs/integrations/mobile-bridge/relay-transport.md owns the contract). Do
+ * not rename it.
+ */
+const RELAY_DIAL_TAG = 'relay_dial_id';
+
+/** The dial id the scope holds, so a repeat costs nothing. */
+let reportedRelayDialId: string | null = null;
 
 let currentScreen: ScreenName = 'none';
 
@@ -263,21 +278,62 @@ export function clearReportedLens(screen: LensScreenName, owner: string): void {
  * `ConnectionBreadcrumbState` or it is not recorded. No relay address, no
  * project, no count of anything the desktop sent.
  *
+ * `dialId` is the relay dial the connection is on when the step is recorded.
+ * It rides the crumb only when it has the pinned format; anything else is
+ * dropped and the crumb is recorded without it, because the step itself is
+ * still worth its slot.
+ *
  * Which transitions are worth a slot, and how often, is decided by the caller
  * (`src/state/connectionBreadcrumbs.ts`), which is the side that can see the
  * stores. This side only decides what a recorded one may contain.
  */
-export function recordConnectionState(state: ConnectionBreadcrumbState): void {
+export function recordConnectionState(state: ConnectionBreadcrumbState, dialId: string | null = null): void {
   if (!isCrashReportingInitialized()) return;
   if (!isConnectionBreadcrumbState(state)) return;
+  const dial = isRelayDialId(dialId) ? dialId : null;
   try {
     Sentry.addBreadcrumb({
       category: CONNECTION_BREADCRUMB_CATEGORY,
       level: 'info',
-      // The state again, for the CLI's trail view (see recordScreenBreadcrumb).
-      message: state,
-      data: { state },
+      // The state again, and the dial beside it, for the CLI's trail view
+      // (see recordScreenBreadcrumb).
+      message: dial === null ? state : `${state} ${dial}`,
+      data: dial === null ? { state } : { state, dial },
     });
+  } catch {
+    // See writeScreenTags.
+  }
+}
+
+/**
+ * Puts the session connection's current relay dial on the scope as the
+ * `relay_dial_id` tag, so any event raised while that dial is the latest one,
+ * native ones included, can be joined to the relay's record of it.
+ *
+ * A TAG, not a breadcrumb per dial: a retry loop against an absent desktop
+ * redials on a five-second floor for as long as it lasts, which would spend the
+ * trail and push out the screen crumbs (the reason recording every connection
+ * transition was rejected; see .claude/rules/crash-reporting-scope.md). The
+ * tag is one value, replaced on every dial, and evicts nothing.
+ *
+ * It only ever holds a pinned-format id. It is absent until the first dial of
+ * the launch and is never cleared afterwards, so it means "the most recent
+ * dial of the session connection"; the `app.connection` trail says when that
+ * dial closed. There is deliberately no `none` sentinel, unlike `screen` and
+ * `lens`, so that one /sentry step can read one format across the mobile and
+ * desktop projects, and never `undefined`, which the native bridge would
+ * deliver as the text "undefined".
+ *
+ * The top-level `Sentry.setTag`, like writeScreenTags, because only the
+ * isolation scope reaches a native event (see this file's header).
+ */
+export function setReportedRelayDial(dialId: string): void {
+  if (!isCrashReportingInitialized()) return;
+  if (!isRelayDialId(dialId)) return;
+  if (dialId === reportedRelayDialId) return;
+  reportedRelayDialId = dialId;
+  try {
+    Sentry.setTag(RELAY_DIAL_TAG, dialId);
   } catch {
     // See writeScreenTags.
   }

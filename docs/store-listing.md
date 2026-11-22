@@ -394,6 +394,21 @@ three entries, App Store Connect takes five, because Apple splits Diagnostics in
   The connection-state trail (`app.connection`: connecting, connected, reconnecting and so on)
   needs no entry of its own. It is technical state, not user activity, and sits inside Crash
   logs for the reason the memory breadcrumb above does.
+
+  The same answer, re-checked on 2026-11-21, for the relay dial id (the `relay_dial_id` tag,
+  and `dial` beside the state on those connection crumbs): a random code the app mints for each
+  relay connection attempt and sends to the relay as `&dial=`, so a report can be matched to the
+  relay's record of that one connection. It is technical connection state and rides the crash
+  report, so it sits inside Crash logs (and Apple's Crash Data). It is not a device identifier in
+  either store's sense (it is replaced on every connection attempt and is tied to no device,
+  install, pairing or user), and even on the most conservative reading the only entry it could
+  belong to, Device or other IDs here and Identifiers -> Device ID on Apple, is already declared
+  on both stores. So **no console change is needed on either store**. The match to the relay's
+  record is between two systems Kangentic itself operates, not a link to the user's identity,
+  so "Data Not Linked to You" still holds. The match does put a report's per-install crash ID
+  (already declared, above) beside the relay's IP address and timing for that one connection;
+  Sentry receives every report from an IP address of its own, so no data type is added by it.
+  `docs/privacy-policy.md` discloses the code and what the match connects.
 - **The "shared with third parties" answer needs a deliberate read, not a guess.** Play defines
   sharing as transfer to a third party, but explicitly **excludes** transfer to a service
   provider processing data on the developer's behalf. Sentry is that kind of processor here, so

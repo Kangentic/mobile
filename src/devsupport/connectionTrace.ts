@@ -25,11 +25,18 @@
  * What it logs, deliberately: event names, transport states, relay close
  * codes, counts, coarse boolean state (`paired`, `cached`, `established`,
  * the keepalive flag) and millisecond deltas. Never content, and never an
- * identifier with ONE exception: `request-timing` and `request-timeout` carry
- * a capability request's full requestId. That id is 16 random bytes the
- * phone mints per request (capabilityClient.ts), it names nothing outside one
- * session's request, and it is the only key that joins a phone line to the
- * desktop's `[mobile-bridge] slow request` line for the same round trip.
+ * identifier with TWO exceptions, each a random value minted for one exchange
+ * and existing only to join a phone line to another system's line for it:
+ * - `request-timing` and `request-timeout` carry a capability request's full
+ *   requestId. That id is 16 random bytes the phone mints per request
+ *   (capabilityClient.ts), it names nothing outside one session's request,
+ *   and it is the only key that joins a phone line to the desktop's
+ *   `[mobile-bridge] slow request` line for the same round trip.
+ * - `dial`, `open` and `close` carry `dial`, the id RelayTransport mints for
+ *   each relay dial attempt (relayTransport.ts). It names one attempt and
+ *   nothing longer-lived, and it is the key that joins a phone line to the
+ *   relay's own line for that dial (and to the `relay_dial_id` tag on a crash
+ *   report from the same moment).
  * Sentry's console breadcrumbs are off (crash-reporting-scope.md), so nothing
  * here rides a crash report either way.
  *

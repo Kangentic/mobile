@@ -71,6 +71,19 @@ function readSource(relativePath: string): string {
   return readFileSync(path.join(repoRoot, relativePath), 'utf8');
 }
 
+/** The file that defines RelayTransport's `onDial` hook, and so the one file allowed to name it without subscribing. */
+const DIAL_HOOK_DEFINER = 'src/channel/relayTransport.ts';
+
+/**
+ * Source with block and line comments removed, so a scan for an identifier
+ * finds code and not prose about it. Deliberately crude (a `//` inside a string
+ * cuts the rest of that line), which can only make the scan see LESS on such a
+ * line, never invent a match.
+ */
+function withoutComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+}
+
 describe('crash-reporting confinement', () => {
   it('finds source files to scan at all', () => {
     // Guards the scan itself: a glob that silently matches nothing would make
@@ -99,5 +112,33 @@ describe('crash-reporting confinement', () => {
     for (const prefix of BANNED_PREFIXES) {
       expect(scanned.some((relativePath) => relativePath.startsWith(prefix)), `${prefix} matched no source file`).toBe(true);
     }
+  });
+
+  /**
+   * A relay dial id reaches Sentry as the `relay_dial_id` tag, and the ONLY
+   * route is the session connection's `onDial` subscription in
+   * connectionManager, through the channel store. The pairing ceremony's
+   * transport dials with an id like every dial (src/pairing/activePairing.ts),
+   * and nothing may subscribe to it: a ceremony's existence and timing is
+   * exactly what the rule's pairing bullet keeps out of a report. So the
+   * guarantee is structural, and this holds it to one call site.
+   *
+   * ANY reference to `onDial` in code counts, not just a `.onDial(` call: the
+   * first version of this scan matched that spelling only, and an optional
+   * call (`transport.onDial?.(...)`) in activePairing.ts walked straight past
+   * it. Comments are stripped first, so prose naming the hook is not a
+   * subscriber, and the one file that DEFINES it is excluded.
+   *
+   * Mutation seen failing: adding `(transport as ...).onDial?.(() => {})` in
+   * src/pairing/activePairing.ts fails it (that file is listed beside
+   * connectionManager.ts).
+   */
+  it('subscribes to relay dial ids only from the session connection in connectionManager', () => {
+    const subscribers = sourceFiles()
+      .map(normalized)
+      .filter((relativePath) => relativePath !== DIAL_HOOK_DEFINER)
+      .filter((relativePath) => /\bonDial\b/.test(withoutComments(readSource(relativePath))));
+
+    expect(subscribers).toEqual(['src/connection/connectionManager.ts']);
   });
 });

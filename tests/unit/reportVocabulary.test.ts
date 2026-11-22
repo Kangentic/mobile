@@ -16,6 +16,7 @@ import {
   ROUTE_SCREEN_NAME_LIST,
   isConnectionBreadcrumbState,
   isLensScreenName,
+  isRelayDialId,
   isScreenLens,
   isTrailSilentScreen,
   screenNameFromSegments,
@@ -125,6 +126,38 @@ describe('the screens kept off the trail', () => {
     expect(isTrailSilentScreen('/settings')).toBe(false);
     expect(isTrailSilentScreen('none')).toBe(false);
     expect(isTrailSilentScreen('unknown')).toBe(false);
+  });
+});
+
+/**
+ * The relay dial id's pinned format, the one value a report carries that is
+ * not a closed-set member. The format is the whole guard, so each way to be
+ * almost right is refused on its own line. That RelayTransport's minted ids
+ * pass this check is pinned in tests/unit/relayTransportReconnect.test.ts,
+ * because the channel cannot import this module.
+ *
+ * Mutation seen failing: dropping the `$` anchor from RELAY_DIAL_ID_PATTERN
+ * fails the 17-character, 32-hex slot id and trailing-newline rows.
+ */
+describe('isRelayDialId', () => {
+  it('accepts exactly 16 lowercase hex characters', () => {
+    expect(isRelayDialId('0123456789abcdef')).toBe(true);
+    expect(isRelayDialId('ffffffffffffffff')).toBe(true);
+  });
+
+  it.each([
+    ['uppercase hex', '0123456789ABCDEF'],
+    ['15 characters', '0123456789abcde'],
+    ['17 characters', '0123456789abcdef0'],
+    ['a 32-hex slot id', 'a'.repeat(32)],
+    ['a non-hex letter', '0123456789abcdeg'],
+    ['a trailing newline', '0123456789abcdef\n'],
+    ['the empty string', ''],
+    ['a number', 1234567890123456],
+    ['null', null],
+    ['undefined', undefined],
+  ])('rejects %s', (_label, candidate) => {
+    expect(isRelayDialId(candidate)).toBe(false);
   });
 });
 

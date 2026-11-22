@@ -28,7 +28,10 @@ import { waitUntil } from '../helpers/async';
 /** Counted, not stubbed: a non-zero count is the failure this file exists to catch. */
 const relayTransportMocks = vi.hoisted(() => ({ constructions: 0 }));
 
-vi.mock('@/channel/relayTransport', () => {
+// The module's pure guards (isRedialableTransport, isDialObservableTransport)
+// stay real, because connectionManager calls them on the transport it builds;
+// only the class that would dial is replaced.
+vi.mock('@/channel/relayTransport', async (importOriginal) => {
   class FakeRelayTransport {
     readonly state = 'idle';
     constructor() {
@@ -46,7 +49,10 @@ vi.mock('@/channel/relayTransport', () => {
       return () => {};
     }
   }
-  return { RelayTransport: FakeRelayTransport };
+  return {
+    ...(await importOriginal<typeof import('@/channel/relayTransport')>()),
+    RelayTransport: FakeRelayTransport,
+  };
 });
 
 vi.mock('@/notifications/pushRegistration', () => ({

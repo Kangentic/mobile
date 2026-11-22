@@ -151,13 +151,35 @@ the wire.
 ## Relay slots
 
 A slot id is the rendezvous label two peers dial to find each other
-(`${relayUrl}?slot=<hex>&role=mobile`; the desktop dials the same shape with `role=desktop`).
-`role` is the other parameter this client sends: a fixed literal the relay uses to attribute
-its waiting-peer gauge, so a dashboard can tell a parked phone from a parked desktop. It is
-client-supplied and authenticated by nothing, carries nothing secret, can never cause a
-rejection (absent, misspelled and oversized all read as `unknown`), and nothing in pairing,
-routing, caps or rate limiting reads it (`kangentic-relay`'s `src/guards/peerRole.ts`). Both
-slots are derived in `@kangentic/protocol` and mirrored by `src/channel/slot.ts`, which the
+(`${relayUrl}?slot=<hex>&role=mobile&dial=<16 hex>`; the desktop dials the same shape with
+`role=desktop`). `role` is the second parameter this client sends: a fixed literal the relay
+uses to attribute its waiting-peer gauge, so a dashboard can tell a parked phone from a parked
+desktop. It is client-supplied and authenticated by nothing, carries nothing secret, can never
+cause a rejection (absent, misspelled and oversized all read as `unknown`), and nothing in
+pairing, routing, caps or rate limiting reads it (`kangentic-relay`'s `src/guards/peerRole.ts`).
+
+`dial` is the third: a random id that joins a crash report to the relay's own record of the
+same connection attempt. `RelayTransport` mints it from the CSPRNG (8 bytes, 16 lowercase hex
+characters) at EVERY dial attempt (the first dial, each reconnect rung, the foreground kick),
+never per install, pairing or session, because a persistent id would let the relay's logs link
+one phone's connections over time, which `role` never could. It is not derived from the slot,
+so it says nothing about the rendezvous, and the two peers of one pairing mint different ids,
+so it builds no pairing graph either. Like `role`, it is an advisory hint the relay cannot
+reject on, and it grants nothing. The session connection's current one rides the crash report
+as the `relay_dial_id` tag (see the Crash reporting section below); the pairing ceremony's dials
+carry one too, and none of those reaches Sentry. A client-minted id is the only join key
+available: React Native's WebSocket gives JavaScript no handshake response header (read at
+react-native 0.88.1: the `websocketOpen` event carries only `id` and `protocol` on both
+platforms, and Android hands the response headers to the dev Inspector alone), so CF-Ray is out
+of reach, a dial that fails has no response at all, and the relay logs no slot in any form.
+**The wire contract is owned by the desktop repo's
+`docs/integrations/mobile-bridge/relay-transport.md`** and shared with the
+relay; this paragraph describes the mobile side only. Two limits on the join: sending the
+parameter to a relay that predates it changes nothing (the relay reads only named parameters),
+so the join returns nothing until the relay side is released; and the relay's per-dial log
+window is about a week and resets on each relay release.
+
+Both slots are derived in `@kangentic/protocol` and mirrored by `src/channel/slot.ts`, which the
 desktop matches byte for byte:
 
 | Slot | Derivation | Shape |
@@ -226,8 +248,8 @@ its agent exits (decision C2), so no exited terminal is left as a bare shell for
 shared with every task session: the moment after spawn before the agent starts, and the seconds
 between an agent exiting and the desktop confirming it. For the first, on a Command Terminal, the
 phone holds ALL input until the desktop has classified the agent's activity
-(`SessionActivityEntry.activityObserved`), which is the guarantee the desktop's mobile-bridge.md
-documents the phone as giving. The hold is enforced twice: in the terminal screen's UI (the xterm
+(`SessionActivityEntry.activityObserved`), which is the guarantee the desktop's
+`docs/integrations/mobile-bridge/capability-verbs.md` documents the phone as giving. The hold is enforced twice: in the terminal screen's UI (the xterm
 pane, the direct key field, the quick keys, the composer), which holds a session it has no
 activity entry for yet, and at the one path every keystroke, message and prompt answer takes
 (`writeTerminal`, `sendUserMessage` and `answerPermissionPrompt` in `src/connection/actions.ts`
@@ -372,6 +394,23 @@ log, before any handshake byte; the operator would learn the same thing one roun
 which peer sends the first KK message, since the desktop always initiates. It is a fixed literal
 with no per-device entropy, so it cannot correlate a phone across slots or sessions - but it
 moves the peer-type signal earlier, so it is named here too.
+
+The `dial` query parameter (see Relay slots) DOES carry entropy, so it is named for the opposite
+reason: to say what that entropy can and cannot link. It is fresh for every dial attempt, so on
+its own it links nothing the operator could not already see (one upgrade request is one
+connection). What it adds is a join across two systems: the same id rides the session
+connection's crash report as the `relay_dial_id` tag, so whoever holds both the relay's logs and
+the crash reports (Kangentic, for its hosted relay) can match a report to the relay's record of
+that one connection, within the relay's roughly one-week log window. A self-hosted relay's
+operator sees the id but never the report. What the match connects should be said plainly: an
+OS-caught crash's report also carries the per-install crash-reporting id (see Crash reporting),
+so the match associates that install's id with the relay's record of that one connection, its
+IP address and timing, and each such report from one install is matched to its own connection's
+record. The dial ids themselves are unrelated to one another, so the relay's records alone still
+link nothing. One more party can hold the id beside a slot: a relay configured with an admission
+webhook (`kangentic-relay`'s `src/admission.ts`, `ADMISSION_WEBHOOK_URL`) posts each upgrade's IP,
+slot id and raw URL, which now carries `dial`, to that control-plane service, so whatever that
+service keeps is part of the same join.
 
 ## Push privacy
 
@@ -555,9 +594,10 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
   fails CI until it has been reviewed. The one deliberate exception is a render throw caught by an
   error boundary (the root one or a chat feed's), which keeps its message: that text is written by
   this app, not by a peer or a user, and it is what makes the crash diagnosable.
-  The app deliberately ADDS four things of its own to a report, and this is the whole list. Each
-  is a bare count or a member of a closed set, none is content, and none is a new capture call (a
-  tag and a breadcrumb are scope data riding an event that was already going to be sent).
+  The app deliberately ADDS five things of its own to a report, and this is the whole list. Each
+  is a bare count, a member of a closed set, or (the fifth) a random value checked against a
+  fixed format; none is content, and none is a new capture call (a tag and a breadcrumb are scope
+  data riding an event that was already going to be sent).
   The first is a diagnostic breadcrumb recorded when the OS
   reports memory pressure: category `app.memory`, carrying a count of warnings seen this launch
   and nothing else - no byte figure, no free text, no session content. It exists because the OS
@@ -593,14 +633,31 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
     attempted is not put on a trail (pairing's convention here is silence, and a pair of
     timestamped screen entries would be the same information by another route).
   - A breadcrumb, category `app.connection`, carrying one of six fixed states: `connecting`,
-    `connected`, `established`, `reconnecting`, `closed`, `board-snapshot`. No relay address, no
-    project, no count of anything the desktop sent. Each state is recorded once per connection
-    cycle, so a retry loop or a busy board cannot spend the trail. A rekey is not recorded, and
-    nothing about pairing is (`src/state/connectionBreadcrumbs.ts`).
+    `connected`, `established`, `reconnecting`, `closed`, `board-snapshot`, and beside it the
+    relay dial id current at that moment (the fifth item below) once there has been a dial. No
+    relay address, no project, no count of anything the desktop sent. Each state is recorded once
+    per connection cycle, so a retry loop or a busy board cannot spend the trail. A rekey is not
+    recorded, and nothing about pairing is (`src/state/connectionBreadcrumbs.ts`).
+
+  The fifth was added by the mobile half of the cross-repo dial-correlation work, so that a
+  report can be joined to the relay's own record of the connection it happened on:
+  - A **tag**, `relay_dial_id`: the `&dial=` id of the session connection's most recent relay
+    dial (see Relay slots above for what the id is and is not). It is the first app-added value
+    that is not a closed-set member, because a random id cannot be one; instead
+    `src/observability/reportContext.ts` refuses anything that is not exactly 16 lowercase hex
+    characters, so a slot id (32 hex) or any text cannot ride it. It is absent until the first
+    dial of a launch and replaced on every dial, never cleared; there is no breadcrumb per dial,
+    because a retry loop redials on a five-second floor and would spend the trail. Only the
+    session connection writes it: the pairing ceremony's dials never reach Sentry, by a source
+    scan holding the subscription to one call site. The tag name is pinned and shared with the
+    desktop's Sentry project, so one join step reads both. Its reach to a native event is READ
+    from source (the same top-level `setTag` path as `screen` and `lens`), and has **not yet been
+    observed on a delivered event**: that needs a crash-reporting build that really dials a relay,
+    which the in-process demo does not.
 
   The tags are the durable half. The trail is a ring of 100 entries (`maxBreadcrumbs`, raised
   from 20 in the same change) that the native SDKs also write into, so on a phone left alone for
-  days their crumbs can push the app's out; a tag is one value that nothing evicts. All three
+  days their crumbs can push the app's out; a tag is one value that nothing evicts. All of them
   are meant to reach a NATIVE event, which is the point. Read from source, not assumed
   (@sentry/react-native 8.34.0, sentry-cocoa 9.33.0): the SDK syncs the isolation scope's tags
   and each allowlisted breadcrumb to the native scope as they are set, sentry-cocoa applies the
@@ -620,8 +677,9 @@ configured, and `.claude/rules/crash-reporting-scope.md` is the rule that keeps 
 - **What Sentry can see:** that this app crashed, where in the code, on what kind of device, and
   what state the app itself was in.
   A stack trace, the exception type and message, app version, the SDK's standard device and
-  OS context, and the four app-added items above: which screen and lens were showing, the
-  screens opened before it, the connection's recent states, and a memory-warning count. For a
+  OS context, and the five app-added items above: which screen and lens were showing, the
+  screens opened before it, the connection's recent states, a memory-warning count, and the
+  random id of the session connection's latest relay dial. For a
   failure the app caught and handled, strictly less of the first group: which part of the app
   caught it (a fixed site label), the error's class name, the capability verb if one was
   involved, the desktop's refusal code if it sent one (a fixed protocol label such as
