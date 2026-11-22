@@ -5,12 +5,14 @@ import {
   CREATE_SHEET_RESERVED_HEIGHT,
   DESCRIPTION_FLOOR_HEIGHT,
   EDIT_SHEET_RESERVED_HEIGHT,
+  estimatedEarlierRowHeight,
   LIST_FLOOR_HEIGHT,
   MOVE_SHEET_RESERVED_HEIGHT,
   PICKER_FILTER_EXTRA_HEIGHT,
   PICKER_SHEET_RESERVED_HEIGHT,
   SHEET_CONTENT_CEILING,
   SHEET_KEYBOARD_ALLOWANCE,
+  terminalsSheetReservedHeight,
 } from '@/lib/sheetContentHeights';
 import { darkTerminalTheme } from '@/components/theme/tokens';
 
@@ -125,6 +127,90 @@ describe('clampSheetContentHeight', () => {
         }),
       ).toBe(284);
     });
+
+    it('keeps the Terminals sheet\'s Earlier list at the ceiling with nothing running', () => {
+      expect(
+        clampSheetContentHeight({
+          windowHeight: TESTER_WINDOW_HEIGHT,
+          reservedHeight: terminalsSheetReservedHeight(0) + TESTER_BOTTOM_INSET,
+          floorHeight: LIST_FLOOR_HEIGHT,
+        }),
+      ).toBe(SHEET_CONTENT_CEILING);
+    });
+
+    it('shrinks the Earlier list under four running terminals so the whole sheet still fits', () => {
+      const reservedHeight = terminalsSheetReservedHeight(4) + TESTER_BOTTOM_INSET;
+      const cap = clampSheetContentHeight({ windowHeight: TESTER_WINDOW_HEIGHT, reservedHeight, floorHeight: LIST_FLOOR_HEIGHT });
+
+      expect(cap).toBe(251);
+      expect(cap + reservedHeight).toBeLessThanOrEqual(TESTER_WINDOW_HEIGHT);
+    });
+
+    it('still fits the whole Terminals sheet at a large OS font scale', () => {
+      const fontScale = 1.3;
+      const reservedHeight = terminalsSheetReservedHeight(4, fontScale) + TESTER_BOTTOM_INSET;
+      const cap = clampSheetContentHeight({ windowHeight: TESTER_WINDOW_HEIGHT, reservedHeight, floorHeight: LIST_FLOOR_HEIGHT });
+
+      expect(cap).toBeLessThan(clampSheetContentHeight({
+        windowHeight: TESTER_WINDOW_HEIGHT,
+        reservedHeight: terminalsSheetReservedHeight(4) + TESTER_BOTTOM_INSET,
+        floorHeight: LIST_FLOOR_HEIGHT,
+      }));
+      expect(cap + reservedHeight).toBeLessThanOrEqual(TESTER_WINDOW_HEIGHT);
+    });
+  });
+});
+
+/**
+ * The Terminals sheet's budget around its Earlier list (protocol 0.24.0, task
+ * #160), executed: the title, the stop-failure allowance, New, the rule and
+ * the Earlier heading always, and the Running heading with its rows only while
+ * terminals run.
+ */
+describe('terminalsSheetReservedHeight', () => {
+  it('reserves the fixed chrome alone with nothing running', () => {
+    // 70 clearance + 40 padding + 24 title + 8, 32 error + 8, 44 New + 8, 1 rule + 8, 20 heading + 8.
+    expect(terminalsSheetReservedHeight(0)).toBe(271);
+  });
+
+  it('adds the Running heading and the first row together, then one row and its gap per terminal', () => {
+    // 20 heading + 8, 62 row + 8 after the rows.
+    expect(terminalsSheetReservedHeight(1) - terminalsSheetReservedHeight(0)).toBe(98);
+    // 62 row + 4 gap.
+    expect(terminalsSheetReservedHeight(2) - terminalsSheetReservedHeight(1)).toBe(66);
+    expect(terminalsSheetReservedHeight(4)).toBe(567);
+  });
+
+  /**
+   * A terminal row is as tall as its 44-high Stop, not its two text lines (40):
+   * 8 + 44 + 8 padding, plus the raised surface's hairline border budgeted as
+   * a pixel top and bottom. Mutation seen failing: the old 56-high row.
+   */
+  it('budgets a terminal row at its Stop control\'s touch height, not its text', () => {
+    expect(terminalsSheetReservedHeight(3) - terminalsSheetReservedHeight(2)).toBe(62 + 4);
+  });
+
+  it('scales the text lines, and only them, with the OS font scale', () => {
+    // Title 24, error allowance 32 and the Earlier heading's caption 16 grow by half at 1.5.
+    expect(terminalsSheetReservedHeight(0, 1.5) - terminalsSheetReservedHeight(0)).toBe((24 + 32 + 16) / 2);
+    // At 1.5 a row's text (36 x 1.5 + 4 = 58) outgrows the 44 Stop, so the row is
+    // 16 + 58 + 2 = 76; the Running heading is 4 + 16 x 1.5 = 28; each takes its gap of 8.
+    expect(terminalsSheetReservedHeight(1, 1.5) - terminalsSheetReservedHeight(0, 1.5)).toBe(28 + 8 + 76 + 8);
+  });
+
+  it('treats a negative count as none', () => {
+    expect(terminalsSheetReservedHeight(-1)).toBe(terminalsSheetReservedHeight(0));
+  });
+});
+
+describe('estimatedEarlierRowHeight', () => {
+  it('is the padding, the two lines and the gap, and the border, rounded up to a whole point', () => {
+    // 16 padding + 20 + 4 + 16, plus two 0.5 hairlines.
+    expect(estimatedEarlierRowHeight(1, 0.5)).toBe(57);
+  });
+
+  it('grows only its text lines with the OS font scale', () => {
+    expect(estimatedEarlierRowHeight(2, 0)).toBe(16 + 4 + 36 * 2);
   });
 });
 

@@ -199,7 +199,10 @@ src/
                   #   live session - is bounded by SUBSCRIBE_FAN_OUT_CONCURRENCY; the screen-driven
                   #   single re-subscribes deliberately bypass it)
   connection/     # Lifecycle composer: AppState connect/background policy, bootstrap, store feed glue,
-                  #   the actions API screens call (accountless-core scoped), the
+                  #   the actions API screens call (accountless-core scoped), the reads the
+                  #   connection itself drives (coalescedRead: one read per key in flight;
+                  #   commandTerminalEarlier: the Earlier list's reads, verb client passed in so
+                  #   the lifecycle and the feed glue can call them without an import cycle), the
                   #   mockDesktop peer (dev rig via EXPO_PUBLIC_KANGENTIC_MOCK, and - since the
                   #   reviewer demo - also in PRODUCTION via a demo trust anchor, see src/demo/)
   navigation/     # The pending-navigation slot + PendingNavigationRunner: the ONLY place that
@@ -249,7 +252,8 @@ src/
                   #   the waiting footer, the
                   #   list_workflows / get_workflow readers and the workflow view's sections
   taskReport/     # Pure completed-task Summary rules ported from the desktop's completed view
-                  #   (protocol 0.24.0's get_task_report): its number and date formats, the
+                  #   (protocol 0.24.0's get_task_report): its number and date formats (the
+                  #   Command Terminals sheet's Earlier rows share them: formatEndedLabel), the
                   #   header strip, the find_task fallback reader, and the Summary list's rows
   notifications/  # Push key + registration, E2E envelope decrypt, notifee channels, background task,
                   #   local notifier, foreground service, foregroundPresentation (iOS: a Notify me
@@ -268,7 +272,8 @@ src/
   state/          # Zustand stores (activity/board/transcript/diff/channel/settings/readingView, all
                   #   channel-fed, in-memory; resume, the one Resume attempt per task that the
                   #   session screen, header and long-press hub share; commandTerminal, the
-                  #   Command Terminal starts and stops in flight; workflow, the workflow reads
+                  #   Command Terminal starts, resumes and stops in flight and each project's
+                  #   Earlier list (protocol 0.24.0); workflow, the workflow reads
                   #   and a Pause or Resume in flight) + the non-Zustand
                   #   terminalFeed PTY ring buffers +
                   #   memoryShed (registers the OS-memory-pressure reactions; lives here rather
@@ -548,7 +553,9 @@ Full detail lives in [docs/architecture.md](docs/architecture.md) and
   with protocol 0.16.0, and since 0.28.0 for the resume on open (`trigger: 'open'`, gated on the
   snapshot's `resumeOnOpenOffered`), since 0.18.0 `pause-session`, which the phone sends only for Pause,
   gated on the board row's `pausable`, and since 0.20.0 `command-terminal`, which starts or stops
-  a Command Terminal, gated on the snapshot's `commandTerminalsOffered`; a terminal is the
+  a Command Terminal, gated on the snapshot's `commandTerminalsOffered`, and since 0.24.0 lists
+  the Earlier conversations of ended ones and resumes one (`list-earlier`, `resume`, gated on
+  `earlierConversationsOffered`); a terminal is the
   project's agent CLI, never a shell, and the phone holds its input until the agent is classified);
   **the default pairing grant is all
   thirteen** (`DEFAULT_PAIRING_CAPABILITIES` in the desktop's `pairing-service.ts` - pairing proves

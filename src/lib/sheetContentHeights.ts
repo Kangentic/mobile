@@ -139,6 +139,78 @@ export const WORKFLOWS_SHEET_RESERVED_HEIGHT = PICKER_SHEET_RESERVED_HEIGHT + SH
 export const ARTIFACTS_SHEET_RESERVED_HEIGHT = PICKER_SHEET_RESERVED_HEIGHT + SHEET_ERROR_ALLOWANCE + SHEET_STACK_GAP;
 
 /**
+ * The Terminals sheet's line items (protocol 0.24.0, task #160). Its rows are
+ * two text lines, a name (body or bodyStrong, 20) over a caption (16), with
+ * the xs gap (4) between them and spacing.sm (8) padding above and below. The
+ * text lines scale with the OS font scale, which this app does not cap; the
+ * padding, gaps and touch targets do not.
+ */
+/** A sheet row's vertical padding: spacing.sm (8) top and bottom. */
+const SHEET_ROW_VERTICAL_PADDING = 16;
+/** Stack gap="xs" (4): between a row's two lines, and between the Terminals sheet's rows. */
+export const SHEET_ROW_GAP = 4;
+/** A body or bodyStrong line: theme.typography's lineHeight. */
+const SHEET_BODY_LINE = 20;
+/** A caption line: theme.typography.caption.lineHeight. */
+const SHEET_CAPTION_LINE = 16;
+/** The least height of a tappable control (theme.minTouchSize): a terminal row's Stop. */
+const SHEET_MIN_TOUCH = 44;
+/** A raised row's hairline border (sheetRowSurface), top and bottom, budgeted as whole pixels like the rule. */
+const SHEET_ROW_BORDERS = 2;
+/** A section heading's spacing.xs (4) top padding; its caption line scales. */
+const SHEET_SECTION_HEADING_PADDING = 4;
+/** The hairline rule between the Terminals sheet's Running and Earlier sections, budgeted as a whole pixel. */
+const SHEET_SECTION_RULE = 1;
+
+/** A row's two text lines and the gap between them, at the font scale. */
+function twoLineRowText(fontScale: number): number {
+  return (SHEET_BODY_LINE + SHEET_CAPTION_LINE) * fontScale + SHEET_ROW_GAP;
+}
+
+/**
+ * One Earlier row before it has been laid out: its padding, its two lines at
+ * the font scale and its hairline border. CommandTerminalsScreen sets its
+ * list's height from this, because FlashList needs a bounded viewport inside a
+ * 'fitToContents' sheet; the first row's own layout then corrects it.
+ */
+export function estimatedEarlierRowHeight(fontScale: number, hairlineWidth: number): number {
+  return Math.ceil(SHEET_ROW_VERTICAL_PADDING + twoLineRowText(fontScale) + 2 * hairlineWidth);
+}
+
+/**
+ * CommandTerminalsScreen, around its Earlier list: the title; with terminals
+ * running, the Running heading and their rows; the stop-failure line's
+ * allowance; New terminal; the rule and the Earlier heading; and a Stack
+ * gap="sm" after each of those. A terminal row is as tall as the larger of its
+ * two lines and its 44-high Stop, plus its padding and border. The running
+ * rows are the one part that varies (none to four), so the budget is a
+ * function of their count, and of the font scale, so a large OS font does not
+ * leave the Earlier list's cap too generous and push the sheet past the window.
+ */
+export function terminalsSheetReservedHeight(runningRowCount: number, fontScale = 1): number {
+  const rowCount = Math.max(0, runningRowCount);
+  const terminalRow = SHEET_ROW_VERTICAL_PADDING + Math.max(twoLineRowText(fontScale), SHEET_MIN_TOUCH) + SHEET_ROW_BORDERS;
+  const sectionHeading = SHEET_SECTION_HEADING_PADDING + SHEET_CAPTION_LINE * fontScale;
+  const runningSection =
+    rowCount > 0 ? sectionHeading + SHEET_STACK_GAP + rowCount * terminalRow + (rowCount - 1) * SHEET_ROW_GAP + SHEET_STACK_GAP : 0;
+  return Math.ceil(
+    SHEET_TOP_CLEARANCE +
+      SHEET_CONTAINER_PADDING +
+      SHEET_TITLE_LINE * fontScale +
+      SHEET_STACK_GAP +
+      runningSection +
+      SHEET_ERROR_ALLOWANCE * fontScale +
+      SHEET_STACK_GAP +
+      SHEET_BUTTON +
+      SHEET_STACK_GAP +
+      SHEET_SECTION_RULE +
+      SHEET_STACK_GAP +
+      sectionHeading +
+      SHEET_STACK_GAP,
+  );
+}
+
+/**
  * What the picker's filter field adds when it shows (above SEARCH_THRESHOLD
  * projects): the field and its extra Stack gap. The keyboard allowance joins
  * at the call site in this case only, because only the filter can summon one.

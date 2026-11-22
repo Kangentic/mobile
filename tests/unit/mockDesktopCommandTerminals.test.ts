@@ -736,3 +736,120 @@ describe('command-terminal stop', () => {
     expect(sessionEndedEventsFor(second.sessionId)).toHaveLength(0);
   });
 });
+
+/**
+ * Protocol 0.24.0: the Earlier list and its resume, as the desktop's handler
+ * serves them. A conversation joins Earlier when a USED terminal ends (the
+ * desktop keeps only used ones), reads as the terminal's name, else its first
+ * prompt, newest first, and never one a live terminal holds. A resume is
+ * answered as a start, with the conversation's own name.
+ */
+describe('the Earlier list and resume', () => {
+  async function earlier(projectId: string = MOCK_PROJECT_ID) {
+    return (await controller.verbs.listEarlierCommandTerminalConversations(projectId)).conversations;
+  }
+
+  /** Starts a terminal, asks it one prompt, lets the namer run (or not), and stops it. */
+  async function usedAndStopped(prompt: string, { letItBeNamed }: { letItBeNamed: boolean }) {
+    const started = await startTerminal();
+    await letAgentArrive();
+    await controller.verbs.sendUserMessage(started.sessionId, prompt);
+    await vi.advanceTimersByTimeAsync(letItBeNamed ? 5_000 : 10);
+    await controller.verbs.stopCommandTerminal(started.sessionId);
+    return started;
+  }
+
+  it.each([MOCK_PROJECT_ID, MOCK_PROJECT_2_ID])('is offered on both views of %s, and empty before anything has ended', async (projectId) => {
+    for (const view of ['full', 'sessions'] as const) {
+      const snapshot = await controller.verbs.readBoardSubscribe(projectId, { view });
+      expect(snapshot.earlierConversationsOffered, `${projectId} ${view}`).toBe(true);
+    }
+    expect(await earlier(projectId)).toEqual([]);
+  });
+
+  it('gains nothing from a terminal that ends before anything reached it', async () => {
+    const started = await startTerminal();
+    await letAgentArrive();
+    await controller.verbs.stopCommandTerminal(started.sessionId);
+
+    expect(await earlier()).toEqual([]);
+  });
+
+  it('lists a used terminal by its name once it ends, newest first, with when it ended', async () => {
+    await usedAndStopped('review the migration', { letItBeNamed: true });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await usedAndStopped(COMMAND_TERMINAL_RECORDED_PROMPT, { letItBeNamed: true });
+
+    const listed = await earlier();
+    expect(listed.map((conversation) => conversation.name)).toEqual([COMMAND_TERMINAL_RECORDED_NAME, 'Review The Migration']);
+    expect(Date.parse(listed[0].endedAt)).toBeGreaterThan(Date.parse(listed[1].endedAt));
+    expect(new Set(listed.map((conversation) => conversation.agentSessionId)).size).toBe(2);
+  });
+
+  it('lists one stopped before it was named by its first prompt, on one line', async () => {
+    await usedAndStopped('why does   the cart\nbadge lag?', { letItBeNamed: false });
+
+    expect((await earlier()).map((conversation) => conversation.name)).toEqual(['why does the cart badge lag?']);
+  });
+
+  it('keeps each project\'s conversations to itself', async () => {
+    await usedAndStopped('review the migration', { letItBeNamed: true });
+
+    expect(await earlier(MOCK_PROJECT_2_ID)).toEqual([]);
+  });
+
+  it('resumes a conversation as a start answered with its own name, and holds it out of the list while it runs', async () => {
+    await usedAndStopped('review the migration', { letItBeNamed: true });
+    const [conversation] = await earlier();
+
+    const resumed = await controller.verbs.resumeCommandTerminal(MOCK_PROJECT_ID, conversation.agentSessionId);
+
+    expect(resumed).toEqual({ ok: true, sessionId: expect.any(String), slot: 1, name: 'Review The Migration' });
+    expect((await listedTerminals()).map((terminal) => [terminal.sessionId, terminal.name, terminal.named])).toEqual([
+      [resumed.sessionId, 'Review The Migration', true],
+    ]);
+    expect(await earlier()).toEqual([]);
+
+    // Ended again, it comes back, still itself.
+    await controller.verbs.stopCommandTerminal(resumed.sessionId);
+    expect((await earlier()).map((ended) => [ended.agentSessionId, ended.name])).toEqual([[conversation.agentSessionId, 'Review The Migration']]);
+  });
+
+  it('names a resumed conversation that had no name by its slot, as the desktop does, and lets its next prompt name it', async () => {
+    await usedAndStopped('why does the cart badge lag', { letItBeNamed: false });
+    const [conversation] = await earlier();
+
+    const resumed = await controller.verbs.resumeCommandTerminal(MOCK_PROJECT_ID, conversation.agentSessionId);
+
+    expect(resumed.name).toBe('Command Terminal 1');
+    expect((await listedTerminals())[0].named).toBe(false);
+  });
+
+  it('refuses a conversation it no longer has with conversation-gone', async () => {
+    expect(await refusalCodeOf(controller.verbs.resumeCommandTerminal(MOCK_PROJECT_ID, 'no-such-conversation'))).toBe('conversation-gone');
+    expect(await listedTerminals()).toEqual([]);
+  });
+
+  it('refuses a conversation a live terminal already holds with conversation-open', async () => {
+    await usedAndStopped('review the migration', { letItBeNamed: true });
+    const [conversation] = await earlier();
+    await controller.verbs.resumeCommandTerminal(MOCK_PROJECT_ID, conversation.agentSessionId);
+
+    expect(await refusalCodeOf(controller.verbs.resumeCommandTerminal(MOCK_PROJECT_ID, conversation.agentSessionId))).toBe('conversation-open');
+    expect(await listedTerminals()).toHaveLength(1);
+  });
+
+  it('refuses a resume at four with command-terminal-limit, and keeps the conversation listed', async () => {
+    await usedAndStopped('review the migration', { letItBeNamed: true });
+    const [conversation] = await earlier();
+    for (let started = 0; started < COMMAND_TERMINAL_LIMIT; started += 1) await startTerminal();
+
+    expect(await refusalCodeOf(controller.verbs.resumeCommandTerminal(MOCK_PROJECT_ID, conversation.agentSessionId))).toBe('command-terminal-limit');
+    expect((await earlier()).map((ended) => ended.agentSessionId)).toEqual([conversation.agentSessionId]);
+  });
+
+  it('refuses both actions for an unknown project with unknown-project', async () => {
+    expect(await refusalCodeOf(controller.verbs.listEarlierCommandTerminalConversations('no-such-project'))).toBe('unknown-project');
+    expect(await refusalCodeOf(controller.verbs.resumeCommandTerminal('no-such-project', 'conversation-a'))).toBe('unknown-project');
+  });
+});

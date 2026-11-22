@@ -41,6 +41,9 @@ export const UNLISTED_TERMINAL_GRACE_MS = 3_000;
 /** The desktop's own words while a Command Terminal starts (CommandTerminalLayer.tsx). */
 export const STARTING_COMMAND_TERMINAL_CAPTION = 'Starting Command Terminal...';
 export const START_FAILED_TITLE = "Couldn't start the terminal";
+/** The desktop's own words while an Earlier conversation resumes, and when it cannot (CommandTerminalWindow.tsx). */
+export const RESUMING_CONVERSATION_CAPTION = 'Resuming conversation...';
+export const RESUME_FAILED_TITLE = "Couldn't resume conversation";
 
 const HEADER_MARK_SIZE = 16;
 const STOP_MARK_SIZE = 20;
@@ -62,10 +65,12 @@ function nonEmpty(value: string | undefined): string | null {
  * leaked in would be a terminal drawn as a task.
  *
  * Reached three ways, by route params:
- * - `launchId`: the tap that STARTED it (the Board button with none running,
- *   or New on the sheet). The screen opens at once on "Starting Command
- *   Terminal..." and binds the session when the start answers; a start that
- *   fails shows its one line for START_FAILURE_HOLD_MS and routes back.
+ * - `launchId`: the tap that STARTED it (the Board button with none running
+ *   and nothing to resume, New on the sheet, or an Earlier row on the sheet,
+ *   protocol 0.24.0). The screen opens at once on "Starting Command
+ *   Terminal..." ("Resuming conversation..." for an Earlier row) and binds the
+ *   session when the start answers; a start that fails shows its one line for
+ *   START_FAILURE_HOLD_MS and routes back.
  * - `sessionId`: a sheet row, an Agents feed card, or a notification.
  *
  * LEAVES whenever the terminal ends, from its own Stop (one tap, straight back
@@ -97,6 +102,11 @@ export function CommandTerminalScreen(): React.JSX.Element {
   if (boundSessionId === null && launch?.phase === 'started' && launch.sessionId !== null) {
     setBoundSessionId(launch.sessionId);
   }
+  // Whether the launch resumes an Earlier conversation, latched for the same
+  // reason: the starting face can outlast the launch, which is cleared once a
+  // board lists the terminal.
+  const [resuming, setResuming] = useState(launch !== null && launch.resumeAgentSessionId !== null);
+  if (!resuming && launch !== null && launch.resumeAgentSessionId !== null) setResuming(true);
   // Written into the route too, so a remount (the OS restoring the screen)
   // binds the same terminal rather than looking for a launch that is gone.
   useEffect(() => {
@@ -245,9 +255,9 @@ export function CommandTerminalScreen(): React.JSX.Element {
             </View>
           </View>
           {startFailed ? (
-            <StartFailedFace message={launch?.failureMessage ?? null} />
+            <StartFailedFace title={resuming ? RESUME_FAILED_TITLE : START_FAILED_TITLE} message={launch?.failureMessage ?? null} />
           ) : startingFaceShown ? (
-            <StartingFace />
+            <StartingFace caption={resuming ? RESUMING_CONVERSATION_CAPTION : STARTING_COMMAND_TERMINAL_CAPTION} />
           ) : null}
         </View>
         <SessionInputBar
@@ -343,15 +353,16 @@ function CommandTerminalHeader({
 }
 
 /**
- * "Starting Command Terminal...", the desktop's own words, over the empty
- * terminal with its wait cursor, until the terminal's first frame paints. The
+ * "Starting Command Terminal..." (or "Resuming conversation..."), the
+ * desktop's own words, over the empty terminal with its wait cursor, until the
+ * terminal's first frame paints. The
  * cursor blinks on the shared two-frames-a-second toggle (WaitCursor), gated
  * by reduced motion and the route's motion provider like the swap veil's, and
  * BOUNDED like the pane's own wait (TerminalWaitOverlay): past
  * `terminalWaitCursor.holdAfterMs` it holds still, because a loop must stop
  * even when the first frame never comes (motion-conventions.md).
  */
-function StartingFace(): React.JSX.Element {
+function StartingFace({ caption }: { caption: string }): React.JSX.Element {
   const theme = useTheme();
   const reducedMotion = useReducedMotion();
   const screenMotionActive = useScreenMotionActive();
@@ -365,28 +376,28 @@ function StartingFace(): React.JSX.Element {
     <View
       style={[styles.overlay, { backgroundColor: theme.colors.terminalBackground }]}
       accessibilityRole="progressbar"
-      accessibilityLabel={STARTING_COMMAND_TERMINAL_CAPTION}
+      accessibilityLabel={caption}
       accessibilityState={{ busy: true }}
       testID="command-terminal-starting"
     >
       <WaitCursor testID="command-terminal-starting-cursor" blinking={!reducedMotion && screenMotionActive && !blinkExpired} />
       <View style={styles.centered} pointerEvents="none">
-        <Text variant="body" color="muted">
-          {STARTING_COMMAND_TERMINAL_CAPTION}
+        <Text variant="body" color="muted" testID="command-terminal-starting-caption">
+          {caption}
         </Text>
       </View>
     </View>
   );
 }
 
-/** A start that failed: what happened and why, for START_FAILURE_HOLD_MS, before the screen routes back. */
-function StartFailedFace({ message }: { message: string | null }): React.JSX.Element {
+/** A start or resume that failed: what happened and why, for START_FAILURE_HOLD_MS, before the screen routes back. */
+function StartFailedFace({ title, message }: { title: string; message: string | null }): React.JSX.Element {
   const theme = useTheme();
   return (
     <View style={[styles.overlay, { backgroundColor: theme.colors.terminalBackground }]} testID="command-terminal-start-failed">
       <Stack gap="xs" style={[styles.centered, { paddingHorizontal: theme.spacing.xl }]}>
-        <Text variant="bodyStrong" style={styles.centeredText}>
-          {START_FAILED_TITLE}
+        <Text variant="bodyStrong" style={styles.centeredText} testID="command-terminal-start-failed-title">
+          {title}
         </Text>
         {message !== null ? (
           <Text variant="caption" color="muted" style={styles.centeredText} testID="command-terminal-start-failed-reason">

@@ -324,7 +324,20 @@ const USAGE_COALESCE_MS = 500;
  */
 export const SUSPEND_PUSH_HOLD_MS = 3_500;
 
-export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionManager): Unsubscribe {
+/** Side effects the feed asks of the connection that owns it, passed in so this module needs no verb client of its own. */
+export interface FeedBindingHooks {
+  /**
+   * A project's Command Terminals changed: one started, was named or ended
+   * (protocol 0.20.0's `command-terminals-changed`, or the `session-ended`
+   * backstop below). Called synchronously and BEFORE the board refresh, so a
+   * held Earlier list (protocol 0.24.0) is already re-reading when the
+   * debounced snapshot drops an ended terminal: the Terminals sheet stays open
+   * while that list loads (task #160 design change 2).
+   */
+  onCommandTerminalsChanged?: (projectId: string) => void;
+}
+
+export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionManager, hooks: FeedBindingHooks = {}): Unsubscribe {
   // A desktop-side PTY resize reflows the desktop terminal, so the phone's
   // ring holds scrollback laid out for the OLD grid - mixing it with
   // new-width deltas renders garble. Re-subscribing fetches a fresh
@@ -477,6 +490,10 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
       const endedActivityState = useActivityStore.getState();
       const endedEntry = endedActivityState.bySessionId[event.sessionId];
       if (endedEntry?.kind === 'command-terminal') {
+        // This end can reach the phone before the board event does, and its
+        // refresh can drop the terminal on its own, so the Earlier re-read is
+        // asked for here too.
+        hooks.onCommandTerminalsChanged?.(endedEntry.projectId);
         subscriptions.refreshBoard(endedEntry.projectId);
         return;
       }
@@ -504,6 +521,7 @@ export function bindFeedToStores(feed: FeedRouter, subscriptions: SubscriptionMa
       if (successorNamed) reconcileSessionsFromBoards(subscriptions);
     }),
     feed.on('board', (event) => {
+      if (event.payload.change === 'command-terminals-changed') hooks.onCommandTerminalsChanged?.(event.projectId);
       // BoardEvents carry ids only; reconciliation is a debounced re-snapshot.
       subscriptions.refreshBoard(event.projectId);
     }),

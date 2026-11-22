@@ -354,7 +354,11 @@ env:
 # before it can show a terminal it left behind.
 #
 # With none running, the Board header's Terminals button starts one and opens
-# it straight away (no sheet). The terminal's input is HELD until the desktop
+# it straight away (no sheet). That holds only while there is nothing in the
+# Earlier list to resume (protocol 0.24.0, task #160): with something there the
+# tap opens the sheet instead. The mock records an Earlier conversation only
+# when a USED terminal ends, and nothing before this step ends one, so the tap
+# still starts a terminal here. The terminal's input is HELD until the desktop
 # classifies its agent; the header mark leaves its muted starting tone on that
 # first activity, and needs-you is the tone of an idle agent, so waiting for it
 # is waiting for the input to open.

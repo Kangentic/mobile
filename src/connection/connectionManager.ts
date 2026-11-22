@@ -30,6 +30,7 @@ import { useSettingsStore } from '@/state/settingsStore';
 import { isTerminalRetained } from '@/state/terminalFeed';
 import { bindFeedToStores, createSnapshotSinks } from './storeFeed';
 import { runBootstrap } from './bootstrap';
+import { refreshAllHeldEarlierConversations, refreshHeldEarlierConversations } from './commandTerminalEarlier';
 
 // The notifee-backed notification modules (foreground service, local
 // notifier, push registration, channels) load lazily: notifee throws at import
@@ -444,7 +445,11 @@ async function performOpenConnection(): Promise<void> {
     inspectStateModule.setInspectSubscriptions(subscriptions);
   }
 
-  const unbindFeed = bindFeedToStores(controller.feed, subscriptions);
+  const unbindFeed = bindFeedToStores(controller.feed, subscriptions, {
+    // A held Earlier list (protocol 0.24.0) re-reads whenever a project's
+    // terminals change, since that is when a conversation joins or leaves it.
+    onCommandTerminalsChanged: (projectId) => void refreshHeldEarlierConversations(controller.verbs, projectId),
+  });
   const unsubscribeTransportState = controller.transport.onStateChange((state) => {
     useChannelStore.getState().setTransportState(state);
     // The third non-Choreographer wake source, and the one that covers the most
@@ -483,7 +488,14 @@ async function performOpenConnection(): Promise<void> {
     bootstrapInFlight = true;
     void runBootstrap(controller.verbs, subscriptions)
       .then(() => {
-        if (generation === bootstrapGeneration) bootstrapInFlight = false;
+        // A superseded bootstrap leaves the re-read to the newer one, which
+        // runs it on its own completion.
+        if (generation !== bootstrapGeneration) return;
+        bootstrapInFlight = false;
+        // Desktop content survives a reconnect, so a held Earlier list is
+        // re-read once the boards (which carry the offer flag) are back: an
+        // event missed while away would otherwise leave it stale.
+        void refreshAllHeldEarlierConversations(controller.verbs);
       })
       .catch((bootstrapError: unknown) => {
         if (generation !== bootstrapGeneration) return;

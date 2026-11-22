@@ -415,6 +415,76 @@ describe('storeFeed and Command Terminals', () => {
     });
   });
 
+  /**
+   * Protocol 0.24.0's Earlier list (task #160): a terminal that ends joins it,
+   * and the Terminals sheet stays open while that list re-reads (design change
+   * 2). So the connection's hook is asked for the re-read BEFORE the board
+   * refresh that would drop the ended terminal, from both edges that carry an
+   * end: the desktop's board event and the terminal's own end push.
+   */
+  describe('the Command Terminals changed hook', () => {
+    let refreshesAtHook: number[];
+    let onCommandTerminalsChanged: ReturnType<typeof vi.fn<(projectId: string) => void>>;
+
+    beforeEach(() => {
+      unbind?.();
+      refreshesAtHook = [];
+      onCommandTerminalsChanged = vi.fn<(projectId: string) => void>(() => {
+        refreshesAtHook.push(refreshBoard.mock.calls.length);
+      });
+      if (feed === null) throw new Error('feed not wired');
+      unbind = bindFeedToStores(feed, subscriptions, { onCommandTerminalsChanged });
+    });
+
+    const pushBoardEvent = (change: string): void => {
+      if (!deliverMessage) throw new Error('feed not wired');
+      deliverMessage({ type: 'event', event: { kind: 'board', projectId: PROJECT_ID, payload: { change, ids: [TERMINAL_ONE] } } });
+    };
+
+    /** Mutation seen failing: moving the hook call after `refreshBoard` in the board handler. */
+    it('is called for command-terminals-changed, before the board refresh', () => {
+      pushBoardEvent('command-terminals-changed');
+
+      expect(onCommandTerminalsChanged).toHaveBeenCalledWith(PROJECT_ID);
+      expect(refreshesAtHook).toEqual([0]);
+      expect(refreshBoard).toHaveBeenCalledWith(PROJECT_ID);
+    });
+
+    it('is not called for a board change that is not about the terminals', () => {
+      pushBoardEvent('task-updated');
+
+      expect(onCommandTerminalsChanged).not.toHaveBeenCalled();
+      expect(refreshBoard).toHaveBeenCalledWith(PROJECT_ID);
+    });
+
+    /**
+     * The end push can reach the phone before the board event, and its own
+     * backstop refresh can drop the last terminal. Mutation seen failing:
+     * removing the hook call from the session-ended branch.
+     */
+    it('is called for a terminal\'s end push, before its backstop board refresh', () => {
+      publishBoard([commandTerminalWire({ sessionId: TERMINAL_ONE })]);
+      refreshBoard.mockClear();
+
+      pushActivity(TERMINAL_ONE, { type: 'session-ended', intentional: true });
+
+      expect(onCommandTerminalsChanged).toHaveBeenCalledWith(PROJECT_ID);
+      expect(refreshesAtHook).toEqual([0]);
+      expect(refreshBoard).toHaveBeenCalledTimes(1);
+    });
+
+    it('is not called for a task session\'s end', () => {
+      publishBoard([], [boardTaskFixture({ id: 'task-1', session_id: 'sess-task' })]);
+
+      deliverMessage?.({
+        type: 'event',
+        event: { kind: 'activity', sessionId: 'sess-task', taskId: 'task-1', payload: { type: 'session-ended', intentional: true } },
+      });
+
+      expect(onCommandTerminalsChanged).not.toHaveBeenCalled();
+    });
+  });
+
   describe('a diff event for a project folder', () => {
     const projectFolderKey = diffKeyFor({ taskId: null, projectId: PROJECT_ID });
 

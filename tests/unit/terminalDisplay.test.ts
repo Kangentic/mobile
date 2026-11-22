@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { ActivityStateWire, ReadStreamSessionStatusWire } from '@kangentic/protocol';
 import { useActivityStore, type SessionActivityEntry } from '@/state/activityStore';
 import { useCommandTerminalStore, type CommandTerminalLaunch } from '@/state/commandTerminalStore';
-import { commandTerminalTone, projectTerminals, terminalsButtonState } from '@/screens/terminals/terminalDisplay';
+import { commandTerminalTone, projectTerminals, terminalsButtonState, visibleEarlierConversations } from '@/screens/terminals/terminalDisplay';
 import { streamSnapshotFixture } from '@/devsupport/desktopFixtures';
 import { commandTerminalWire } from '../helpers/commandTerminalWire';
 
@@ -75,17 +75,78 @@ describe('commandTerminalTone', () => {
 });
 
 describe('terminalsButtonState', () => {
-  it('offers a new terminal when none is running', () => {
-    expect(terminalsButtonState([])).toEqual({ kind: 'new' });
+  it('offers a new terminal when none is running and nothing can be resumed', () => {
+    expect(terminalsButtonState([], 0)).toEqual({ kind: 'new' });
+  });
+
+  it('opens the sheet instead, with nothing running, once an Earlier conversation can be resumed (decision A1)', () => {
+    expect(terminalsButtonState([], 2)).toEqual({ kind: 'earlier' });
   });
 
   it('shows the count, green, when every terminal is working', () => {
-    expect(terminalsButtonState(['working', 'working', 'working'])).toEqual({ kind: 'running', count: 3, tone: 'working' });
+    expect(terminalsButtonState(['working', 'working', 'working'], 0)).toEqual({ kind: 'running', count: 3, tone: 'working' });
+  });
+
+  it('keeps the running count whether or not anything can be resumed', () => {
+    expect(terminalsButtonState(['working'], 5)).toEqual({ kind: 'running', count: 1, tone: 'working' });
   });
 
   it('turns amber as soon as any one terminal needs the user, wherever it sits in the list', () => {
-    expect(terminalsButtonState(['working', 'needs-you', 'working'])).toEqual({ kind: 'running', count: 3, tone: 'needs-you' });
-    expect(terminalsButtonState(['needs-you'])).toEqual({ kind: 'running', count: 1, tone: 'needs-you' });
+    expect(terminalsButtonState(['working', 'needs-you', 'working'], 0)).toEqual({ kind: 'running', count: 3, tone: 'needs-you' });
+    expect(terminalsButtonState(['needs-you'], 0)).toEqual({ kind: 'running', count: 1, tone: 'needs-you' });
+  });
+});
+
+describe('visibleEarlierConversations', () => {
+  const firstConversation = { agentSessionId: 'conversation-a', name: 'Why does the cart badge lag?', endedAt: '2026-11-22T08:00:00.000Z' };
+  const secondConversation = { agentSessionId: 'conversation-b', name: null, endedAt: '2026-11-14T08:00:00.000Z' };
+  const held = [firstConversation, secondConversation];
+
+  beforeEach(() => {
+    useCommandTerminalStore.getState().reset();
+  });
+
+  function launches(): CommandTerminalLaunch[] {
+    return Object.values(useCommandTerminalStore.getState().launchesById);
+  }
+
+  it('is nothing before the first read lands, as one shared empty array', () => {
+    expect(visibleEarlierConversations(null, [], PROJECT_ID)).toEqual([]);
+    expect(visibleEarlierConversations(null, [], PROJECT_ID)).toBe(visibleEarlierConversations([], [], PROJECT_ID));
+  });
+
+  it('is the held list itself, same identity, while no resume is in flight', () => {
+    useCommandTerminalStore.getState().beginLaunch(PROJECT_ID, 1);
+
+    expect(visibleEarlierConversations(held, launches(), PROJECT_ID)).toBe(held);
+  });
+
+  it('hides a conversation from the tap that resumes it until the board lists its terminal', () => {
+    const store = useCommandTerminalStore.getState();
+    const launchId = store.beginLaunch(PROJECT_ID, 1, { agentSessionId: 'conversation-a', name: firstConversation.name });
+    expect(visibleEarlierConversations(held, launches(), PROJECT_ID)).toEqual([secondConversation]);
+
+    store.markLaunchStarted(launchId, { sessionId: 'sess-a', slot: 1, name: 'Why does the cart badge lag?' });
+    expect(visibleEarlierConversations(held, launches(), PROJECT_ID)).toEqual([secondConversation]);
+
+    // Listed: the board decides from here (the desktop's list leaves out a
+    // conversation a live terminal holds), so a lingering launch hides nothing.
+    store.markLaunchListed(launchId);
+    expect(visibleEarlierConversations(held, launches(), PROJECT_ID)).toBe(held);
+  });
+
+  it('gives the row back when the resume fails', () => {
+    const store = useCommandTerminalStore.getState();
+    const launchId = store.beginLaunch(PROJECT_ID, 1, { agentSessionId: 'conversation-a', name: firstConversation.name });
+    store.markLaunchFailed(launchId, 'This project already runs four.');
+
+    expect(visibleEarlierConversations(held, launches(), PROJECT_ID)).toBe(held);
+  });
+
+  it('ignores another project\'s resume of a conversation with the same id', () => {
+    useCommandTerminalStore.getState().beginLaunch('project-other', 1, { agentSessionId: 'conversation-a', name: null });
+
+    expect(visibleEarlierConversations(held, launches(), PROJECT_ID)).toBe(held);
   });
 });
 
@@ -152,5 +213,17 @@ describe('projectTerminals', () => {
     useCommandTerminalStore.getState().beginLaunch('project-other', 1);
 
     expect(projectTerminals([], launches(), PROJECT_ID)).toEqual([]);
+  });
+
+  it('draws a resume in flight under its conversation\'s own name (task #160 design change 4)', () => {
+    useCommandTerminalStore.getState().beginLaunch(PROJECT_ID, 2, { agentSessionId: 'conversation-a', name: 'Why does the cart badge lag?' });
+
+    expect(projectTerminals([], launches(), PROJECT_ID)).toEqual([{ sessionId: null, slot: 2, name: 'Why does the cart badge lag?', named: false }]);
+  });
+
+  it('titles a resume of an unnamed conversation by its predicted slot, as the desktop will', () => {
+    useCommandTerminalStore.getState().beginLaunch(PROJECT_ID, 3, { agentSessionId: 'conversation-b', name: null });
+
+    expect(projectTerminals([], launches(), PROJECT_ID)[0]?.name).toBe('Command Terminal 3');
   });
 });

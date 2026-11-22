@@ -241,7 +241,16 @@ nothing. The phone sends it only for a task the desktop marks `pausable`.
 `command-terminal` (protocol 0.20.0) starts or stops a Command Terminal: the project's own agent
 CLI at the project root, exactly as the desktop's Ctrl+Shift+P New does, never a shell and never a
 command the phone names (a `start` carries only the project id; the desktop's parser drops any
-branch, model or effort key). Stop ends only a Command Terminal, refusing a task's session. What
+branch, model or effort key). Protocol 0.24.0's `list-earlier` only reads the project's ended
+conversations, and its `resume` carries the project id and an `agentSessionId` the desktop's own
+list gave. By the desktop's contract (the phone cannot check it), the desktop resumes it through
+the same unattended start path, its agent with its own saved settings and the conversation's
+prior context, and refuses an id it does not hold (`conversation-gone`) or one a live terminal
+holds (`conversation-open`), so a resume reaches nothing a start could not. The Earlier names
+`list-earlier` returns are session content (a terminal's name, else its first prompt): the phone
+holds them in memory only, never on disk, and an unpair wipes them with the rest of the desktop's
+content (`wipeDesktopContent`). Stop ends only a
+Command Terminal, refusing a task's session. What
 keeps the verb from being shell reach is the desktop's promise that a Command Terminal ENDS when
 its agent exits (decision C2), so no exited terminal is left as a bare shell for
 `interactive-terminal` to type into. Two short windows remain, and the desktop documents both as

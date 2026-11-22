@@ -18,6 +18,7 @@ import {
   selectCommandTerminalSessionIds,
   selectCommandTerminals,
   selectCommandTerminalsOffered,
+  selectEarlierConversationsOffered,
   useBoardStore,
 } from '@/state/boardStore';
 import { boardSnapshotFixture } from '@/devsupport/desktopFixtures';
@@ -78,6 +79,24 @@ describe('boardStore and Command Terminals', () => {
       applyTerminals('project-1', [], wireValue);
 
       expect(useBoardStore.getState().boardsByProjectId['project-1'].commandTerminalsOffered).toBe(expected);
+    });
+
+    it.each([
+      ['true', true, true],
+      ['false', false, false],
+      ['absent', undefined, false],
+    ])('reads earlierConversationsOffered %s as %s (protocol 0.24.0)', (_label, wireValue, expected) => {
+      useBoardStore.getState().applyBoardSnapshot(
+        boardSnapshotFixture({ projectId: 'project-1', tasks: [], ...(wireValue !== undefined ? { earlierConversationsOffered: wireValue } : {}) }),
+      );
+
+      expect(useBoardStore.getState().boardsByProjectId['project-1'].earlierConversationsOffered).toBe(expected);
+      expect(selectEarlierConversationsOffered(useBoardStore.getState(), 'project-1')).toBe(expected);
+    });
+
+    it('offers no Earlier list for a project with no board, or no project', () => {
+      expect(selectEarlierConversationsOffered(useBoardStore.getState(), 'project-unknown')).toBe(false);
+      expect(selectEarlierConversationsOffered(useBoardStore.getState(), null)).toBe(false);
     });
 
     it('replaces a project\'s terminals wholesale: a terminal the next snapshot omits is gone', () => {

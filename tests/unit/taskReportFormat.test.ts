@@ -7,6 +7,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatCost,
+  formatEndedLabel,
+  formatMonthDay,
   formatMonthDayTime,
   formatSpan,
   formatSpanCompact,
@@ -146,5 +148,56 @@ describe('formatTimeAgo', () => {
 
   it('reads a missing time as empty', () => {
     expect(formatTimeAgo(null, nowMs)).toBe('');
+  });
+});
+
+describe('formatMonthDay', () => {
+  const now = new Date('2026-11-22T12:00:00.000Z');
+
+  it('leaves the year and the time out for a day in the current year', () => {
+    const label = formatMonthDay('2026-11-14T12:00:00.000Z', now);
+    expect(label).toMatch(/14/);
+    expect(label).not.toMatch(/2026/);
+    expect(label).not.toMatch(/\d:\d\d/);
+  });
+
+  it('adds the year for a day in another year', () => {
+    expect(formatMonthDay('2025-12-30T12:00:00.000Z', now)).toMatch(/2025/);
+  });
+
+  it('reads a missing or unreadable time as empty', () => {
+    expect(formatMonthDay(null, now)).toBe('');
+    expect(formatMonthDay('not a date', now)).toBe('');
+  });
+});
+
+/**
+ * An Earlier row's ended line (protocol 0.24.0, task #160): the desktop rail's
+ * `endedLabel`, relative while under two days old, then the date.
+ */
+describe('formatEndedLabel', () => {
+  const nowMs = Date.parse('2026-11-22T12:00:00.000Z');
+  const ago = (milliseconds: number): string => new Date(nowMs - milliseconds).toISOString();
+
+  it.each([
+    [30 * SECOND, 'just now'],
+    [2 * HOUR, '2 hours ago'],
+    [1 * DAY, 'yesterday'],
+    [2 * DAY - 1, 'yesterday'],
+  ])('%i ms back reads %s', (milliseconds, expected) => {
+    expect(formatEndedLabel(ago(milliseconds), nowMs)).toBe(expected);
+  });
+
+  it('turns to the date at exactly two days', () => {
+    expect(formatEndedLabel(ago(2 * DAY), nowMs)).toBe(formatMonthDay(ago(2 * DAY), new Date(nowMs)));
+    expect(formatEndedLabel(ago(2 * DAY), nowMs)).not.toMatch(/ago|yesterday/);
+  });
+
+  it('carries the year once the date is in another year', () => {
+    expect(formatEndedLabel('2025-12-30T12:00:00.000Z', nowMs)).toMatch(/2025/);
+  });
+
+  it('reads an unreadable time as empty', () => {
+    expect(formatEndedLabel('not a date', nowMs)).toBe('');
   });
 });

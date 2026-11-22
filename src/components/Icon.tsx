@@ -14,6 +14,7 @@ import {
   CirclePlay,
   Columns3Cog,
   GitPullRequest,
+  History,
   ListFilter,
   Mic,
   Plus,
@@ -57,7 +58,8 @@ export type IconName =
   | 'pause'
   | 'terminal'
   | 'disable-automations'
-  | 'enable-automations';
+  | 'enable-automations'
+  | 'history';
 
 const ICON_REGISTRY: Record<IconName, LucideIcon> = {
   'chevron-forward': ChevronRight,
@@ -92,6 +94,8 @@ const ICON_REGISTRY: Record<IconName, LucideIcon> = {
   // hold a task, Columns3Cog to release it.
   'disable-automations': Ban,
   'enable-automations': Columns3Cog,
+  // The desktop Command Terminal rail's Earlier row glyph (CommandTerminalRail.tsx).
+  history: History,
 };
 
 export interface IconProps {

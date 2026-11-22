@@ -45,10 +45,11 @@ function colorSlotFromBoards(boardsByProjectId: Record<string, ProjectBoard>, wo
  * its count when that lands. A row opens the workflow view by REPLACING this
  * sheet, as the Terminals sheet opens a terminal, so Back returns to the Board.
  *
- * A capped ScrollView rather than a FlashList, as the Move, project and
- * Terminals sheets are: a project's UNFINISHED workflows are a handful the
- * desktop's user starts by hand, and the cap is about the sheet's height, not
- * about virtualizing a list that grows without bound.
+ * A capped ScrollView rather than a FlashList, as the Move and project sheets
+ * are: a project's UNFINISHED workflows are a handful the desktop's user
+ * starts by hand, and the cap is about the sheet's height, not about
+ * virtualizing a list that grows without bound. (The Terminals sheet's Earlier
+ * list does grow, to the desktop's 500, so it is a FlashList.)
  */
 export function WorkflowsScreen(): React.JSX.Element {
   const theme = useTheme();

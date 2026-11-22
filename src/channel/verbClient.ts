@@ -1,4 +1,5 @@
 import {
+  parseCommandTerminalEarlierResponsePayload,
   parseCommandTerminalStartResponsePayload,
   parsePauseSessionResponsePayload,
   parseReadBoardResponsePayload,
@@ -13,6 +14,7 @@ import {
   type CapabilityErrorCode,
   type CapabilityResponseMessage,
   type CapabilityVerb,
+  type CommandTerminalEarlierResponsePayload,
   type CommandTerminalRequestPayload,
   type CommandTerminalStartResponsePayload,
   type DiffFileContentWire,
@@ -327,6 +329,36 @@ export class VerbClient {
     const payload: CommandTerminalRequestPayload = { action: 'start', projectId };
     const response = await this.requireOk('command-terminal', asRequestJson(payload), { timeoutMs: COMMAND_TERMINAL_START_TIMEOUT_MS });
     return this.parsePayload('command-terminal', response, parseCommandTerminalStartResponsePayload);
+  }
+
+  /**
+   * Resumes an ended Command Terminal conversation in a new terminal (protocol
+   * 0.24.0), named by the `agentSessionId` a `list-earlier` answer gave. Runs
+   * the same desktop start as `startCommandTerminal`, so it shares its timeout
+   * and its answer, whose `name` is the conversation's own. Besides start's
+   * refusals it can be refused with `conversation-gone` (the conversation can
+   * no longer be resumed) or `conversation-open` (a live terminal holds it, or
+   * another resume is starting it). Send it only to a desktop whose snapshot
+   * carries `earlierConversationsOffered`: an older one refuses it as
+   * malformed.
+   */
+  async resumeCommandTerminal(projectId: string, agentSessionId: string): Promise<CommandTerminalStartResponsePayload> {
+    const payload: CommandTerminalRequestPayload = { action: 'resume', projectId, agentSessionId };
+    const response = await this.requireOk('command-terminal', asRequestJson(payload), { timeoutMs: COMMAND_TERMINAL_START_TIMEOUT_MS });
+    return this.parsePayload('command-terminal', response, parseCommandTerminalStartResponsePayload);
+  }
+
+  /**
+   * A project's ended Command Terminal conversations that can still be
+   * resumed, newest first (protocol 0.24.0): the desktop panel's Earlier list,
+   * minus any a live terminal holds. A malformed row is dropped by the parse
+   * guard rather than failing the list. Refused with `unknown-project`; gated,
+   * like `resumeCommandTerminal`, on `earlierConversationsOffered`.
+   */
+  async listEarlierCommandTerminalConversations(projectId: string): Promise<CommandTerminalEarlierResponsePayload> {
+    const payload: CommandTerminalRequestPayload = { action: 'list-earlier', projectId };
+    const response = await this.requireOk('command-terminal', asRequestJson(payload));
+    return this.parsePayload('command-terminal', response, parseCommandTerminalEarlierResponsePayload);
   }
 
   /**

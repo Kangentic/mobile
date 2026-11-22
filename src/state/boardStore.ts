@@ -49,6 +49,14 @@ export interface ProjectBoard {
    */
   commandTerminalsOffered: boolean;
   /**
+   * Whether this desktop serves the `command-terminal` verb's `list-earlier`
+   * and `resume` actions AND this phone holds the verb (protocol 0.24.0): the
+   * Terminals sheet's Earlier list. Absent on the wire (an older desktop, which
+   * refuses both actions as malformed) reads false, and the phone sends
+   * neither.
+   */
+  earlierConversationsOffered: boolean;
+  /**
    * Whether this desktop answers `start-session` with `trigger: 'open'` AND
    * this phone holds `start-session` (protocol 0.28.0): the resume on open.
    * Absent on the wire (an older desktop, which would drop the trigger and take
@@ -388,6 +396,7 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
           .sort((first, second) => first.slot - second.slot)
           .map((terminal) => ({ ...terminal, name: capCommandTerminalName(terminal.name) })),
         commandTerminalsOffered: snapshot.commandTerminalsOffered === true,
+        earlierConversationsOffered: snapshot.earlierConversationsOffered === true,
         resumeOnOpenOffered: snapshot.resumeOnOpenOffered === true,
         priorities: snapshot.priorities ?? null,
       };
@@ -720,6 +729,15 @@ export function selectCommandTerminalsOffered(
 ): boolean {
   if (projectId === null) return false;
   return state.boardsByProjectId[projectId]?.commandTerminalsOffered ?? false;
+}
+
+/** Whether the project's desktop offers the Earlier list and its resume (protocol 0.24.0); false until a snapshot says so. */
+export function selectEarlierConversationsOffered(
+  state: { boardsByProjectId: Record<string, ProjectBoard> },
+  projectId: string | null,
+): boolean {
+  if (projectId === null) return false;
+  return state.boardsByProjectId[projectId]?.earlierConversationsOffered ?? false;
 }
 
 /** Whether the project's desktop offers the resume on open (protocol 0.28.0); false until a snapshot says so. */
