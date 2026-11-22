@@ -118,7 +118,8 @@ export interface SessionActivityEntry {
    * snapshot whose activity state is non-null, or any `activity` or prompt
    * push. A Command Terminal's input stays disabled until then, because in
    * the moment after spawn the agent has not started and the PTY is a bare
-   * shell (the desktop's mobile-bridge.md states this as the phone's half of
+   * shell (the desktop's docs/integrations/mobile-bridge/capability-verbs.md
+   * states this as the phone's half of
    * the "no shell reach" promise). `state` alone cannot say it: a snapshot
    * with a null state is recorded as 'idle'.
    */
