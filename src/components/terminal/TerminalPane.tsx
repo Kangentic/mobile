@@ -60,7 +60,8 @@ export interface TerminalPaneProps {
    * xterm page, the soft keyboard a tap raises, and the direct key field. A
    * Command Terminal holds this false until the desktop has classified its
    * agent (protocol 0.20.0): in the moment after spawn the PTY is a bare shell
-   * at the project root, and the desktop's mobile-bridge.md states the phone's
+   * at the project root, and the desktop's capability-verbs.md
+   * (docs/integrations/mobile-bridge/) states the phone's
    * half of the "no shell reach" promise as exactly this. Defaults to true.
    */
   inputEnabled?: boolean;
