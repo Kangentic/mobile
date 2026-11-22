@@ -24,6 +24,8 @@ vi.mock('@/connection/connectionManager', () => ({
 }));
 
 vi.mock('@/connection/bootstrap', () => ({ runBootstrap: vi.fn() }));
+// actions.ts reaches the crash-reporting door, whose Sentry import reads native modules at load.
+vi.mock('@/observability/crashReporting', () => ({ reportHandledError: vi.fn() }));
 
 vi.mock('expo-secure-store', () => ({
   getItemAsync: vi.fn(async () => null),

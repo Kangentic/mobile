@@ -44,6 +44,8 @@ vi.mock('@/connection/connectionManager', () => ({
   requireVerbClient: mocks.requireVerbClient,
 }));
 vi.mock('@/connection/bootstrap', () => ({ runBootstrap: vi.fn() }));
+// actions.ts reaches the crash-reporting door, whose Sentry import reads native modules at load.
+vi.mock('@/observability/crashReporting', () => ({ reportHandledError: vi.fn() }));
 vi.mock('@/connection/storeFeed', () => ({ reconcileSessionsFromBoards: mocks.reconcileSessionsFromBoards }));
 // @/connection/actions also imports settingsStore, which persists via
 // expo-secure-store - fake it so the vitest (node) run has no native module.
