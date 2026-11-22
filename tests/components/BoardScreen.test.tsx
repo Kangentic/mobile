@@ -666,7 +666,7 @@ describe('BoardScreen', () => {
    * scale. Mutation seen failing: BoardTaskCard passing `null` for the scale
    * ("Unable to find an element with testID: board-card-task-1-priority").
    */
-  describe('the priority pill', () => {
+  describe('the priority meter', () => {
     const SCALE = [
       { label: 'None', color: '#6b7280' },
       { label: 'Low', color: '#3b82f6' },
@@ -688,7 +688,7 @@ describe('BoardScreen', () => {
       });
     }
 
-    it('shows the Urgent pill for priority 4 against a five-level scale', async () => {
+    it('shows the Urgent meter, every bar lit, for priority 4 against a five-level scale', async () => {
       seedPriority(4);
       await render(
         <ThemeProvider>
@@ -697,9 +697,12 @@ describe('BoardScreen', () => {
       );
 
       expect(screen.getByTestId('board-card-task-1-priority').props.accessibilityLabel).toBe('Priority: Urgent');
+      // The scale's length reaches the meter: four bars for five levels.
+      expect(screen.getByTestId('board-card-task-1-priority-bar-3')).toBeTruthy();
+      expect(screen.queryByTestId('board-card-task-1-priority-bar-4')).toBeNull();
     });
 
-    it('shows no pill for priority 0, the bottom of the scale', async () => {
+    it('shows no meter for priority 0, the bottom of the scale', async () => {
       seedPriority(0);
       await render(
         <ThemeProvider>

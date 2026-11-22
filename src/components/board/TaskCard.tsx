@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { StyleSheet, View, type LayoutChangeEvent } from 'react-native';
-import type { BoardColumnWire, BoardTaskWire, PriorityLevelWire, SessionUsageWire } from '@kangentic/protocol';
+import type { BoardColumnWire, BoardTaskWire, SessionUsageWire } from '@kangentic/protocol';
 import {
   AgentStatusIcon,
   Badge,
@@ -13,13 +13,14 @@ import {
   colorForTextRole,
   type AgentStatusKind,
 } from '@/components';
+import type { CardPriorityLevel } from '@/lib/priority';
 import { AutomationsDisabledStrip, CardStripBleed } from './CardStrip';
-import { cardStatusFooter } from './CardStatusFooter';
+import { AttachmentCountBar, cardStatusFooter } from './CardStatusFooter';
 import type { CardSessionDisplay } from './cardSessionDisplay';
 import { ColumnStrip, type StripWorkflow } from './ColumnStrip';
 import type { ColumnTrackStep } from './columnTrack';
-import { computeVisibleLabelCount, priorityBadgeReserve } from './labelFit';
-import { PriorityBadge } from './PriorityBadge';
+import { computeVisibleLabelCount } from './labelFit';
+import { PriorityMeter } from './PriorityMeter';
 import { prChipAccessibilityLabel, prChipPresentation } from './prChipPresentation';
 import { prGlyph } from './prGlyph';
 import type { WorkflowWaitingFooter } from '@/workflow/workflowWaiting';
@@ -31,7 +32,7 @@ const FALLBACK_LABEL_LIMIT = 3;
 const PR_GLYPH_SIZE = 14;
 
 export interface TaskCardProps {
-  /** Base testID; sub-parts key off it as `${testID}-status`, `-display-id`, `-pr`, `-snippet`, `-wait`, `-usage`, `-status-bar`, `-strips` (the bleed around the strips below), `-column` (whose own parts include `-column-project`), `-automations-disabled` (whose own part is `-automations-disabled-icon`). */
+  /** Base testID; sub-parts key off it as `${testID}-status`, `-title`, `-display-id`, `-priority` (the meter, whose bars are `-priority-bar-<n>`), `-pr`, `-snippet`, `-labels`, `-wait`, `-usage`, `-status-bar`, `-attachments`, `-strips` (the bleed around the strips below), `-column` (whose own parts include `-column-project`), `-automations-disabled` (whose own part is `-automations-disabled-icon`). */
   testID: string;
   task: BoardTaskWire;
   /** The title row's status icon. The desktop draws one only for a running session, so callers pass null for every other `sessionDisplay`. */
@@ -103,18 +104,19 @@ export interface TaskCardProps {
    */
   automationsDisabled?: boolean;
   /**
-   * Whether to render board/backlog reference chrome: the labels row and
-   * the title row's PR chip (same category as the ticket number).
-   * Defaults true (the board).
+   * Whether to render board/backlog reference chrome: the labels row, the
+   * title row's priority meter and PR chip (same category as the ticket
+   * number), and the attachment count. Defaults true (the board).
    */
   showMetaRow?: boolean;
   /**
    * The task's priority level (protocol 0.28.0), from `priorityLevelFor`
-   * against its project's scale: the first pill in the labels row, as the
-   * desktop card draws it. Null draws nothing, which is the bottom of the
-   * scale, or a desktop that sends no scale.
+   * against its project's scale: the equal-bar meter in the title row, after
+   * the ticket number and before the PR glyph, as the desktop card draws it
+   * since kangentic #1160. Null draws nothing and reserves no room, which is
+   * the bottom of the scale, or a desktop that sends no scale.
    */
-  priorityLevel?: PriorityLevelWire | null;
+  priorityLevel?: CardPriorityLevel | null;
   onPress: () => void;
   onLongPress?: () => void;
   /** Absolutely-positioned content painted over the whole card - the Agents feed's section-change pulse. The board has none. */
@@ -122,10 +124,16 @@ export interface TaskCardProps {
 }
 
 /**
- * The task card shared by the board and the Agents feed: status icon,
- * title (with a PR chip and ticket number sharing its row), a body
- * line, the labels row, and the footer (the usage bar, or the session's state
- * as the desktop card's footer shows it: Queued, Paused, a step) - the two screens render
+ * The task card shared by the board and the Agents feed. Its title row reads,
+ * left to right, as the desktop's does since kangentic #1160: the status icon
+ * (a running session only), the title, the ticket number, the priority meter,
+ * and the PR glyph, each drawn only when it applies, with no room kept for an
+ * absent one. The PR glyph holds the corner the desktop gives its Browser globe;
+ * the desktop draws the PR as a pill in a link row instead, and the phone has
+ * no globe, since the wire carries no browser state. Then a body line, the
+ * labels row, and the footer (the usage bar, or the session's state as the
+ * desktop card's footer shows it: Queued, Paused, a step; or, on a task with no
+ * session and nothing else to say there, its attachment count) - the two screens render
  * nearly identical cards. The Agents feed adds one thing: the band across the
  * top naming the project, the wait time and the column's step track. A held
  * task wears the automations strip on either screen, above the band if the
@@ -154,14 +162,14 @@ export function TaskCard({
   // The labels row stretches to the card's full content width regardless of
   // how many labels are inside it (a Stack's default cross-axis stretch), so
   // its first onLayout reports the real available width - reused directly
-  // to decide how many labels actually fit before falling back to "+N". A
-  // priority pill leads the row and spends its share of that width first.
+  // to decide how many labels actually fit before falling back to "+N". The
+  // labels have it to themselves: the priority is a meter in the title row.
   const [labelsRowWidth, setLabelsRowWidth] = useState<number | null>(null);
   const priorityShown = showMetaRow && priorityLevel !== null;
   const visibleLabelCount =
     labelsRowWidth === null
-      ? Math.min(task.labels.length, FALLBACK_LABEL_LIMIT - (priorityShown ? 1 : 0))
-      : computeVisibleLabelCount(task.labels, labelsRowWidth - priorityBadgeReserve(priorityShown ? priorityLevel.label : null));
+      ? Math.min(task.labels.length, FALLBACK_LABEL_LIMIT)
+      : computeVisibleLabelCount(task.labels, labelsRowWidth);
   const visibleLabels = task.labels.slice(0, visibleLabelCount);
   const hiddenLabelCount = task.labels.length - visibleLabels.length;
   // Existence + state is what matters here (it decides whether the task is
@@ -171,8 +179,10 @@ export function TaskCard({
   // (see prChipPresentation). The number itself is one tap away in the detail view.
   const hasPr = showMetaRow && task.pr_number !== null;
   const prChip = prChipPresentation(task.pr_state, task.pr_merge_readiness);
-  const hasMetaRow = showMetaRow && (task.labels.length > 0 || priorityShown);
-  const footer = cardStatusFooter({
+  // A card with a priority and no labels has no labels row: the priority
+  // lives in the title row, so nothing else would hold the row open.
+  const hasMetaRow = showMetaRow && task.labels.length > 0;
+  const statusFooter = cardStatusFooter({
     display: sessionDisplay,
     usage,
     waiting,
@@ -180,6 +190,20 @@ export function TaskCard({
     startBlockedReason: task.start_blocked_reason ?? null,
     testID,
   });
+  // The desktop's attachment count (#159 A1): only where its card has no
+  // session at all (`displayState.kind === 'none'`) and no other footer. The
+  // phone's own `none` also covers an ended session it holds no entry for,
+  // which the desktop calls exited and draws nothing on, so the row's own
+  // session id decides. An archived task is the desktop's compact Done card,
+  // which draws no count.
+  const attachmentsShown =
+    showMetaRow &&
+    statusFooter === null &&
+    task.attachment_count > 0 &&
+    sessionDisplay.kind === 'none' &&
+    task.session_id === null &&
+    task.archived_at === null;
+  const footer = attachmentsShown ? <AttachmentCountBar count={task.attachment_count} testID={`${testID}-attachments`} /> : statusFooter;
 
   return (
     <Card testID={testID} onPress={onPress} onLongPress={onLongPress}>
@@ -216,7 +240,7 @@ export function TaskCard({
           {statusKind ? <AgentStatusIcon kind={statusKind} testID={`${testID}-status`} /> : null}
           {/* Desktop parity: single-line truncating title, no agent badge
               (the agent shows inside the session, not on the card). */}
-          <Text variant="bodyStrong" style={styles.flex} numberOfLines={1}>
+          <Text variant="bodyStrong" style={styles.flex} numberOfLines={1} testID={`${testID}-title`}>
             {task.title}
           </Text>
           {showTicketNumbers ? (
@@ -224,6 +248,7 @@ export function TaskCard({
               #{task.display_id}
             </MonoText>
           ) : null}
+          {priorityShown ? <PriorityMeter level={priorityLevel} testID={`${testID}-priority`} /> : null}
           {/* The testID goes on a wrapping View, not the lucide glyph: lucide
               forwards `testID` as the web-only `data-testid` prop, which is
               inert in React Native, so neither RNTL nor Maestro can select it.
@@ -267,9 +292,9 @@ export function TaskCard({
           <Row
             gap="sm"
             style={styles.metaRow}
+            testID={`${testID}-labels`}
             onLayout={(event: LayoutChangeEvent) => setLabelsRowWidth(event.nativeEvent.layout.width)}
           >
-            {priorityShown ? <PriorityBadge level={priorityLevel} testID={`${testID}-priority`} /> : null}
             {visibleLabels.map((label) => (
               <Badge key={label} label={label} color="secondary" />
             ))}

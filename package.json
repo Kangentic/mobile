@@ -109,7 +109,7 @@
     "zustand": "^5.1.0"
   },
   "devDependencies": {
-    "@kangentic/branding": "^2.13.0",
+    "@kangentic/branding": "^2.15.0",
     "@react-native/jest-preset": "^0.88.1",
     "@testing-library/react-native": "^14.1.0",
     "@types/jest": "30.0.0",

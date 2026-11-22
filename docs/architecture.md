@@ -1423,13 +1423,36 @@ no entry for an ended session and the row carries a reason only while the task h
 ended session; an unknown reason reads as plain "Paused". Against a pre-0.16.0 desktop every board
 field is null and no status push says `suspended`, which reduces this to the earlier precedence
 exactly.
-A card's labels row leads with the task's priority (protocol 0.28.0, `PriorityBadge`): the
-snapshot's `priorities` scale names and colors each level, a task's `priority` is an index into it,
-the bottom entry draws nothing whatever it is called, and an index past the end draws `P<n>` in the
-protocol's gray (`priorityLevelFor`). The pill is the desktop's flag and label in the level's color
-over a 14% tint with a 35% edge, square-cornered like the phone's label pills rather than round like
-the desktop's, and `labelFit` reserves its width before it fits the labels. An older desktop sends
-no scale, so no pill draws. A running card whose idle reason carries `stopped` (protocol 0.28.0:
+A card's title row reads, left to right, as the desktop's does since kangentic #1160: the status
+icon (a running session only), the title, `#N` (Ticket Numbers on), the priority meter, then the PR
+glyph. Each slot draws only when it applies and nothing keeps room for an absent one, so `#N` sits
+flush right on a card with no priority and moves in by the meter's width on one with a priority.
+The Agents feed card, the workflow view's canvas card and its compact Done card (title, `#N`, meter,
+as the desktop's Done card reads) follow the same order. The meter is the desktop's equal-bar level
+meter (protocol 0.28.0 data, `PriorityMeter`): the snapshot's `priorities` scale names and colors
+each level, a task's `priority` is an index into it, the bottom entry draws nothing whatever it is
+called, and an index past the end draws in the protocol's gray with every bar lit
+(`priorityLevelFor`). Its geometry is a shared contract, `@kangentic/branding`'s
+`assets/priority/meter.json`: `scripts/syncBranding.mjs` carries its numbers into
+`src/brand/priorityMeter.generated.ts` (so `sync:branding:check` guards drift) and refuses a
+contract whose rules read differently from `src/lib/priorityMeter.ts`, which draws one bar per level
+above the bottom in the level's color, lit from the left, with width, gap and height each rounded
+once to whole device pixels (`PixelRatio.roundToNearestPixel`'s rule) so the bars are equal at every
+density. The generated file holds the current numbers; at branding 2.15.0 a bar is 3 dp wide, 10
+tall, 2 apart, radius 1, and unlit at 30%. The bar's height is the title's capital height
+(meter.json's `alignment`), so the row's center alignment centers it. The meter is decorative;
+its wrapper carries "Priority: <level>" for a screen reader. The labels row holds labels only, so a
+card with a priority and no labels has no labels row. An older desktop sends no scale, so no meter
+draws. Two deviations from the desktop's row are forced: the PR keeps its glyph in the title row's
+corner, where the desktop draws a PR pill in a link row under the title and keeps the corner for its
+Browser globe; and there is no globe, because the wire carries no browser state and the phone could
+not close a desktop Browser pane anyway.
+A task with no session at all and nothing else in its footer shows the desktop's attachment count
+there: a faint 15 dp paperclip and the number (`AttachmentCountBar`, the desktop's
+`attachment_count > 0 && displayState.kind === 'none' && !idleFooter`). The phone keys it on the
+board row (`session_id` null and the row not archived) rather than on its own `none` state, which
+also covers an ended session the phone holds no entry for, where the desktop draws nothing. It is
+information, not a control, on both apps. A running card whose idle reason carries `stopped` (protocol 0.28.0:
 the board stopped it, by its column's turn-end rows or a reply ending on "Needs owner:") wears the
 desktop's `agent-stopped` pennant in place of the envelope (`AgentStatusIcon`'s `stopped` kind,
 accessibility label "Stopped"), in the header too, and shows no wait time, since the desktop's

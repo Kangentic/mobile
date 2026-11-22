@@ -25,10 +25,14 @@ import { AUTOMATIONS_PAUSED_DESCRIPTION, WORKFLOW_AUTOMATIONS_PAUSED_DESCRIPTION
 import { COLUMN_STRIP_HEIGHT } from '@/components/board/ColumnStrip';
 import { PR_READINESS_FRESHNESS_CAVEAT } from '@/components/board/prChipPresentation';
 import { boardColumnFixture, boardTaskFixture, usageFixture } from '@/devsupport/desktopFixtures';
+import type { CardPriorityLevel } from '@/lib/priority';
 import { getLucideGlyph, lucideGlyphs } from '../helpers/lucideGlyphs';
 import { workflowWireFixture } from '../helpers/workflows';
 
 const BASE_TEST_ID = 'task-card';
+
+/** The top of a five-level scale (the desktop's default None, Low, Medium, High, Urgent). */
+const URGENT: CardPriorityLevel = { label: 'Urgent', color: '#ef4444', level: 4, levelCount: 5 };
 
 async function renderTaskCard(overrides: Partial<TaskCardProps> = {}): Promise<void> {
   const props: TaskCardProps = {
@@ -865,42 +869,118 @@ describe('TaskCard', () => {
   });
 
   /**
-   * Protocol 0.28.0: the priority pill leads the labels row. Mutations seen
-   * failing: dropping `priorityShown` from `hasMetaRow` (the no-labels card lost
-   * its pill), and rendering the badge after the labels (order test).
+   * The title row since kangentic #1160 (task #159): status mark, title, `#N`,
+   * the priority meter, then the PR glyph, each drawn only when it applies, as
+   * the desktop's `task-card-priority.spec.ts` pins its own row. Mutations seen
+   * failing: the meter rendered ahead of `#N` (every order case with both), and
+   * the meter left in the labels row (the order cases and the no-labels case).
    */
-  describe('the priority pill', () => {
-    const URGENT = { label: 'Urgent', color: '#ef4444' };
+  describe('the title row', () => {
+    const TITLE_ROW_PARTS = ['status', 'title', 'display-id', 'priority', 'pr'] as const;
 
-    it('draws the pill with its name for a screen reader', async () => {
-      await renderTaskCard({ priorityLevel: URGENT });
-      const pill = screen.getByTestId(`${BASE_TEST_ID}-priority`);
-      expect(pill.props.accessibilityLabel).toBe('Priority: Urgent');
-      expect(pill).toHaveTextContent('Urgent');
-    });
-
-    it('draws no pill when the level is null', async () => {
-      await renderTaskCard({ priorityLevel: null, task: boardTaskFixture({ labels: ['backend'] }) });
-      expect(screen.queryByTestId(`${BASE_TEST_ID}-priority`)).toBeNull();
-    });
-
-    it('still draws the labels row for a card with a priority and no labels', async () => {
-      await renderTaskCard({ priorityLevel: URGENT, task: boardTaskFixture({ labels: [] }) });
-      expect(screen.getByTestId(`${BASE_TEST_ID}-priority`)).toBeTruthy();
-    });
-
-    it('draws the pill first in the row, ahead of the labels', async () => {
-      await renderTaskCard({ priorityLevel: URGENT, task: boardTaskFixture({ labels: ['backend'] }) });
+    /** The title row's parts that rendered, in render order. */
+    function titleRowOrder(): string[] {
       const renderOrder = screen.container.queryAll(() => true);
-      const pillIndex = renderOrder.indexOf(screen.getByTestId(`${BASE_TEST_ID}-priority`));
-      const labelIndex = renderOrder.indexOf(screen.getByText('backend'));
-      expect(pillIndex).toBeGreaterThanOrEqual(0);
-      expect(labelIndex).toBeGreaterThan(pillIndex);
+      return TITLE_ROW_PARTS.map((part) => ({ part, index: renderOrder.findIndex((instance) => instance.props.testID === `${BASE_TEST_ID}-${part}`) }))
+        .filter(({ index }) => index >= 0)
+        .sort((left, right) => left.index - right.index)
+        .map(({ part }) => part);
+    }
+
+    const FULL_ROW: Partial<TaskCardProps> = {
+      task: boardTaskFixture({ pr_number: 42, pr_state: 'open' }),
+      statusKind: 'working',
+      sessionDisplay: { kind: 'running', resuming: false },
+      showTicketNumbers: true,
+      priorityLevel: URGENT,
+    };
+
+    it('reads status, title, #N, meter, PR when every slot applies', async () => {
+      await renderTaskCard(FULL_ROW);
+      expect(titleRowOrder()).toEqual(['status', 'title', 'display-id', 'priority', 'pr']);
     });
 
-    it('is hidden with the rest of the meta row when showMetaRow is false', async () => {
+    it.each([
+      { slot: 'no status mark', overrides: { statusKind: null }, expected: ['title', 'display-id', 'priority', 'pr'] },
+      { slot: 'Ticket Numbers off', overrides: { showTicketNumbers: false }, expected: ['status', 'title', 'priority', 'pr'] },
+      { slot: 'no priority (the scale bottom)', overrides: { priorityLevel: null }, expected: ['status', 'title', 'display-id', 'pr'] },
+      { slot: 'no PR', overrides: { task: boardTaskFixture() }, expected: ['status', 'title', 'display-id', 'priority'] },
+    ])('keeps the order and closes up with $slot', async ({ overrides, expected }) => {
+      await renderTaskCard({ ...FULL_ROW, ...overrides });
+      expect(titleRowOrder()).toEqual(expected);
+    });
+
+    it("names the level for a screen reader on the meter's wrapper", async () => {
+      await renderTaskCard({ priorityLevel: URGENT });
+      expect(screen.getByTestId(`${BASE_TEST_ID}-priority`).props.accessibilityLabel).toBe('Priority: Urgent');
+    });
+
+    it('draws no meter with the rest of the reference chrome when showMetaRow is false', async () => {
       await renderTaskCard({ priorityLevel: URGENT, showMetaRow: false });
       expect(screen.queryByTestId(`${BASE_TEST_ID}-priority`)).toBeNull();
+    });
+  });
+
+  /**
+   * The meter's bars, from meter.json's rules (src/lib/priorityMeter.ts, whose
+   * unit test runs the package's own tables): one bar per level above the
+   * bottom, lit from the left, unlit at 0.3, in the level's color.
+   */
+  describe('the priority meter', () => {
+    function barStyle(bar: TestInstance): ViewStyle {
+      return StyleSheet.flatten(bar.props.style as StyleProp<ViewStyle>) ?? {};
+    }
+
+    function barOpacities(): number[] {
+      const opacities: number[] = [];
+      for (let barIndex = 0; ; barIndex += 1) {
+        const bar = screen.queryByTestId(`${BASE_TEST_ID}-priority-bar-${barIndex}`);
+        if (bar === null) return opacities;
+        opacities.push(barStyle(bar).opacity as number);
+      }
+    }
+
+    it('lights every bar of a five-level scale for Urgent, in its color', async () => {
+      await renderTaskCard({ priorityLevel: URGENT });
+      expect(barOpacities()).toEqual([1, 1, 1, 1]);
+      expect(barStyle(screen.getByTestId(`${BASE_TEST_ID}-priority-bar-0`)).backgroundColor).toBe(URGENT.color);
+    });
+
+    it('lights one bar for Low and leaves the rest at the unlit opacity', async () => {
+      await renderTaskCard({ priorityLevel: { label: 'Low', color: '#3b82f6', level: 1, levelCount: 5 } });
+      expect(barOpacities()).toEqual([1, 0.3, 0.3, 0.3]);
+    });
+
+    it('lights every bar for a level past the end of the scale', async () => {
+      await renderTaskCard({ priorityLevel: { label: 'P7', color: '#6b7280', level: 7, levelCount: 5 } });
+      expect(barOpacities()).toEqual([1, 1, 1, 1]);
+    });
+  });
+
+  /**
+   * A card with a priority and no labels has no labels row: the priority moved
+   * to the title row. Mutation seen failing: `|| priorityShown` put back into
+   * `hasMetaRow`, which mounts an empty row.
+   */
+  describe('the labels row', () => {
+    it('is absent on a card with a priority and no labels', async () => {
+      await renderTaskCard({ priorityLevel: URGENT, task: boardTaskFixture({ labels: [] }) });
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-labels`)).toBeNull();
+    });
+
+    it('draws the labels alone, with no priority inside it', async () => {
+      await renderTaskCard({ priorityLevel: URGENT, task: boardTaskFixture({ labels: ['backend'] }) });
+      const labelsRow = screen.getByTestId(`${BASE_TEST_ID}-labels`);
+      expect(labelsRow).toHaveTextContent('backend');
+      const priorityInsideRow = screen.container
+        .queryAll((instance) => instance.props.testID === `${BASE_TEST_ID}-priority`)
+        .some((instance) => {
+          for (let ancestor = instance.parent; ancestor !== null; ancestor = ancestor.parent) {
+            if (ancestor === labelsRow) return true;
+          }
+          return false;
+        });
+      expect(priorityInsideRow).toBe(false);
     });
   });
 
@@ -933,36 +1013,88 @@ describe('TaskCard', () => {
   });
 
   /**
-   * The priority pill spends its share of the labels row, so a card with one
-   * shows fewer labels than the same card without. Mutations seen failing:
-   * `FALLBACK_LABEL_LIMIT - (priorityShown ? 1 : 0)` reverted to
-   * `FALLBACK_LABEL_LIMIT` (fallback test), and `labelsRowWidth -
-   * priorityBadgeReserve(...)` reverted to `labelsRowWidth` (measured test).
+   * The labels have their row to themselves now that the priority is a meter
+   * in the title row (task #159), so a card with a priority fits exactly as
+   * many labels as the same card without one. Mutation seen failing: the old
+   * pill reserve put back (`FALLBACK_LABEL_LIMIT - 1` before measuring, and
+   * 84px off the measured width).
    */
-  describe('label overflow beside the priority pill', () => {
+  describe('label overflow on a card with a priority', () => {
     const manyLabels = ['backend', 'notifications', 'migration', 'breaking-change', 'p0'];
-    const URGENT = { label: 'Urgent', color: '#ef4444' };
 
-    it('shows one label fewer than the fallback limit before the row is measured', async () => {
+    it('shows the full fallback limit before the row is measured', async () => {
       await renderTaskCard({ priorityLevel: URGENT, task: boardTaskFixture({ labels: manyLabels }) });
 
       expect(screen.getByText('backend')).toBeTruthy();
       expect(screen.getByText('notifications')).toBeTruthy();
-      expect(screen.queryByText('migration')).toBeNull();
-      expect(screen.getByText('+3')).toBeTruthy();
+      expect(screen.getByText('migration')).toBeTruthy();
+      expect(screen.getByText('+2')).toBeTruthy();
     });
 
-    it('takes the pill reserve off the measured width', async () => {
+    it('fits the labels to the whole measured width', async () => {
       await renderTaskCard({ priorityLevel: URGENT, task: boardTaskFixture({ labels: manyLabels }) });
 
       const labelsRow = findAncestorWithLayoutHandler(screen.getByText('backend'));
-      // At 300px two labels fit without a priority (see 'label overflow'). The
-      // 84px reserve leaves 216px, which fits only the first.
+      // At 300px two labels fit (see 'label overflow'), priority or not.
       await fireEvent(labelsRow, 'layout', { nativeEvent: { layout: { x: 0, y: 0, width: 300, height: 24 } } });
 
       expect(screen.getByText('backend')).toBeTruthy();
-      expect(screen.queryByText('notifications')).toBeNull();
-      expect(screen.getByText('+4')).toBeTruthy();
+      expect(screen.getByText('notifications')).toBeTruthy();
+      expect(screen.getByText('+3')).toBeTruthy();
+    });
+  });
+
+  /**
+   * The desktop's attachment count (#159 decision A1): a paperclip and the
+   * number in the footer slot, only on a task with no session at all and no
+   * other footer (task-card-view.tsx: `attachment_count > 0 &&
+   * displayState.kind === 'none' && !idleFooter`), and not on an archived row,
+   * which the desktop draws as its compact Done card. Mutations seen failing:
+   * the `session_id` gate dropped (the ended-session case), the archived gate
+   * dropped (the archived case), and the status footer no longer winning (the
+   * waiting and start-blocked cases).
+   */
+  describe('the attachment count', () => {
+    it('shows the count on a task with no session', async () => {
+      await renderTaskCard({ task: boardTaskFixture({ attachment_count: 2 }) });
+      const attachments = screen.getByTestId(`${BASE_TEST_ID}-attachments`);
+      expect(attachments.props.accessibilityLabel).toBe('2 attachments');
+      expect(screen.getByTestId(`${BASE_TEST_ID}-attachments-count`)).toHaveTextContent('2');
+    });
+
+    it('says one attachment in the singular', async () => {
+      await renderTaskCard({ task: boardTaskFixture({ attachment_count: 1 }) });
+      expect(screen.getByTestId(`${BASE_TEST_ID}-attachments`).props.accessibilityLabel).toBe('1 attachment');
+    });
+
+    it.each<{ case: string; overrides: Partial<TaskCardProps> }>([
+      { case: 'no attachments', overrides: { task: boardTaskFixture({ attachment_count: 0 }) } },
+      {
+        case: 'an ended session the phone holds no entry for (the desktop calls it exited)',
+        overrides: { task: boardTaskFixture({ attachment_count: 2, session_id: 'session-ended' }) },
+      },
+      {
+        case: 'an archived task (the desktop draws its compact Done card)',
+        overrides: { task: boardTaskFixture({ attachment_count: 2, archived_at: '2026-11-20T00:00:00.000Z' }) },
+      },
+      { case: 'a running session', overrides: { task: boardTaskFixture({ attachment_count: 2 }), sessionDisplay: { kind: 'running', resuming: false } } },
+      { case: 'a paused session', overrides: { task: boardTaskFixture({ attachment_count: 2 }), sessionDisplay: { kind: 'suspended' } } },
+      { case: 'the reference chrome off', overrides: { task: boardTaskFixture({ attachment_count: 2 }), showMetaRow: false } },
+    ])('draws nothing for $case', async ({ overrides }) => {
+      await renderTaskCard(overrides);
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-attachments`)).toBeNull();
+    });
+
+    it("gives the footer to a workflow task's wait, as the desktop's idle footer wins", async () => {
+      await renderTaskCard({ task: boardTaskFixture({ attachment_count: 2 }), waiting: { label: 'Blocked by #14...', paused: false } });
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-attachments`)).toBeNull();
+      expect(screen.getByTestId(`${BASE_TEST_ID}-status-bar`)).toBeTruthy();
+    });
+
+    it('gives the footer to a start that never reached its agent', async () => {
+      await renderTaskCard({ task: boardTaskFixture({ attachment_count: 2, start_blocked_reason: 'worktree-missing' }) });
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-attachments`)).toBeNull();
+      expect(screen.getByTestId(`${BASE_TEST_ID}-status-bar`)).toBeTruthy();
     });
   });
 

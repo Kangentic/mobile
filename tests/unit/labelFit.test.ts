@@ -1,16 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeVisibleLabelCount, priorityBadgeReserve } from '@/components/board/labelFit';
-
-describe('priorityBadgeReserve', () => {
-  it('reserves nothing without a priority', () => {
-    expect(priorityBadgeReserve(null)).toBe(0);
-  });
-
-  it('reserves the pill, its flag and the row gap for a label', () => {
-    // "Urgent": 6 chars * 7 + 18 chrome = 60, + 16 flag + 8 gap.
-    expect(priorityBadgeReserve('Urgent')).toBe(84);
-  });
-});
+import { computeVisibleLabelCount } from '@/components/board/labelFit';
 
 describe('computeVisibleLabelCount', () => {
   it('returns 0 for no labels regardless of available width', () => {

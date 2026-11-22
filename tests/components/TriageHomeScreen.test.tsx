@@ -406,14 +406,14 @@ describe('TriageHomeScreen', () => {
 
   /**
    * Mutation seen failing: dropping `priorityLevel=` from ActivityRow's TaskCard
-   * in TriageHomeScreen.tsx leaves no `-priority` pill on the session card.
+   * in TriageHomeScreen.tsx leaves no `-priority` meter on the session card.
    */
-  it('draws the task priority pill on an Agents session card (protocol 0.28.0)', async () => {
+  it('draws the task priority meter on an Agents session card (protocol 0.28.0, kangentic #1160)', async () => {
     seedTaskOnePriority();
     await renderHome();
 
-    const pill = screen.getByTestId('activity-row-sess-1-priority');
-    expect(pill.props.accessibilityLabel).toBe('Priority: Urgent');
+    const meter = screen.getByTestId('activity-row-sess-1-priority');
+    expect(meter.props.accessibilityLabel).toBe('Priority: Urgent');
   });
 
   it('falls back to a minimal card when a session outlives its board task entry', async () => {
@@ -2320,15 +2320,15 @@ describe('TriageHomeScreen', () => {
      */
     /**
      * Mutation seen failing: dropping `priorityLevel=` from SessionlessTaskRow's
-     * TaskCard in TriageHomeScreen.tsx leaves no `-priority` pill on the card.
+     * TaskCard in TriageHomeScreen.tsx leaves no `-priority` meter on the card.
      */
-    it('draws the task priority pill on a Paused card with no session (protocol 0.28.0)', async () => {
+    it('draws the task priority meter on a Paused card with no session (protocol 0.28.0, kangentic #1160)', async () => {
       makeTaskOneSessionless({ resumable: true, priority: 4 });
       seedTaskOnePriority();
       await renderHome();
 
-      const pill = screen.getByTestId('task-row-task-1-priority');
-      expect(pill.props.accessibilityLabel).toBe('Priority: Urgent');
+      const meter = screen.getByTestId('task-row-task-1-priority');
+      expect(meter.props.accessibilityLabel).toBe('Priority: Urgent');
     });
 
     it('records an open for the task when the Paused card is tapped, and none for its long press', async () => {
