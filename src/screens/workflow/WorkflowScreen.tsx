@@ -21,10 +21,12 @@ import {
   useTheme,
 } from '@/components';
 import { getColumnIcon } from '@/components/board/columnIcons';
+import { PriorityMeter } from '@/components/board/PriorityMeter';
 import { WorkflowGlyph } from '@/components/board/WorkflowGlyph';
 import { openProjectBoard } from '@/connection/actions';
 import { controlWorkflow, fetchWorkflowDetail } from '@/connection/workflowActions';
-import { selectColumnsOrdered, useBoardStore, type ProjectBoard } from '@/state/boardStore';
+import { priorityLevelFor } from '@/lib/priority';
+import { selectColumnsOrdered, selectPriorityScale, useBoardStore, type ProjectBoard } from '@/state/boardStore';
 import { selectWorkflowDetailRead, useWorkflowStore } from '@/state/workflowStore';
 import { normalizeWorkflowState, type WorkflowStateName } from '@/workflow/workflowState';
 import { WORKFLOW_DONE_SECTION_KEY, groupWorkflowMembers, type WorkflowMember, type WorkflowSection } from '@/workflow/workflowView';
@@ -42,7 +44,8 @@ export const WORKFLOW_READ_FAILED_MESSAGE = 'Could not load this workflow';
 type WorkflowListItem =
   | { kind: 'section'; key: string; section: WorkflowSection }
   | { kind: 'card'; key: string; member: WorkflowMember; row: BoardTaskWire }
-  | { kind: 'compact'; key: string; member: WorkflowMember };
+  /** `priority` is the member's board row's, or null when the phone holds no row for it (a planned task, an unloaded board). */
+  | { kind: 'compact'; key: string; member: WorkflowMember; priority: number | null };
 
 /** A task's board row, when its board is loaded. */
 function rowOf(boardsByProjectId: Record<string, ProjectBoard>, member: WorkflowMember): BoardTaskWire | null {
@@ -154,7 +157,7 @@ export function WorkflowScreen(): React.JSX.Element {
         const row = rowOf(boardsByProjectId, member);
         const key = `${member.projectId}:${member.taskId ?? member.key}`;
         if (row !== null && row.archived_at === null && section.key !== WORKFLOW_DONE_SECTION_KEY) listItems.push({ kind: 'card', key, member, row });
-        else listItems.push({ kind: 'compact', key, member });
+        else listItems.push({ kind: 'compact', key, member, priority: row?.priority ?? null });
       }
     }
     return listItems;
@@ -183,7 +186,7 @@ export function WorkflowScreen(): React.JSX.Element {
           </View>
         );
       }
-      return <CompactTaskCard member={item.member} />;
+      return <CompactTaskCard member={item.member} priority={item.priority} />;
     },
     [theme.spacing.md, theme.spacing.sm, onLongPressTask],
   );
@@ -349,14 +352,20 @@ function ColumnSectionHeader({ section }: { section: WorkflowSection }): React.J
 
 /**
  * A task with no live card: one in Done (the Done column's compact card, its
- * title and number), one whose board the phone has not loaded, or a planned
- * task of a workflow not started, which has no number yet.
+ * title, number and priority meter, as the desktop's Done card reads since
+ * kangentic #1158 and #1160), one whose board the phone has not loaded, or a
+ * planned task of a workflow not started, which has no number yet. The meter
+ * draws only from a board row the phone holds, so a planned task and a task on
+ * an unloaded board draw none.
  */
-function CompactTaskCard({ member }: { member: WorkflowMember }): React.JSX.Element {
+function CompactTaskCard({ member, priority }: { member: WorkflowMember; priority: number | null }): React.JSX.Element {
   const theme = useTheme();
   const router = useRouter();
   // The task's own board decides, as every other card's number does.
   const showTicketNumbers = useBoardStore((state) => state.boardsByProjectId[member.projectId]?.showTicketNumbers ?? true);
+  const priorityScale = useBoardStore((state) => selectPriorityScale(state, member.projectId));
+  const priorityLevel = priorityLevelFor(priority, priorityScale);
+  const cardTestID = `workflow-compact-${member.taskId ?? member.key}`;
   // A finished task opens its run, as a card in the Board's Done column does.
   // A planned task and one on an unloaded board have nothing to open yet.
   const taskId = member.taskId;
@@ -366,16 +375,23 @@ function CompactTaskCard({ member }: { member: WorkflowMember }): React.JSX.Elem
       : undefined;
   return (
     <View style={{ paddingHorizontal: theme.spacing.md, paddingBottom: theme.spacing.sm }}>
-      <Card testID={`workflow-compact-${member.taskId ?? member.key}`} onPress={openCompleted}>
+      <Card testID={cardTestID} onPress={openCompleted}>
         <Row gap="sm" style={styles.centered}>
-          <Text variant="body" color={member.place === 'done' ? 'secondary' : 'primary'} numberOfLines={1} style={styles.flex}>
+          <Text
+            variant="body"
+            color={member.place === 'done' ? 'secondary' : 'primary'}
+            numberOfLines={1}
+            style={styles.flex}
+            testID={`${cardTestID}-title`}
+          >
             {member.title}
           </Text>
           {showTicketNumbers && member.displayId !== null ? (
-            <MonoText size="caption" color="muted">
+            <MonoText size="caption" color="muted" testID={`${cardTestID}-display-id`}>
               {`#${member.displayId}`}
             </MonoText>
           ) : null}
+          {priorityLevel !== null ? <PriorityMeter level={priorityLevel} testID={`${cardTestID}-priority`} /> : null}
         </Row>
       </Card>
     </View>

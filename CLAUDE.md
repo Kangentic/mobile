@@ -190,7 +190,8 @@ src/
                   #   cells and prompt cards, terminal/ xterm pane + quick keys, board/ cards and
                   #   column chips, composer/, diff/ cells
   brand/          # Generated brand data (brandmark XML, Overseer frames + motion sequences,
-                  #   activity mark shapes + spin/march timing) - syncBranding.mjs owns them
+                  #   activity mark shapes + spin/march timing, the priority meter's bar
+                  #   numbers from meter.json) - syncBranding.mjs owns them
   pairing/        # QR validation, device identity, the IKpsk0 pairing state machine, trust anchor storage
   channel/        # Relay WebSocket transport, KK session manager (responder), slot derivation,
                   #   capability client, typed verb client, feed router, subscription manager
@@ -308,7 +309,8 @@ src/
                   #   agentWait: the desktop's wait-kind rule (protocol 0.26.0) that picks the
                   #   bubble, shield or envelope and the Command Terminal activity line, and the
                   #   protocol 0.28.0 card rules ported from the desktop: queuePlace, priority,
-                  #   startBlocked and taskArtifacts)
+                  #   startBlocked and taskArtifacts; plus priorityMeter, the equal-bar meter's
+                  #   rules from @kangentic/branding's meter.json, kangentic #1160)
 tests/
   unit/           # vitest (pure TS, no RN runtime) - includes the loopback-transport + stub-desktop-peer helpers
   components/     # Jest + React Native Testing Library

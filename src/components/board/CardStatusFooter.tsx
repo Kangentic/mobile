@@ -1,6 +1,6 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
-import { CircleExclamationPoint, CirclePause, Clock, LoaderCircle } from 'lucide-react-native';
+import { CircleExclamationPoint, CirclePause, Clock, LoaderCircle, Paperclip } from 'lucide-react-native';
 import type { BoardTaskQueuePlaceWire, SessionUsageWire } from '@kangentic/protocol';
 import { ContextUsageBar, Row, StatusSpinner, Text, useTheme } from '@/components';
 import { queuedCardLabel, queuedCardTip } from '@/lib/queuePlace';
@@ -10,6 +10,13 @@ import type { CardSessionDisplay } from './cardSessionDisplay';
 
 /** The desktop footer's glyph size (lucide Loader2 / CirclePause / Clock / CircleExclamationPoint at 12). */
 const STATUS_GLYPH_SIZE = 12;
+/**
+ * The desktop's attachment row (task-card-view.tsx: a lucide Paperclip at 15
+ * and a `gap-1.5`), copied literally rather than rounded to the spacing
+ * tokens, which have no 6, as CardStrip copies the desktop's strip.
+ */
+const ATTACHMENT_GLYPH_SIZE = 15;
+const ATTACHMENT_GLYPH_GAP = 6;
 /** The desktop's wording, verbatim (TaskCard.tsx's bottom-bar switch). */
 const STARTING_AGENT_LABEL = 'Starting agent...';
 const RESUMING_AGENT_LABEL = 'Resuming agent...';
@@ -195,9 +202,37 @@ function StartBlockedBar({ copy, testID }: { copy: StartBlockedCopy; testID: str
   );
 }
 
+/**
+ * The desktop card's attachment count: a faint paperclip and the number, in the
+ * footer slot of a card whose task has no session and nothing else to say
+ * there (task-card-view.tsx: `attachment_count > 0 && displayState.kind ===
+ * 'none' && !idleFooter`). TaskCard decides when; this only draws it. It is
+ * information, not a control, on the desktop too. Signed off as #159's A1.
+ */
+export function AttachmentCountBar({ count, testID }: { count: number; testID: string }): React.JSX.Element {
+  const theme = useTheme();
+  return (
+    <View
+      testID={testID}
+      accessible
+      accessibilityLabel={count === 1 ? '1 attachment' : `${count} attachments`}
+      style={[styles.labelRow, styles.attachmentRow]}
+    >
+      <Paperclip size={ATTACHMENT_GLYPH_SIZE} color={theme.colors.textMuted} />
+      <Text variant="caption" color="muted" testID={`${testID}-count`}>
+        {count}
+      </Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   labelRow: {
     alignItems: 'center',
+  },
+  attachmentRow: {
+    flexDirection: 'row',
+    gap: ATTACHMENT_GLYPH_GAP,
   },
   label: {
     flexShrink: 1,

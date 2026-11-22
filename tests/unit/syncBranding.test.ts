@@ -230,24 +230,29 @@ interface GeneratorRun {
   wroteActivityModule: boolean;
   /** The activity module the run wrote, or null when it threw before writing. */
   activityModuleSource: string | null;
+  /** The priority meter module the run wrote, or null when it threw before writing. */
+  priorityModuleSource: string | null;
 }
 
 /**
  * Runs the REAL generator against a scratch copy of the branding package whose
- * activity SVGs the caller has rewritten. Everything is a copy: the script is
- * copied to `<scratch>/scripts/` so its repo-root lookup (`..` from its own
- * location) lands in the scratch tree, and the package to
+ * assets the caller has rewritten (the activity SVGs, or anything else under
+ * the package root, which the callback gets too). Everything is a copy: the
+ * script is copied to `<scratch>/scripts/` so its repo-root lookup (`..` from
+ * its own location) lands in the scratch tree, and the package to
  * `<scratch>/node_modules/@kangentic/branding`. The real working tree is never
  * read as a target or written.
  */
-function runGeneratorAgainstScratchPackage(rewriteActivityAssets: (activityDirectory: string) => void): GeneratorRun {
+function runGeneratorAgainstScratchPackage(
+  rewriteScratchPackage: (activityDirectory: string, packageRoot: string) => void,
+): GeneratorRun {
   const scratchRoot = mkdtempSync(join(tmpdir(), 'kangentic-syncbranding-test-'));
   try {
     mkdirSync(join(scratchRoot, 'scripts'));
     copyFileSync(repoPath('scripts/syncBranding.mjs'), join(scratchRoot, 'scripts', 'syncBranding.mjs'));
     const scratchPackageRoot = join(scratchRoot, 'node_modules', '@kangentic', 'branding');
     cpSync(repoPath('node_modules/@kangentic/branding'), scratchPackageRoot, { recursive: true, dereference: true });
-    rewriteActivityAssets(join(scratchPackageRoot, 'assets', 'activity'));
+    rewriteScratchPackage(join(scratchPackageRoot, 'assets', 'activity'), scratchPackageRoot);
 
     const result = spawnSync(process.execPath, [join(scratchRoot, 'scripts', 'syncBranding.mjs')], {
       cwd: scratchRoot,
@@ -256,11 +261,13 @@ function runGeneratorAgainstScratchPackage(rewriteActivityAssets: (activityDirec
     });
     const activityModulePath = join(scratchRoot, 'src', 'brand', 'activityMarks.generated.ts');
     const wroteActivityModule = existsSync(activityModulePath);
+    const priorityModulePath = join(scratchRoot, 'src', 'brand', 'priorityMeter.generated.ts');
     return {
       exitStatus: result.status,
       stderr: result.stderr,
       wroteActivityModule,
       activityModuleSource: wroteActivityModule ? readFileSync(activityModulePath, 'utf8') : null,
+      priorityModuleSource: existsSync(priorityModulePath) ? readFileSync(priorityModulePath, 'utf8') : null,
     };
   } finally {
     rmSync(scratchRoot, { recursive: true, force: true });
@@ -407,6 +414,184 @@ describe('syncBranding.mjs activity guards (the real generator against rewritten
       expect(run.exitStatus).not.toBe(0);
       expect(run.stderr).toContain(`${file} has an unbalanced <g> element`);
       expect(run.wroteActivityModule).toBe(false);
+    },
+    GENERATOR_TEST_TIMEOUT_MS,
+  );
+});
+
+/** Rewrites the scratch package's meter.json in place, and fails loudly if the rewrite changed nothing. */
+function rewriteMeterManifest(packageRoot: string, transform: (manifest: Record<string, Record<string, unknown>>) => void): void {
+  const manifestPath = join(packageRoot, 'assets', 'priority', 'meter.json');
+  const original = readFileSync(manifestPath, 'utf8');
+  const manifest = JSON.parse(original) as Record<string, Record<string, unknown>>;
+  transform(manifest);
+  const rewritten = JSON.stringify(manifest, null, 2);
+  if (rewritten === JSON.stringify(JSON.parse(original), null, 2)) throw new Error('the meter.json rewrite changed nothing; the case would test nothing');
+  writeFileSync(manifestPath, rewritten);
+}
+
+/**
+ * The priority meter's guards (task #159). The generator carries meter.json's
+ * NUMBERS into src/brand/priorityMeter.generated.ts and leaves the rules to
+ * src/lib/priorityMeter.ts, so a contract whose rules read differently must
+ * stop the run rather than ship new numbers under old rules. As with the
+ * activity guards, `--check` only ever sees the installed package, so each
+ * case feeds the real generator a rewritten meter.json. The cases cover a
+ * missing or unparseable manifest, a top-level key that is not an object, the
+ * bar dimensions (radius may be 0, the rest must be positive), the opacity
+ * range, the rule strings and the pixel snap.
+ */
+describe('syncBranding.mjs priority meter guards (the real generator against a rewritten meter.json)', () => {
+  const GENERATOR_TEST_TIMEOUT_MS = 30_000;
+
+  it(
+    'generates the committed meter module from an untouched scratch copy (the control)',
+    () => {
+      const run = runGeneratorAgainstScratchPackage(() => undefined);
+
+      expect(run.stderr).toBe('');
+      expect(run.exitStatus).toBe(0);
+      const committedSource = readFileSync(repoPath('src/brand/priorityMeter.generated.ts'), 'utf8');
+      expect(run.priorityModuleSource?.replaceAll('\r\n', '\n')).toBe(committedSource.replaceAll('\r\n', '\n'));
+    },
+    GENERATOR_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'carries a new opacity value through, since the opacity rule is checked against the manifest\'s own numbers',
+    () => {
+      const run = runGeneratorAgainstScratchPackage((_activityDirectory, packageRoot) => {
+        rewriteMeterManifest(packageRoot, (manifest) => {
+          manifest.opacity.unlit = 0.25;
+          manifest.rules.opacity = 'lit bars 1; every other bar 0.25 when level > 0, 0.45 when level is 0';
+        });
+      });
+
+      expect(run.exitStatus).toBe(0);
+      expect(run.priorityModuleSource).toContain('unlit: 0.25');
+    },
+    GENERATOR_TEST_TIMEOUT_MS,
+  );
+
+  it.each([
+    {
+      label: 'a new bar-count rule',
+      transform: (manifest: Record<string, Record<string, unknown>>) => {
+        manifest.rules.barCount = 'levelCount';
+      },
+      message: 'meter.json rules.barCount reads "levelCount"',
+    },
+    {
+      label: 'a new lit rule',
+      transform: (manifest: Record<string, Record<string, unknown>>) => {
+        manifest.rules.lit = 'level, counted from the right';
+      },
+      message: 'meter.json rules.lit reads',
+    },
+    {
+      label: 'an opacity value its rule does not state',
+      transform: (manifest: Record<string, Record<string, unknown>>) => {
+        manifest.opacity.unlit = 0.25;
+      },
+      message: 'meter.json rules.opacity reads',
+    },
+    {
+      label: 'a different rounding',
+      transform: (manifest: Record<string, Record<string, unknown>>) => {
+        manifest.pixelSnap.roundHalf = 'even';
+      },
+      message: 'meter.json pixelSnap.roundHalf is "even"',
+    },
+    {
+      label: 'a bar with no width',
+      transform: (manifest: Record<string, Record<string, unknown>>) => {
+        manifest.bar.width = 0;
+      },
+      message: 'meter.json bar.width is 0',
+    },
+    {
+      label: 'a top-level bar that is not an object',
+      transform: (manifest: Record<string, Record<string, unknown>>) => {
+        (manifest as Record<string, unknown>).bar = null;
+      },
+      message: 'meter.json top-level "bar" is null',
+    },
+    {
+      label: 'a negative bar gap',
+      transform: (manifest: Record<string, Record<string, unknown>>) => {
+        manifest.bar.gap = -1;
+      },
+      message: 'meter.json bar.gap is -1',
+    },
+    {
+      label: 'a negative bar radius',
+      transform: (manifest: Record<string, Record<string, unknown>>) => {
+        manifest.bar.radius = -1;
+      },
+      message: 'meter.json bar.radius is -1',
+    },
+    {
+      label: 'a lit opacity above 1',
+      transform: (manifest: Record<string, Record<string, unknown>>) => {
+        manifest.opacity.lit = 2;
+      },
+      message: 'meter.json opacity.lit is 2',
+    },
+  ])(
+    'refuses $label and writes no meter module',
+    ({ transform, message }) => {
+      const run = runGeneratorAgainstScratchPackage((_activityDirectory, packageRoot) => {
+        rewriteMeterManifest(packageRoot, transform);
+      });
+
+      expect(run.exitStatus).not.toBe(0);
+      expect(run.stderr).toContain(message);
+      expect(run.priorityModuleSource, 'a refused contract must not leave a module behind').toBeNull();
+    },
+    GENERATOR_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'allows a bar radius of 0 (square bars), unlike the other dimensions',
+    () => {
+      const run = runGeneratorAgainstScratchPackage((_activityDirectory, packageRoot) => {
+        rewriteMeterManifest(packageRoot, (manifest) => {
+          manifest.bar.radius = 0;
+        });
+      });
+
+      expect(run.stderr).toBe('');
+      expect(run.exitStatus).toBe(0);
+      expect(run.priorityModuleSource).toContain('radius: 0');
+    },
+    GENERATOR_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'refuses a missing meter.json and writes no meter module',
+    () => {
+      const run = runGeneratorAgainstScratchPackage((_activityDirectory, packageRoot) => {
+        rmSync(join(packageRoot, 'assets', 'priority', 'meter.json'));
+      });
+
+      expect(run.exitStatus).not.toBe(0);
+      expect(run.stderr).toContain('missing');
+      expect(run.stderr).toContain('meter.json');
+      expect(run.priorityModuleSource, 'a refused contract must not leave a module behind').toBeNull();
+    },
+    GENERATOR_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'refuses a meter.json that is not valid JSON and writes no meter module',
+    () => {
+      const run = runGeneratorAgainstScratchPackage((_activityDirectory, packageRoot) => {
+        writeFileSync(join(packageRoot, 'assets', 'priority', 'meter.json'), '{ "bar": ');
+      });
+
+      expect(run.exitStatus).not.toBe(0);
+      expect(run.stderr).toContain('is not valid JSON');
+      expect(run.priorityModuleSource, 'a refused contract must not leave a module behind').toBeNull();
     },
     GENERATOR_TEST_TIMEOUT_MS,
   );

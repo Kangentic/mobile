@@ -21,17 +21,17 @@ describe('priorityLevelFor', () => {
     expect(priorityLevelFor(null, SCALE)).toBeNull();
   });
 
-  it('returns the level at the index', () => {
-    expect(priorityLevelFor(1, SCALE)).toEqual(SCALE[1]);
-    expect(priorityLevelFor(2, SCALE)).toEqual(SCALE[2]);
+  it('returns the level at the index, with its place on the scale for the meter', () => {
+    expect(priorityLevelFor(1, SCALE)).toEqual({ ...SCALE[1], level: 1, levelCount: 3 });
+    expect(priorityLevelFor(2, SCALE)).toEqual({ ...SCALE[2], level: 2, levelCount: 3 });
   });
 
-  it('draws P<n> in the fallback gray past the end of the scale', () => {
-    expect(priorityLevelFor(7, SCALE)).toEqual({ label: 'P7', color: PRIORITY_FALLBACK_COLOR });
+  it('draws P<n> in the fallback gray past the end of the scale, keeping its index so the meter lights every bar', () => {
+    expect(priorityLevelFor(7, SCALE)).toEqual({ label: 'P7', color: PRIORITY_FALLBACK_COLOR, level: 7, levelCount: 3 });
   });
 
   it('keeps the label but swaps a malformed color for the fallback', () => {
     const scale: PriorityLevelWire[] = [SCALE[0], { label: 'Odd', color: 'red' }];
-    expect(priorityLevelFor(1, scale)).toEqual({ label: 'Odd', color: PRIORITY_FALLBACK_COLOR });
+    expect(priorityLevelFor(1, scale)).toEqual({ label: 'Odd', color: PRIORITY_FALLBACK_COLOR, level: 1, levelCount: 2 });
   });
 });

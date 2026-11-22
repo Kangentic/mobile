@@ -13,36 +13,16 @@ const BADGE_CHROME_PX = 18;
 /** `Row gap="sm"` between adjacent pills. */
 const ROW_GAP_PX = 8;
 
-/**
- * The priority pill's flag size (the desktop's lucide Flag at 12). Declared
- * here rather than in `PriorityBadge`, which imports it, so this estimate stays
- * a pure module the unit tier can load.
- */
-export const PRIORITY_BADGE_FLAG_SIZE = 12;
-/** `Row gap="xs"` between the priority pill's flag and its name. */
-const PRIORITY_FLAG_GAP_PX = 4;
-/** What the priority pill adds on top of a label pill's chrome: its flag and the gap after it. */
-const PRIORITY_FLAG_PX = PRIORITY_BADGE_FLAG_SIZE + PRIORITY_FLAG_GAP_PX;
-
 function estimateBadgeWidth(label: string): number {
   return label.length * AVG_CHAR_WIDTH_PX + BADGE_CHROME_PX;
 }
 
 /**
- * The priority pill's width (`PriorityBadge`), plus the gap after it, which the
- * labels row spends before its first label. Zero when no pill is drawn.
- */
-export function priorityBadgeReserve(priorityLabel: string | null): number {
-  if (priorityLabel === null) return 0;
-  return estimateBadgeWidth(priorityLabel) + PRIORITY_FLAG_PX + ROW_GAP_PX;
-}
-
-/**
  * Greedily fits as many labels as possible into `availableWidth`, reserving
  * room for the "+N" overflow pill whenever not everything fits. Returns the
- * count to actually render (the rest become the overflow count). A priority
- * pill leading the row is taken off `availableWidth` by the caller
- * (`priorityBadgeReserve`).
+ * count to actually render (the rest become the overflow count). The labels
+ * have the row to themselves: a task's priority draws in the title row, as a
+ * meter (kangentic #1160), not as a pill here.
  */
 export function computeVisibleLabelCount(labels: string[], availableWidth: number): number {
   if (labels.length === 0) return 0;

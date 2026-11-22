@@ -35,6 +35,14 @@
  *      SVG element the renderer cannot draw, a reducedMotion or motion value it
  *      does not implement, a dash that does not close its outline (the
  *      pathLength trap), or an SVG that disagrees with the manifest all FAIL.
+ *   5. Reads the priority meter's contract (assets/priority/meter.json) into
+ *      typed constants in src/brand/priorityMeter.generated.ts: the bar's
+ *      width, height, gap and radius, and the three opacities. Only the
+ *      NUMBERS are generated. The rules that use them (how many bars, how many
+ *      lit, which opacity, the pixel snap) are code in src/lib/priorityMeter.ts,
+ *      so a meter.json whose rules read differently from the ones that file
+ *      implements FAILS the run rather than shipping new numbers under old
+ *      rules. The phone draws Views from these numbers, never the meter SVGs.
  *
  * Usage:
  *   node scripts/syncBranding.mjs          Regenerate outputs in place.
@@ -1118,6 +1126,109 @@ function buildActivityModule() {
   return lines.join('\n');
 }
 
+/**
+ * The rules src/lib/priorityMeter.ts implements, as meter.json words them. A
+ * contract whose rules read any other way is refused: the numbers would still
+ * generate, but the code drawing them would be following rules the package no
+ * longer states. The opacity rule names the three opacities, so it is checked
+ * against the manifest's own numbers, and a new opacity VALUE passes while a
+ * new opacity RULE does not.
+ */
+const PRIORITY_METER_BAR_COUNT_RULE = 'max(1, levelCount - 1)';
+const PRIORITY_METER_LIT_RULE = 'min(max(level, 0), barCount), counted from the left';
+
+function priorityMeterOpacityRule(opacity) {
+  return `lit bars ${opacity.lit}; every other bar ${opacity.unlit} when level > 0, ${opacity.none} when level is 0`;
+}
+
+function readPriorityMeterManifest() {
+  const manifestPath = join(brandingRoot, 'assets', 'priority', 'meter.json');
+  if (!existsSync(manifestPath)) {
+    throw new Error(`syncBranding: missing ${manifestPath}. Run npm install first (it ships from @kangentic/branding 2.15.0).`);
+  }
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  } catch (parseError) {
+    throw new Error(`syncBranding: ${manifestPath} is not valid JSON: ${parseError.message}`);
+  }
+  for (const requiredKey of ['bar', 'opacity', 'rules', 'pixelSnap']) {
+    if (manifest[requiredKey] === null || typeof manifest[requiredKey] !== 'object') {
+      throw new Error(`syncBranding: meter.json top-level "${requiredKey}" is ${JSON.stringify(manifest[requiredKey])}, expected an object`);
+    }
+  }
+  for (const dimension of ['width', 'height', 'gap', 'radius']) {
+    const value = manifest.bar[dimension];
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || (dimension !== 'radius' && value === 0)) {
+      throw new Error(`syncBranding: meter.json bar.${dimension} is ${JSON.stringify(value)}, expected a positive number`);
+    }
+  }
+  for (const opacityName of ['lit', 'unlit', 'none']) {
+    const value = manifest.opacity[opacityName];
+    if (typeof value !== 'number' || !(value >= 0 && value <= 1)) {
+      throw new Error(`syncBranding: meter.json opacity.${opacityName} is ${JSON.stringify(value)}, expected a number from 0 to 1`);
+    }
+  }
+  const expectedRules = {
+    barCount: PRIORITY_METER_BAR_COUNT_RULE,
+    lit: PRIORITY_METER_LIT_RULE,
+    opacity: priorityMeterOpacityRule(manifest.opacity),
+  };
+  for (const [ruleName, expectedRule] of Object.entries(expectedRules)) {
+    if (manifest.rules[ruleName] !== expectedRule) {
+      throw new Error(
+        `syncBranding: meter.json rules.${ruleName} reads ${JSON.stringify(manifest.rules[ruleName])}, but ` +
+          `src/lib/priorityMeter.ts implements ${JSON.stringify(expectedRule)}. Change the meter's code to the new ` +
+          'rule, then update the rule this script expects.',
+      );
+    }
+  }
+  if (manifest.pixelSnap.roundHalf !== 'up') {
+    throw new Error(
+      `syncBranding: meter.json pixelSnap.roundHalf is ${JSON.stringify(manifest.pixelSnap.roundHalf)}, but ` +
+        'src/lib/priorityMeter.ts rounds half up (PixelRatio.roundToNearestPixel). Change the snap there first.',
+    );
+  }
+  return manifest;
+}
+
+function buildPriorityMeterModule() {
+  const manifest = readPriorityMeterManifest();
+  const { bar, opacity } = manifest;
+  return [
+    GENERATED_HEADER,
+    '',
+    '/**',
+    " * The priority meter's numbers, from @kangentic/branding/assets/priority/meter.json:",
+    ' * the equal bars a task card draws for its priority, shared with the desktop',
+    ' * and the web demo. Only the numbers live here. The rules that use them (bar',
+    ' * count, lit count, which opacity, the pixel snap) are code in',
+    ' * src/lib/priorityMeter.ts, and the generator refuses a meter.json whose rules',
+    ' * read differently.',
+    ' */',
+    '',
+    '/** One bar, in dp. Width, gap and height snap to whole device pixels; the radius does not. */',
+    'export interface PriorityMeterBar {',
+    '  width: number;',
+    '  height: number;',
+    '  gap: number;',
+    '  radius: number;',
+    '}',
+    '',
+    '/** A lit bar, an unlit bar on a card with a priority, and every bar of the bottom level. */',
+    'export interface PriorityMeterOpacity {',
+    '  lit: number;',
+    '  unlit: number;',
+    '  none: number;',
+    '}',
+    '',
+    `export const PRIORITY_METER_BAR: PriorityMeterBar = { width: ${bar.width}, height: ${bar.height}, gap: ${bar.gap}, radius: ${bar.radius} };`,
+    '',
+    `export const PRIORITY_METER_OPACITY: PriorityMeterOpacity = { lit: ${opacity.lit}, unlit: ${opacity.unlit}, none: ${opacity.none} };`,
+    '',
+  ].join('\n');
+}
+
 /** Every output as { repoRelativePath, kind, content } (content is a Buffer). */
 function buildOutputs() {
   const outputs = [];
@@ -1131,6 +1242,7 @@ function buildOutputs() {
   outputs.push({ repoRelativePath: join('src', 'brand', 'brandmarkXml.generated.ts'), content: Buffer.from(buildBrandmarkModule(), 'utf8') });
   outputs.push({ repoRelativePath: join('src', 'brand', 'overseerFrames.generated.ts'), content: Buffer.from(buildOverseerModule(), 'utf8') });
   outputs.push({ repoRelativePath: join('src', 'brand', 'activityMarks.generated.ts'), content: Buffer.from(buildActivityModule(), 'utf8') });
+  outputs.push({ repoRelativePath: join('src', 'brand', 'priorityMeter.generated.ts'), content: Buffer.from(buildPriorityMeterModule(), 'utf8') });
   return outputs;
 }
 

@@ -275,6 +275,43 @@ describe('WorkflowScreen', () => {
       expect(screen.getByTestId('workflow-compact-task-a')).not.toHaveTextContent('#1', { exact: false });
     });
 
+    /**
+     * A finished task's compact card reads title, `#N`, then its priority meter,
+     * as the desktop's Done card (#1158) does since #1160 (task #159). The meter
+     * comes from the task's board row, so a planned task, and a task on a board
+     * the phone has not loaded, draw none. Mutations seen failing: the meter
+     * drawn ahead of the number (the order), and the compact item built with
+     * `priority: null` instead of the row's (no meter found).
+     */
+    it("draws a done task's priority meter after its number, and none without a board row", async () => {
+      const board = useBoardStore.getState().boardsByProjectId[HOME_PROJECT_ID];
+      if (!board) throw new Error('board not seeded');
+      useBoardStore.setState({
+        boardsByProjectId: {
+          [HOME_PROJECT_ID]: {
+            ...board,
+            priorities: [
+              { label: 'None', color: '#6b7280' },
+              { label: 'Low', color: '#3b82f6' },
+              { label: 'Medium', color: '#eab308' },
+              { label: 'High', color: '#f97316' },
+              { label: 'Urgent', color: '#ef4444' },
+            ],
+          },
+        },
+      });
+      patchHomeRows({ 'task-a': { priority: 3 } });
+      await renderWorkflow();
+
+      expect(screen.getByTestId('workflow-compact-task-a-priority').props.accessibilityLabel).toBe('Priority: High');
+      const renderOrder = screen.container.queryAll(() => true);
+      const indexOf = (testID: string): number => renderOrder.findIndex((instance) => instance.props.testID === testID);
+      expect(indexOf('workflow-compact-task-a-title')).toBeLessThan(indexOf('workflow-compact-task-a-display-id'));
+      expect(indexOf('workflow-compact-task-a-display-id')).toBeLessThan(indexOf('workflow-compact-task-a-priority'));
+      expect(screen.queryByTestId('workflow-compact-plan-7-priority')).toBeNull();
+      expect(screen.queryByTestId('workflow-compact-task-e-priority')).toBeNull();
+    });
+
     it('opens the long-press hub for a card\'s task on its own board', async () => {
       await renderWorkflow();
 

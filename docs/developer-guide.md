@@ -670,8 +670,8 @@ src/
                   #   Settings, Devices
   components/     # Design system + conversation/ cells and prompt cards, terminal/ xterm pane +
                   #   quick keys, board/ sheets, composer/, diff/ line cells
-  brand/          # Generated brand data (brandmark, Overseer frames, activity marks) -
-                  #   syncBranding.mjs owns it
+  brand/          # Generated brand data (brandmark, Overseer frames, activity marks, the
+                  #   priority meter's numbers) - syncBranding.mjs owns it
   pairing/        # QR validation, device identity, the IKpsk0 pairing state machine, trust anchor storage
   channel/        # Relay WebSocket transport, KK session manager (responder), slot derivation,
                   #   capability client, typed verb client, feed router, subscription manager
@@ -719,8 +719,9 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   serializer and fill-never-letterbox rules, ported - and pack it into
                   #   src/devsupport/claudeCapture.ts; dev utilities, not run in CI),
                   #   storeScreenshots.mjs, syncBranding.mjs (npm run sync:branding pulls the
-                  #   brand rasters, the Board tab glyph and the activity marks out of
-                  #   @kangentic/branding; --check gates drift in CI),
+                  #   brand rasters, the Board tab glyph, the activity marks and the
+                  #   priority meter's numbers out of @kangentic/branding; --check gates
+                  #   drift in CI),
                   #   cmakeStaging.mjs (npm run clean:staging prunes CMake staging trees whose
                   #   checkout is gone; --verify proves the object-path flag reached CMake),
                   #   build-review-pack.mjs (gathers the /code-review diff once into a
