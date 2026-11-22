@@ -292,12 +292,15 @@ src/
                   #   plain callback for src/state/memoryShed. And reportContext, which says
                   #   WHERE the app was and WHAT it was doing on every event, native ones
                   #   included (Sentry MOBILE-H's could not): the `screen` and `lens` scope
-                  #   tags, an app.navigation breadcrumb per change, and an app.connection
-                  #   breadcrumb per connection state. Every value is a member of a closed set
-                  #   in reportVocabulary (pure, no imports) and is checked at the door, so a
-                  #   screen is its route TEMPLATE and never a path with a task ID in it.
-                  #   Those four are everything the app ADDS; tags and breadcrumbs are scope
-                  #   data, so the two-capture-call count is unchanged. maxBreadcrumbs is 100
+                  #   tags, an app.navigation breadcrumb per change, an app.connection
+                  #   breadcrumb per connection state, and the `relay_dial_id` tag (the
+                  #   session connection's latest per-dial `&dial=` id, so an event joins the
+                  #   relay's record of that dial). Every value is a member of a closed set
+                  #   in reportVocabulary (pure, no imports), or for the dial id its pinned
+                  #   16-hex format, and is checked at the door, so a screen is its route
+                  #   TEMPLATE and never a path with a task ID in it. Those five are
+                  #   everything the app ADDS; tags and breadcrumbs are scope data, so the
+                  #   two-capture-call count is unchanged. maxBreadcrumbs is 100
   lib/            # Shared pure utilities (crypto polyfills, haptics, the bounded task queue that
                   #   caps the Home feed's cold-start snippet pre-warm, runWhenFirstActive:
                   #   the root layout's guard against hydrating settings in an iOS background
@@ -691,7 +694,7 @@ names its enforcement (live now, or planned where mechanical coverage does not e
   (`src/notifications/`, `plugins/`, `targets/`).
 - `crash-reporting-scope.md` - Sentry imports confined to `src/observability/` and banned outright
   from the pairing/channel/demo/devsupport/notification paths; privacy controls set at the source
-  because a JS `beforeSend` cannot filter native crashes; and the canonical list of the four
+  because a JS `beforeSend` cannot filter native crashes; and the canonical list of the five
   things the app itself adds to a report (`src/observability/`, `src/pairing/`,
   `src/channel/`, `src/demo/`, `src/devsupport/`, `src/notifications/`, `app/+native-intent.ts`,
   `src/navigation/screenTracking.tsx`, `src/state/connectionBreadcrumbs.ts`).

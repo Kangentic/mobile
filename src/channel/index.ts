@@ -102,7 +102,9 @@ export class ChannelController {
 
 export {
   RelayTransport,
+  isDialObservableTransport,
   isRedialableTransport,
+  type DialObservableTransport,
   type RedialOptions,
   type RedialableTransport,
   type RelayTransportOptions,

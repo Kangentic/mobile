@@ -573,4 +573,110 @@ describe('recordConnectionState', () => {
 
     expect(() => reportContext.recordConnectionState('closed')).not.toThrow();
   });
+
+  it('carries a well-formed dial id beside the state, in data and in the message', async () => {
+    const reportContext = await loadFreshModule();
+    reportContext.recordConnectionState('connected', '0123456789abcdef');
+
+    const breadcrumbs = breadcrumbsIn(CONNECTION_BREADCRUMB_CATEGORY);
+    expect(breadcrumbs).toHaveLength(1);
+    expect(breadcrumbs[0]?.data).toEqual({ state: 'connected', dial: '0123456789abcdef' });
+    expect(breadcrumbs[0]?.message).toBe('connected 0123456789abcdef');
+  });
+
+  /**
+   * The dial id is the one value here that is not a closed-set member, so its
+   * format is the whole guard: a 32-hex slot id (which must never reach
+   * Sentry), an uppercase or short value, or free text is dropped, and the
+   * step is still recorded without it.
+   *
+   * Mutation seen failing: replacing the isRelayDialId check in
+   * recordConnectionState with `dialId ?? null` fails it (the slot id arrived
+   * as `dial`).
+   */
+  it.each([
+    ['a 32-hex slot id', 'a'.repeat(32)],
+    ['uppercase hex', '0123456789ABCDEF'],
+    ['15 characters', '0123456789abcde'],
+    ['17 characters', '0123456789abcdef0'],
+    ['free text', 'wss://relay.example'],
+  ])('records the step without the dial when the dial is %s', async (_label, dialId) => {
+    const reportContext = await loadFreshModule();
+    reportContext.recordConnectionState('reconnecting', dialId);
+
+    const breadcrumbs = breadcrumbsIn(CONNECTION_BREADCRUMB_CATEGORY);
+    expect(breadcrumbs).toHaveLength(1);
+    expect(breadcrumbs[0]?.data).toEqual({ state: 'reconnecting' });
+    expect(breadcrumbs[0]?.message).toBe('reconnecting');
+  });
+});
+
+describe('setReportedRelayDial', () => {
+  const DIAL = '0123456789abcdef';
+
+  /**
+   * The pinned tag name, written through the TOP-LEVEL `setTag`: only the
+   * isolation scope syncs to a native event, so the mock exposing nothing but
+   * the top-level function is itself the assertion that no scope object was
+   * reached for.
+   */
+  it('puts the dial on the relay_dial_id tag', async () => {
+    const reportContext = await loadFreshModule();
+    reportContext.setReportedRelayDial(DIAL);
+
+    expect(sentryState.setTag).toHaveBeenCalledTimes(1);
+    expect(sentryState.setTag).toHaveBeenCalledWith('relay_dial_id', DIAL);
+  });
+
+  it('replaces the tag on the next dial, and does not re-write an unchanged one', async () => {
+    const reportContext = await loadFreshModule();
+    reportContext.setReportedRelayDial(DIAL);
+    reportContext.setReportedRelayDial(DIAL);
+    reportContext.setReportedRelayDial('fedcba9876543210');
+
+    expect(sentryState.setTag.mock.calls).toEqual([
+      ['relay_dial_id', DIAL],
+      ['relay_dial_id', 'fedcba9876543210'],
+    ]);
+  });
+
+  /**
+   * Mutation seen failing: deleting the isRelayDialId check in
+   * setReportedRelayDial fails it (setTag was called four times, the slot id
+   * first).
+   */
+  it('refuses anything that is not a 16-hex dial id, a slot id included', async () => {
+    const reportContext = await loadFreshModule();
+    reportContext.setReportedRelayDial('a'.repeat(32));
+    reportContext.setReportedRelayDial('0123456789ABCDEF');
+    reportContext.setReportedRelayDial('');
+    reportContext.setReportedRelayDial(undefined as never);
+
+    expect(sentryState.setTag).not.toHaveBeenCalled();
+  });
+
+  it('is not written at launch: the tag is absent until the first dial', async () => {
+    const reportContext = await loadFreshModule();
+    reportContext.initializeReportContext();
+
+    expect(tagValue('relay_dial_id')).toBeUndefined();
+  });
+
+  it('does nothing when crash reporting never started', async () => {
+    crashReportingState.initialized = false;
+    const reportContext = await loadFreshModule();
+    reportContext.setReportedRelayDial(DIAL);
+
+    expect(sentryState.setTag).not.toHaveBeenCalled();
+  });
+
+  it('never throws into the store update that reported it, and records no breadcrumb', async () => {
+    sentryState.setTag.mockImplementationOnce(() => {
+      throw new Error('native module gone');
+    });
+    const reportContext = await loadFreshModule();
+
+    expect(() => reportContext.setReportedRelayDial(DIAL)).not.toThrow();
+    expect(sentryState.addBreadcrumb).not.toHaveBeenCalled();
+  });
 });

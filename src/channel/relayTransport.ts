@@ -1,5 +1,15 @@
-import type { Transport, TransportState, Unsubscribe } from '@kangentic/protocol';
+import { bytesToHex, randomBytes, type Transport, type TransportState, type Unsubscribe } from '@kangentic/protocol';
 import { traceConnection } from '@/devsupport/connectionTrace';
+
+/**
+ * Bytes of CSPRNG output in one dial id. Eight bytes hex-encode to the 16
+ * lowercase characters the wire contract pins (`/^[0-9a-f]{16}$/`); see the
+ * `dial` paragraph on RelayTransport below. The same format is checked again,
+ * independently, by `isRelayDialId` in src/observability/reportVocabulary.ts,
+ * which this directory may not import (crash-reporting-scope.md), so a test
+ * cross-checks the two rather than one importing the other.
+ */
+const DIAL_ID_BYTES = 8;
 
 const INITIAL_BACKOFF_MS = 500;
 const MAX_BACKOFF_MS = 15_000;
@@ -73,10 +83,43 @@ export function isRedialableTransport(transport: Transport): transport is Redial
 }
 
 /**
+ * A Transport that names each relay dial attempt, so a crash report can be
+ * joined to the relay's own record of that dial. Local to this app for the
+ * reason RedialableTransport is: it is a relay-socket concern, not part of the
+ * protocol's Transport seam (an in-process loopback or a future data channel
+ * has no dial to name).
+ *
+ * A dedicated listener rather than a value read off `onStateChange`, because
+ * most redials raise no state event at all: in a failing retry loop
+ * scheduleReconnect has already set 'reconnecting', so the next dial()'s
+ * setState('reconnecting') is a no-op, and those failing dials are exactly
+ * the ones worth joining.
+ *
+ * The one subscriber is connectionManager, for the SESSION connection. The
+ * pairing ceremony's transport dials with an id like every dial, and nothing
+ * reads it, which is what keeps a ceremony's timing out of Sentry
+ * (crash-reporting-scope.md's pairing bullet). A source scan in
+ * tests/unit/crashReportingConfinement.test.ts holds that to one call site.
+ */
+export interface DialObservableTransport extends Transport {
+  /** The id the most recent dial carried, or null before the first dial. */
+  readonly relayDialId: string | null;
+  /**
+   * Called with each dial's id, before that dial's state change and before its
+   * socket is constructed. A listener that throws is ignored: the dial goes on.
+   */
+  onDial(listener: (dialId: string) => void): Unsubscribe;
+}
+
+export function isDialObservableTransport(transport: Transport): transport is DialObservableTransport {
+  return typeof (transport as Partial<DialObservableTransport>).onDial === 'function';
+}
+
+/**
  * The relay WebSocket client, implementing the protocol's Transport
  * interface (@kangentic/protocol) so a future WebRTC data channel can slot
  * in behind the exact same seam (Phase 4). Dials
- * `${relayUrl}?slot=<slotId>&role=mobile` and reconnects with capped
+ * `${relayUrl}?slot=<slotId>&role=mobile&dial=<16 hex>` and reconnects with capped
  * exponential backoff; the desktop's RelayClient
  * (src/main/mobile-bridge/transport/relay-client.ts, which dials the same
  * shape with `role=desktop`) is the wire contract this mirrors.
@@ -87,8 +130,24 @@ export function isRedialableTransport(transport: Transport): transport is Redial
  * and oversized all collapse to 'unknown'), and nothing in pairing, routing,
  * caps or rate limiting reads it (kangentic-relay's src/guards/peerRole.ts).
  * Every dial carries it because every dial goes through dial() below.
+ *
+ * `dial` is the third parameter: 16 lowercase hex characters minted from the
+ * CSPRNG at EVERY dial attempt (first dial, each reconnect rung, the
+ * foreground kick), never per install, pairing or session, so the relay's logs
+ * cannot link one phone's connections over time. It exists because nothing
+ * else can join a crash report to the relay's record of the same connection:
+ * React Native's WebSocket hands JavaScript no handshake response header (read
+ * at react-native 0.88.1: `websocketOpen` carries only `id` and `protocol` on
+ * both platforms, and Android sends the response headers to the dev Inspector
+ * alone), so CF-Ray is unreachable, a failed dial has no response at all, and
+ * the relay logs no slot in any form. The id is not derived from the slot,
+ * grants nothing, and the relay treats it as an advisory hint it cannot
+ * reject on. It reaches Sentry only as the session connection's
+ * `relay_dial_id` tag (see DialObservableTransport above). The wire contract
+ * is owned by the desktop repo's docs/integrations/mobile-bridge/relay-transport.md,
+ * which the desktop's RelayClient follows with the same parameter.
  */
-export class RelayTransport implements RedialableTransport {
+export class RelayTransport implements RedialableTransport, DialObservableTransport {
   private readonly relayUrl: string;
   private readonly slotId: string;
 
@@ -106,9 +165,12 @@ export class RelayTransport implements RedialableTransport {
    * causes. See RELAY_CLOSE_CODE above.
    */
   private lastRelayCloseCode: number | null = null;
+  /** The id the most recent dial carried; see the `dial` paragraph above. */
+  private currentDialId: string | null = null;
 
   private readonly frameListeners = new Set<(frame: Uint8Array) => void>();
   private readonly stateListeners = new Set<(state: TransportState) => void>();
+  private readonly dialListeners = new Set<(dialId: string) => void>();
 
   constructor(options: RelayTransportOptions) {
     this.relayUrl = options.relayUrl;
@@ -122,6 +184,11 @@ export class RelayTransport implements RedialableTransport {
   /** The relay's last close code, or null if the socket has never closed. */
   get relayCloseCode(): number | null {
     return this.lastRelayCloseCode;
+  }
+
+  /** The id the most recent dial carried, or null before the first dial. */
+  get relayDialId(): string | null {
+    return this.currentDialId;
   }
 
   async connect(): Promise<void> {
@@ -198,14 +265,37 @@ export class RelayTransport implements RedialableTransport {
   }
 
   private dial(): Promise<void> {
-    traceConnection('dial', { stateBefore: this.currentState });
+    // Minted and announced FIRST: before the state change, so a listener that
+    // reads the store on 'connecting' already sees this dial's id, and before
+    // the socket is constructed, so a dial whose constructor throws is still a
+    // named attempt. Kept in this closure as well as on the instance, so the
+    // open and close lines below name THEIR socket even after a later dial has
+    // replaced `currentDialId`.
+    //
+    // Each listener is isolated: dial() is not async, so a throw here would
+    // escape synchronously before any `.catch` is attached, and on the
+    // reconnect timer that is an uncaught error that leaves no socket and no
+    // re-armed timer, ending the retry ladder. A dial listener only observes,
+    // so its failure must never cost the dial. Swallowed without a report,
+    // because this directory may not touch the crash-reporting door.
+    const dialId = bytesToHex(randomBytes(DIAL_ID_BYTES));
+    this.currentDialId = dialId;
+    for (const listener of this.dialListeners) {
+      try {
+        listener(dialId);
+      } catch {
+        // See above: observation only, never at the dial's expense.
+      }
+    }
+    traceConnection('dial', { stateBefore: this.currentState, dial: dialId });
     this.setState(this.currentState === 'idle' ? 'connecting' : 'reconnecting');
     const separator = this.relayUrl.includes('?') ? '&' : '?';
-    // `slot` is always present, so `role` always joins with '&'. String
-    // concatenation rather than URL.searchParams on purpose: this runs on
-    // Hermes, not the desktop's Node, and the relay reads each parameter
+    // `slot` is always present, so `role` and `dial` always join with '&'.
+    // String concatenation rather than URL.searchParams on purpose: this runs
+    // on Hermes, not the desktop's Node, and the relay reads each parameter
     // independently (url.searchParams.get) so the spelling is all that matters.
-    const url = `${this.relayUrl}${separator}slot=${encodeURIComponent(this.slotId)}&role=mobile`;
+    // The id is already URL-safe hex, so it needs no encoding.
+    const url = `${this.relayUrl}${separator}slot=${encodeURIComponent(this.slotId)}&role=mobile&dial=${dialId}`;
 
     return new Promise<void>((resolve, reject) => {
       const settle = () => {
@@ -235,7 +325,7 @@ export class RelayTransport implements RedialableTransport {
       this.socket = socket;
 
       socket.onopen = () => {
-        traceConnection('open');
+        traceConnection('open', { dial: dialId });
         this.reconnectBackoffMs = INITIAL_BACKOFF_MS;
         this.setState('connected');
         resolveOnce();
@@ -253,7 +343,7 @@ export class RelayTransport implements RedialableTransport {
       };
 
       socket.onclose = (event: WebSocketCloseEvent) => {
-        traceConnection('close', { code: event.code ?? null, stateBefore: this.currentState });
+        traceConnection('close', { code: event.code ?? null, stateBefore: this.currentState, dial: dialId });
         this.socket = null;
         this.lastRelayCloseCode = event.code ?? null;
         if (this.explicitlyClosed) {
@@ -327,6 +417,11 @@ export class RelayTransport implements RedialableTransport {
   onStateChange(listener: (state: TransportState) => void): Unsubscribe {
     this.stateListeners.add(listener);
     return () => this.stateListeners.delete(listener);
+  }
+
+  onDial(listener: (dialId: string) => void): Unsubscribe {
+    this.dialListeners.add(listener);
+    return () => this.dialListeners.delete(listener);
   }
 
   private setState(state: TransportState): void {

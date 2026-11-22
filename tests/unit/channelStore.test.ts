@@ -90,6 +90,34 @@ describe('channelStore', () => {
     });
   });
 
+  describe('relayDialId', () => {
+    it('is null until the first dial, then holds the most recent one', () => {
+      useChannelStore.setState({ relayDialId: null });
+      expect(useChannelStore.getState().relayDialId).toBeNull();
+
+      useChannelStore.getState().setRelayDialId('0123456789abcdef');
+      useChannelStore.getState().setRelayDialId('fedcba9876543210');
+
+      expect(useChannelStore.getState().relayDialId).toBe('fedcba9876543210');
+    });
+
+    /**
+     * Kept, like relayUrl: a deliberate close is the end of that dial, and the
+     * `closed` crumb recorded for the reset names it
+     * (tests/unit/connectionBreadcrumbs.test.ts).
+     *
+     * Mutation seen failing: dropping `relayDialId: get().relayDialId` from
+     * reset() fails it (Received null).
+     */
+    it('survives reset', () => {
+      useChannelStore.getState().setRelayDialId('0123456789abcdef');
+
+      useChannelStore.getState().reset();
+
+      expect(useChannelStore.getState().relayDialId).toBe('0123456789abcdef');
+    });
+  });
+
   describe('reset', () => {
     it('zeroes rekeyCount (a fresh connection starts its own count) while relayUrl and pairedState survive', () => {
       useChannelStore.getState().setRelayUrl('wss://relay.example.test');

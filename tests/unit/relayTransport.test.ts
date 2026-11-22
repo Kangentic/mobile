@@ -23,6 +23,8 @@ type ServerEvent = { kind: 'frame'; bytes: Uint8Array } | { kind: 'close' };
 interface RelayServerRig {
   relayUrl: string;
   events: ServerEvent[];
+  /** The request URL of every upgrade the server accepted, in order. */
+  upgradeUrls: string[];
   /**
    * Waits until the server has observed the socket close, so ordering
    * assertions are not racing it. Bounded on purpose: a bare promise that
@@ -44,8 +46,10 @@ async function startRelayServer(): Promise<RelayServerRig> {
   if (address === null || typeof address === 'string') throw new Error('expected an AddressInfo from ws');
 
   const events: ServerEvent[] = [];
+  const upgradeUrls: string[] = [];
 
-  server.on('connection', (socket) => {
+  server.on('connection', (socket, request) => {
+    upgradeUrls.push(request.url ?? '');
     socket.on('message', (data: Buffer) => {
       events.push({ kind: 'frame', bytes: new Uint8Array(data) });
     });
@@ -57,6 +61,7 @@ async function startRelayServer(): Promise<RelayServerRig> {
   const rig: RelayServerRig = {
     relayUrl: `ws://127.0.0.1:${address.port}`,
     events,
+    upgradeUrls,
     waitForClose: () =>
       waitUntil(() => events.some((event) => event.kind === 'close'), {
         label: 'the relay server observed the socket close',
@@ -113,5 +118,35 @@ describe('RelayTransport over a real socket', () => {
 
     await rig.waitForClose();
     expect(rig.events.map((event) => event.kind)).toEqual(['close']);
+  });
+
+  /**
+   * The relay reads `slot`, `role` and `dial` with url.searchParams.get, so
+   * what matters is what a real upgrade request carries once a real client has
+   * sent it, not the string the fake-socket tests compare. Read back through
+   * the server's own URL parser, the way the relay reads it.
+   *
+   * The socket is closed BEFORE the assertions, so a failure here is one named
+   * failure rather than that plus afterEach stalling on a still-attached
+   * client (see waitForClose above).
+   *
+   * Mutation seen failing: dropping `&dial=${dialId}` from the template literal
+   * in dial() fails the dial assertion (`.toMatch()` received null: the
+   * parameter is absent).
+   */
+  it('carries slot, role and the dial id on the real upgrade request', async () => {
+    const rig = await startRelayServer();
+    const transport = new RelayTransport({ relayUrl: rig.relayUrl, slotId: 'test-slot' });
+    await transport.connect();
+    const heldDialId = transport.relayDialId;
+    transport.close();
+    await rig.waitForClose();
+
+    expect(rig.upgradeUrls).toHaveLength(1);
+    const params = new URL(rig.upgradeUrls[0] ?? '', rig.relayUrl).searchParams;
+    expect(params.get('slot')).toBe('test-slot');
+    expect(params.get('role')).toBe('mobile');
+    expect(params.get('dial')).toMatch(/^[0-9a-f]{16}$/);
+    expect(params.get('dial')).toBe(heldDialId);
   });
 });

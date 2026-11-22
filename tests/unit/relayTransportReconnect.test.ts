@@ -27,6 +27,25 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RelayTransport } from '@/channel/relayTransport';
+import { isRelayDialId } from '@/observability/reportVocabulary';
+
+/**
+ * The dev connection trace is a no-op unless an env flag is set, so replacing
+ * it with a recorder changes nothing for the other tests in this file. The
+ * dial id tests below read back what the transport asked it to log.
+ */
+const traceState = vi.hoisted(() => ({ traceConnection: vi.fn() }));
+vi.mock('@/devsupport/connectionTrace', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/devsupport/connectionTrace')>()),
+  traceConnection: traceState.traceConnection,
+}));
+
+/** The `dial` field of every trace line of one event name, in order. */
+function tracedDials(eventName: string): unknown[] {
+  return traceState.traceConnection.mock.calls
+    .filter(([name]) => name === eventName)
+    .map(([, fields]) => (fields as Record<string, unknown> | undefined)?.dial);
+}
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -326,10 +345,13 @@ describe('RelayTransport reconnect ladder', () => {
   });
 
   /**
-   * The dial URL is the relay's wire contract: `slot` is the rendezvous label
-   * and `role=mobile` is the metrics hint the relay attributes its
-   * waiting-peer gauge by (kangentic-relay's src/guards/peerRole.ts, an exact
-   * literal match that collapses anything else to 'unknown'). Neither client
+   * The dial URL is the relay's wire contract: `slot` is the rendezvous label,
+   * `role=mobile` is the metrics hint the relay attributes its waiting-peer
+   * gauge by (kangentic-relay's src/guards/peerRole.ts, an exact literal match
+   * that collapses anything else to 'unknown'), and `dial` is the per-attempt
+   * id that joins a crash report to the relay's record of the dial (the
+   * desktop repo's docs/integrations/mobile-bridge/relay-transport.md owns
+   * that contract). Neither client
    * sent a role during the 2026-09-18 router-restart incident, so the
    * dashboard could not tell the phone's parked socket from the desktop's.
    * Pinned on all three dial paths - the first dial, a ladder rung and the
@@ -338,31 +360,38 @@ describe('RelayTransport reconnect ladder', () => {
    * string-built (no `new URL()` normalisation, so no slash is inserted after
    * a bare host), and the one branch in that build is the separator: a relay
    * address that already carries a query string joins `slot` with '&', and
-   * `role` has to land correctly on that branch too.
+   * `role` and `dial` have to land correctly on that branch too.
    *
-   * Mutation seen failing: dropping `&role=mobile` from the template literal
-   * in dial() fails the first assertion (Expected
-   * "ws://relay.test?slot=aaa...&role=mobile", Received
-   * "ws://relay.test?slot=aaa...").
+   * The dial id must be NEW on every one of the three, never per install,
+   * pairing or transport: a persistent id would let the relay's logs link one
+   * phone's connections over time.
+   *
+   * Mutations seen failing: dropping `&role=mobile` from the template literal
+   * in dial() fails the shape assertion on the first dial; minting the id once
+   * in the constructor instead of in dial() fails the distinct-ids assertion
+   * (Expected 3 distinct ids, Received 1).
    */
-  it('dials ?slot=<id>&role=mobile on the first dial, a reconnect rung and the foreground kick', async () => {
-    const expectedUrl = `ws://relay.test?slot=${'a'.repeat(32)}&role=mobile`;
+  it('dials ?slot=<id>&role=mobile&dial=<fresh id> on the first dial, a reconnect rung and the foreground kick', async () => {
+    const expectedShape = new RegExp(`^ws://relay\\.test\\?slot=${'a'.repeat(32)}&role=mobile&dial=[0-9a-f]{16}$`);
 
     const transport = await connectAndOpen();
-    expect(latestSocket().url).toBe(expectedUrl);
+    expect(latestSocket().url).toMatch(expectedShape);
 
     // A ladder rung.
     latestSocket().fail(1006);
     await vi.advanceTimersByTimeAsync(500);
     expect(socketCount()).toBe(2);
-    expect(latestSocket().url).toBe(expectedUrl);
+    expect(latestSocket().url).toMatch(expectedShape);
 
     // The foreground kick, mid-backoff (the ladder is at 1000 ms now).
     latestSocket().fail(1006);
     expect(socketCount()).toBe(2);
     transport.redialNow();
     expect(socketCount()).toBe(3);
-    expect(latestSocket().url).toBe(expectedUrl);
+    expect(latestSocket().url).toMatch(expectedShape);
+
+    const dialIds = FakeWebSocket.instances.map((socket) => dialIdOf(socket.url));
+    expect(new Set(dialIds).size).toBe(3);
   });
 
   /**
@@ -372,15 +401,252 @@ describe('RelayTransport reconnect ladder', () => {
    * has one, so only the '&' branch passes.
    *
    * Mutation seen failing: replacing the separator ternary in dial() with
-   * `const separator = '?'` fails this test alone (Expected
-   * "ws://relay.test/path?x=1&slot=aaa...&role=mobile", Received
-   * "ws://relay.test/path?x=1?slot=aaa...&role=mobile") while the test above
-   * stays green, which is why this one exists.
+   * `const separator = '?'` fails this test alone (Received
+   * "ws://relay.test/path?x=1?slot=aaa...&role=mobile&dial=...") while the
+   * test above stays green, which is why this one exists.
    */
-  it('appends role after slot with & when the relay address already has a query string', async () => {
+  it('appends role and dial after slot with & when the relay address already has a query string', async () => {
     const transport = new RelayTransport({ relayUrl: 'ws://relay.test/path?x=1', slotId: 'a'.repeat(32) });
     void transport.connect().catch(() => {});
-    expect(latestSocket().url).toBe(`ws://relay.test/path?x=1&slot=${'a'.repeat(32)}&role=mobile`);
+    expect(latestSocket().url).toMatch(
+      new RegExp(`^ws://relay\\.test/path\\?x=1&slot=${'a'.repeat(32)}&role=mobile&dial=[0-9a-f]{16}$`),
+    );
+    transport.close();
+  });
+});
+
+/** The `dial` parameter of a dial URL. Throws when it is missing, so a test cannot pass on `undefined`. */
+function dialIdOf(url: string): string {
+  const match = /[?&]dial=([^&]*)$/.exec(url);
+  if (!match?.[1]) throw new Error(`no dial parameter in ${url}`);
+  return match[1];
+}
+
+/**
+ * The dial id as the rest of the app sees it: `relayDialId` and `onDial`,
+ * which connectionManager feeds into the store and from there onto the crash
+ * report's `relay_dial_id` tag (src/state/connectionBreadcrumbs.ts).
+ */
+describe('RelayTransport dial id', () => {
+  beforeEach(() => {
+    traceState.traceConnection.mockClear();
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('has no dial id before the first dial', () => {
+    expect(createTransport().relayDialId).toBeNull();
+  });
+
+  /**
+   * The id announced, the id held and the id on the wire are one value, and it
+   * is announced BEFORE the dial's state change, so a store listener that
+   * reacts to 'connecting' already holds the id of the dial that caused it.
+   * The minted id also passes the door's own format check, which is declared
+   * separately (src/observability/reportVocabulary.ts) because neither
+   * directory may import the other.
+   *
+   * Mutation seen failing: moving the listener loop below
+   * `this.setState(...)` in dial() fails the order assertion (Expected
+   * ['dial', 'state:connecting'], Received ['state:connecting', 'dial']).
+   */
+  it('announces each dial id before that dial changes state, and it is the id on the wire', () => {
+    const transport = createTransport();
+    const events: string[] = [];
+    const announced: string[] = [];
+    transport.onDial((dialId) => {
+      events.push('dial');
+      announced.push(dialId);
+    });
+    transport.onStateChange((state) => events.push(`state:${state}`));
+
+    void transport.connect().catch(() => {});
+
+    expect(events).toEqual(['dial', 'state:connecting']);
+    expect(announced).toHaveLength(1);
+    expect(announced[0]).toBe(dialIdOf(latestSocket().url));
+    expect(transport.relayDialId).toBe(announced[0]);
+    expect(isRelayDialId(announced[0])).toBe(true);
+    transport.close();
+  });
+
+  /**
+   * The reason `onDial` exists rather than reading the id on a state change: in
+   * a failing retry loop the transport sits in 'reconnecting' and every redial
+   * after the first raises NO state event, yet each is a separate dial the
+   * relay records under its own id.
+   *
+   * Mutation seen failing: notifying dial listeners from setState() instead of
+   * from dial() fails it (Expected length 5, Received 1: only the one real
+   * state change announced anything).
+   */
+  it('announces every redial of a failing loop, though the state stays reconnecting', async () => {
+    const transport = await connectAndOpen();
+    const announced: string[] = [];
+    const states: string[] = [];
+    transport.onDial((dialId) => announced.push(dialId));
+    transport.onStateChange((state) => states.push(state));
+
+    latestSocket().fail(1006);
+    for (const delayMs of [500, 1000, 2000, 4000, 8000]) {
+      await vi.advanceTimersByTimeAsync(delayMs);
+      latestSocket().fail(1006);
+    }
+
+    expect(states).toEqual(['reconnecting']);
+    expect(announced).toHaveLength(5);
+    expect(new Set(announced).size).toBe(5);
+    expect(announced).toEqual(FakeWebSocket.instances.slice(1).map((socket) => dialIdOf(socket.url)));
+    expect(transport.relayDialId).toBe(announced.at(-1));
+    transport.close();
+  });
+
+  it('names a dial whose socket constructor throws, which is still an attempt', () => {
+    vi.stubGlobal(
+      'WebSocket',
+      class ThrowingWebSocket {
+        constructor() {
+          throw new Error('bad url');
+        }
+      },
+    );
+    const transport = createTransport();
+    const announced: string[] = [];
+    transport.onDial((dialId) => announced.push(dialId));
+
+    void transport.connect().catch(() => {});
+
+    expect(announced).toHaveLength(1);
+    expect(transport.relayDialId).toBe(announced[0]);
+    transport.close();
+  });
+
+  /**
+   * The dev trace's dial, open and close lines each name THEIR socket's dial,
+   * which is what lets a logcat timeline be joined to the relay's record. The
+   * close line is the one that can lie: a socket's late onclose can land after
+   * a newer dial replaced `currentDialId`, and it must still carry its own id
+   * (the one captured in dial()'s closure). A forced redial cannot make that
+   * case, because abandonSocket() nulls the old onclose first, so this one
+   * closes the transport, dials again and then lets the OLD socket report.
+   *
+   * Mutation seen failing: tracing `dial: this.currentDialId` instead of
+   * `dial: dialId` in the onclose handler fails the close assertion
+   * (Expected the first socket's id, Received the second socket's id).
+   */
+  it('traces dial, open and close with their own socket dial id, even for a late close after a newer dial', async () => {
+    const transport = await connectAndOpen();
+    const firstSocket = latestSocket();
+    const firstDialId = dialIdOf(firstSocket.url);
+
+    transport.close();
+    void transport.connect().catch(() => {});
+    expect(socketCount()).toBe(2);
+    const secondDialId = dialIdOf(latestSocket().url);
+    expect(secondDialId).not.toBe(firstDialId);
+    expect(transport.relayDialId).toBe(secondDialId);
+
+    // The first socket reports its close only now, after the second dial.
+    firstSocket.fail(1006);
+
+    expect(tracedDials('dial')).toEqual([firstDialId, secondDialId]);
+    expect(tracedDials('open')).toEqual([firstDialId]);
+    expect(tracedDials('close')).toEqual([firstDialId]);
+
+    transport.close();
+  });
+
+  /**
+   * dial() is not async, so a listener that throws used to escape
+   * synchronously: from the reconnect timer that is an uncaught error with no
+   * socket and no re-armed timer, which ends the retry ladder. Each listener
+   * call is isolated, so an observer's failure never costs the dial.
+   *
+   * Mutation seen failing: replacing the try/catch around `listener(dialId)`
+   * in dial() with a bare `listener(dialId);` fails the first-dial assertion
+   * (connect() is async, so the throw becomes a rejection and no socket is
+   * built: Expected 1, Received 0). The next test covers the timer path.
+   */
+  it('still dials, first and on every redial, when a dial listener throws', async () => {
+    const transport = createTransport();
+    transport.onDial(() => {
+      throw new Error('listener failure');
+    });
+
+    let connecting: Promise<void> | undefined;
+    expect(() => {
+      connecting = transport.connect();
+    }).not.toThrow();
+    connecting?.catch(() => {});
+    expect(socketCount()).toBe(1);
+    const firstDialId = dialIdOf(latestSocket().url);
+    latestSocket().open();
+    await connecting;
+
+    latestSocket().fail(1006);
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(socketCount()).toBe(2);
+    const secondDialId = dialIdOf(latestSocket().url);
+    expect(isRelayDialId(secondDialId)).toBe(true);
+    expect(secondDialId).not.toBe(firstDialId);
+    expect(transport.relayDialId).toBe(secondDialId);
+
+    // The ladder is still armed: a further failure still redials.
+    latestSocket().fail(1006);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(socketCount()).toBe(3);
+    transport.close();
+  });
+
+  /**
+   * The reconnect-timer path on its own: the listener behaves for the first
+   * dial and throws from the second on, so only the timer's dial() is
+   * exposed. Unguarded, that throw escapes the timer callback (an uncaught
+   * error) before any socket is constructed.
+   *
+   * Mutation seen failing: the bare `listener(dialId);` in dial() fails this
+   * test with the listener's own error surfacing from the timer callback.
+   */
+  it('keeps the retry ladder alive when a dial listener throws only on a redial', async () => {
+    const transport = createTransport();
+    let calls = 0;
+    transport.onDial(() => {
+      calls += 1;
+      if (calls > 1) throw new Error('listener failure');
+    });
+    const connecting = transport.connect();
+    latestSocket().open();
+    await connecting;
+
+    latestSocket().fail(1006);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(socketCount()).toBe(2);
+    expect(isRelayDialId(dialIdOf(latestSocket().url))).toBe(true);
+
+    latestSocket().fail(1006);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(socketCount()).toBe(3);
+    transport.close();
+  });
+
+  it('stops announcing to a listener that unsubscribed', async () => {
+    const transport = await connectAndOpen();
+    const announced: string[] = [];
+    const unsubscribe = transport.onDial((dialId) => announced.push(dialId));
+    unsubscribe();
+
+    latestSocket().fail(1006);
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(socketCount()).toBe(2);
+    expect(announced).toEqual([]);
     transport.close();
   });
 });

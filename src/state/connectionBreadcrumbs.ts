@@ -1,5 +1,5 @@
 import type { TransportState } from '@kangentic/protocol';
-import { recordConnectionState } from '@/observability/reportContext';
+import { recordConnectionState, setReportedRelayDial } from '@/observability/reportContext';
 import type { ConnectionBreadcrumbState } from '@/observability/reportVocabulary';
 import { useBoardStore, type ProjectBoard } from './boardStore';
 import { useChannelStore } from './channelStore';
@@ -47,6 +47,17 @@ import { useChannelStore } from './channelStore';
  * snapshot landed in the second before a failure deep into a session. The
  * first one is the case that needed answering (a bootstrap landing on a
  * re-establish), and it is always recorded.
+ *
+ * THE RELAY DIAL ID. The same subscription puts the session connection's
+ * current relay dial on the report as the `relay_dial_id` tag, so an event can
+ * be joined to the relay's own record of that dial. It is fed here, from the
+ * store's `relayDialId`, for the reason the trail is: RelayTransport mints the
+ * id and src/channel/ may not touch the door. A new dial writes the TAG and
+ * records NO crumb, because a retry loop redials on a five-second floor and a
+ * crumb per dial would be exactly the budget failure the rule above exists to
+ * prevent. Instead every crumb this module does record carries the dial that
+ * is current when it is recorded, so the trail says which dial each step was
+ * on without spending a slot of its own.
  */
 
 /**
@@ -192,12 +203,23 @@ export function registerConnectionBreadcrumbs(): () => void {
   const advance = (event: ConnectionTrailEvent): void => {
     const step = advanceConnectionTrail(trail, event);
     trail = step.state;
-    for (const state of step.record) recordConnectionState(state);
+    const dialId = useChannelStore.getState().relayDialId;
+    for (const state of step.record) recordConnectionState(state, dialId);
   };
 
-  const unsubscribeChannel = useChannelStore.subscribe((next) => {
-    // The store is also written for rekeys, the relay address and the paired
-    // state. None of those is on the trail.
+  const unsubscribeChannel = useChannelStore.subscribe((next, previous) => {
+    // The tag first, so a crumb recorded by this same write already sits
+    // beside the tag that names its dial. Only a write that CHANGED the id
+    // reaches the door: null (no dial yet) never clears the tag, and the store
+    // is written for many other fields that leave the id as it was. This is a
+    // change check against the store, as the board subscription below does,
+    // and not a cache: what the scope already holds is the door's to know
+    // (setReportedRelayDial skips a repeat of the id it last wrote).
+    if (next.relayDialId !== null && next.relayDialId !== previous.relayDialId) {
+      setReportedRelayDial(next.relayDialId);
+    }
+    // The store is also written for rekeys, the relay address, the dial id and
+    // the paired state. None of those is a step on the trail.
     if (next.transportState === trail.transportState && next.established === trail.established) return;
     advance({ kind: 'channel', transportState: next.transportState, established: next.established });
   });

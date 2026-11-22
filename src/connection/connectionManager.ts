@@ -1,6 +1,12 @@
 import { AppState, Platform, type AppStateStatus, type NativeEventSubscription } from 'react-native';
 import { bytesToHex } from '@kangentic/protocol';
-import { ChannelController, SubscriptionManager, isRedialableTransport, type VerbClient } from '@/channel';
+import {
+  ChannelController,
+  SubscriptionManager,
+  isDialObservableTransport,
+  isRedialableTransport,
+  type VerbClient,
+} from '@/channel';
 import {
   foregroundKickEnabled,
   frameLivenessEnabled,
@@ -451,6 +457,18 @@ async function performOpenConnection(): Promise<void> {
     // transport's own callback, and the teardown disposes that transport.
     queueMicrotask(onKeepaliveWakeSource);
   });
+  // Each relay dial's id, into the store, from which
+  // src/state/connectionBreadcrumbs.ts puts it on the crash report as the
+  // `relay_dial_id` tag (this directory records nothing itself). Its own
+  // listener rather than a read inside the state listener above, because most
+  // redials of a failing retry loop raise no state change. Subscribed before
+  // controller.connect() below, so the first dial is seen. The mock desktop's
+  // in-process transport dials no relay and has no `onDial`.
+  const unsubscribeDial = isDialObservableTransport(controller.transport)
+    ? controller.transport.onDial((dialId) => {
+        useChannelStore.getState().setRelayDialId(dialId);
+      })
+    : () => {};
 
   // Bootstrap must eventually succeed while the session stays established.
   // The first attempt can die silently - the request can be lost in the
@@ -578,6 +596,7 @@ async function performOpenConnection(): Promise<void> {
     bootstrapGeneration += 1;
     if (bootstrapRetryTimer) clearTimeout(bootstrapRetryTimer);
     unsubscribeTransportState();
+    unsubscribeDial();
     unsubscribeEstablished();
     unsubscribeRekey();
     unsubscribeHeartbeat();

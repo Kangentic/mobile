@@ -1,6 +1,6 @@
 # Kangentic Privacy Policy
 
-Last updated: 2026-11-18
+Last updated: 2026-11-21
 
 Kangentic Mobile is a remote-control companion for agent sessions running in the desktop
 Kangentic app. This policy explains what the app accesses and why.
@@ -60,7 +60,16 @@ task you had open or anything shown on it:
   how the app got there, is often the only way to reproduce it
 - what the app's connection to your desktop was doing in the lead-up: connecting, connected, a
   secure session established, reconnecting, closed, and that the first board update of a session
-  had arrived. Each is one fixed word. No address, no project, and nothing your desktop sent
+  had arrived. Each is one fixed word, with the connection-attempt code described next beside it.
+  No address, no project, and nothing your desktop sent
+- a random code for the app's latest attempt to connect to the relay. The app makes a new one
+  every time it connects or reconnects, and sends the same code to the relay with that attempt,
+  so that a crash report can be matched to the relay's own record of that one connection when
+  the relay is Kangentic's hosted one (the relay keeps those records for about a week). The
+  code itself is made fresh for each attempt, is not derived from you, your device, your
+  pairing or any earlier connection, and says nothing about what the connection carried. The
+  match does connect the report, which can carry the crash-reporting ID described below, to
+  what the relay recorded about that one connection: the IP address it came from and its timing
 - an approximate location, at the level of a city and country, which Sentry works out from the
   IP address the report arrives from. The app never reads your location and has no location
   permission; this is Sentry's own lookup when the report reaches it. It is kept because where a
@@ -78,7 +87,9 @@ crash-reporting software itself, not by Kangentic. It resets if you uninstall an
 app, it is not your device's hardware ID or an advertising ID, and it is not used to identify you
 or to link a crash report to any other data. When the crash is caught by the operating system
 rather than by the app's own code, that same random ID is additionally recorded as the report's
-user field, which is why it is declared to both app stores.
+user field, which is why it is declared to both app stores. The connection-attempt code above is
+not an identifier of this kind: it names one connection attempt, is replaced on the next one, and
+is used only to find the relay's record of the connection a report was made during.
 
 The screen names in a crash report are declared to both app stores as well, as information about
 how the app is used. That is what a list of screens is, even when it is only ever sent inside a
@@ -107,8 +118,10 @@ Content is end-to-end encrypted, but carrying it still involves infrastructure t
 metadata. We would rather say so than imply otherwise.
 
 - **The relay** sees source and destination IP addresses, connection timing, and frame sizes and
-  frequency. It cannot read message content. You can avoid a Kangentic-operated relay entirely by
-  self-hosting your own.
+  frequency, and the random connection-attempt code described under Crash reports, which the app
+  makes fresh for every attempt. It cannot read message content. You can avoid a
+  Kangentic-operated relay entirely by self-hosting your own; a self-hosted relay's operator sees
+  the code but never a crash report.
 - **Push delivery** goes through Expo's push service and the platform push networks (Firebase
   Cloud Messaging on Android, APNs on iOS). Those services see your device's push token and
   delivery timing. They receive only the encrypted payload and the generic placeholder text, never

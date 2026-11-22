@@ -700,7 +700,8 @@ src/
   voice/          # Dictation hook over the OS speech engines
   observability/  # Sentry crash reporting - the only module allowed to import the SDK, plus the
                   #   pure event/breadcrumb scrubber, reportContext (screen and lens tags, the
-                  #   app's breadcrumb trails) and reportVocabulary (their closed sets); see
+                  #   relay_dial_id tag, the app's breadcrumb trails) and reportVocabulary
+                  #   (their closed sets and the dial id's format); see
                   #   crash-reporting-scope.md
   lib/            # Shared pure utilities (crypto polyfills)
 tests/unit/       # vitest
@@ -2099,7 +2100,9 @@ adb -s <serial> logcat -d -s ReactNativeJS -e connection-trace
 Every line is `[connection-trace] <event> +<ms since the origin> k=v ...`, and the events are the
 whole story: `app-state-active` / `app-state-background` (with the transport state, relay close
 code, established flag and keepalive flag at that moment), `dial`, `open`, `close` (with the
-relay's close code), `schedule-reconnect` (the delay armed and the next rung), `redial-now`
+relay's close code; all three carry `dial=<16 hex>`, the per-attempt id the same dial sent the
+relay as `&dial=`, which is the key that finds the relay's own line for it and matches the
+`relay_dial_id` tag on a crash report from the same moment), `schedule-reconnect` (the delay armed and the next rung), `redial-now`
 (whether the foreground kick actually dialed, and whether it was forced), `redial-now-skipped`
 and `probe-skipped` (the A/B switch turned off), `probe-start` / `probe-ok` / `probe-failed` (the
 foreground liveness probe and its verdict; `probe-failed` carries `rekeyed` and `desktopSpoke`,
@@ -3470,10 +3473,27 @@ because Sentry MOBILE-H (an iOS app hang) arrived saying neither. Read these bef
   `chat` or `changes` on a session or a Command Terminal, `conversation`, `summary` or
   `description` on a completed task, `none` everywhere else. A tag is a single value that is
   replaced, so it is correct however long the app sat in the background.
+- **Then the relay dial.** `relay_dial_id` is the `&dial=` id of the session connection's most
+  recent relay dial: 16 lowercase hex characters, minted fresh for every dial attempt (first
+  dial, each reconnect rung, the foreground kick). It is what joins the event to the relay's own
+  per-dial log line (whether the upgrade was rejected and why, when the socket closed and with
+  what code), which is the half of a connection failure the phone cannot see. The tag is the
+  LATEST dial, never cleared: on an event raised after a deliberate close it names the dial that
+  was closed, so read the `app.connection` trail for when that was. It is absent until the first
+  dial of a launch, so an event with no `relay_dial_id` came before any dial (or from the demo,
+  whose in-process desktop dials no relay, or from a build before this tag). The join only
+  returns something for Kangentic's hosted relay, once the relay's side is released, and only
+  within its log window of about a week, which resets on each relay release; the procedure and
+  the wire contract live with the desktop (its `/sentry` join step,
+  `docs/telemetry/error-reporting.md`, and `docs/integrations/mobile-bridge/relay-transport.md`).
 - **Then the trail.** `app.navigation` crumbs carry `{ screen, lens }`, one per change, so they
   read as the route into the failure. `app.connection` crumbs carry `{ state }`:
   `connecting`, `connected` (the socket to the relay is open, not yet a secure session),
-  `established` (the desktop answered), `reconnecting`, `closed`, and `board-snapshot`.
+  `established` (the desktop answered), `reconnecting`, `closed`, and `board-snapshot`, and,
+  once the session connection has dialed, `dial` beside it: the dial current when that step was
+  recorded. So a `reconnecting` names the dial that DROPPED, and the `connected` after it names
+  the redial that came back; the redials in between are on no crumb (a retry loop would spend
+  the trail), only on the tag.
   The sequence `established` then `board-snapshot` is a bootstrap landing, which re-renders every
   feed; that pair inside a hang's window is the thing MOBILE-H could not show.
 - **What the trail deliberately does not record, so its silence is not misread.** Each

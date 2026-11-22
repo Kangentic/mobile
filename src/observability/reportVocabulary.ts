@@ -3,9 +3,13 @@
  *
  * A report that cannot say where the app was or what it was doing cannot be
  * acted on (Sentry MOBILE-H, an iOS app hang whose event named no screen; and
- * MOBILE-8 before it). So the app adds three things to the scope: which screen
- * is showing, which lens that screen is on, and the state of the connection to
- * the desktop. `reportContext.ts` is the only writer.
+ * MOBILE-8 before it). So the app adds, beside the memory breadcrumb that
+ * memoryPressure.ts owns: which screen is showing, which lens that screen is
+ * on, the state of the connection to the desktop, and the id of the relay dial
+ * that connection is on (the one value here that is a format rather than a
+ * closed set; see `isRelayDialId`). Those are items 2 to 5 of the canonical
+ * list of five in .claude/rules/crash-reporting-scope.md, which counts the
+ * screen and lens tags as one item. `reportContext.ts` is the only writer.
  *
  * WHY CLOSED SETS, AND NOT STRINGS. What a report may carry about a screen is
  * its fixed name and never which task it shows: a route parameter here is one
@@ -205,4 +209,31 @@ export const CONNECTION_BREADCRUMB_STATE_LIST = Object.keys(
 
 export function isConnectionBreadcrumbState(candidate: unknown): candidate is ConnectionBreadcrumbState {
   return isOwnKey(CONNECTION_BREADCRUMB_STATES, candidate);
+}
+
+/**
+ * The pinned format of a relay dial id: exactly 16 lowercase hex characters.
+ *
+ * The id is the `&dial=` parameter RelayTransport mints from the CSPRNG at
+ * every dial attempt (src/channel/relayTransport.ts), and it reaches a report
+ * as the `relay_dial_id` tag and on the `app.connection` crumbs, so that an
+ * event can be joined to the relay's own record of that dial. The contract is
+ * shared with the desktop and the relay and owned by the desktop repo's
+ * docs/integrations/mobile-bridge/relay-transport.md; do not vary it here.
+ *
+ * WHY A FORMAT AND NOT A CLOSED SET. A dial id is random by design, so it
+ * cannot be a member of a list. What a closed set guarantees elsewhere in this
+ * file, that a caller cannot widen what leaves, this guarantees by shape: a
+ * value that is not exactly this is refused, so a slot id (32 hex), a URL, or
+ * anything with text in it cannot ride the tag whatever a caller passes.
+ *
+ * Declared again here rather than imported from the channel, because neither
+ * side may import the other (src/channel/ is banned from this directory, and
+ * this module has no imports); tests/unit/reportVocabulary.test.ts holds a
+ * minted id to this check.
+ */
+const RELAY_DIAL_ID_PATTERN = /^[0-9a-f]{16}$/;
+
+export function isRelayDialId(candidate: unknown): candidate is string {
+  return typeof candidate === 'string' && RELAY_DIAL_ID_PATTERN.test(candidate);
 }

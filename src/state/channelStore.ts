@@ -21,6 +21,18 @@ interface ChannelState {
   establishedAt: number | null;
   rekeyCount: number;
   relayUrl: string | null;
+  /**
+   * The id the session connection's most recent relay dial carried (the
+   * `&dial=` parameter, minted per attempt by RelayTransport), null before the
+   * first dial of the launch. Fed by connectionManager's `onDial` listener, and
+   * read by src/state/connectionBreadcrumbs.ts, which puts it on the crash
+   * report as the `relay_dial_id` tag.
+   *
+   * Kept across `reset()`, like `relayUrl`: a deliberate close is the end of
+   * that dial, so the `closed` crumb recorded for it still names it, and the
+   * next connection's first dial replaces it before its `connecting` lands.
+   */
+  relayDialId: string | null;
   /** 'unknown' until the trust anchor has been checked at least once this launch. */
   pairedState: 'unknown' | 'unpaired' | 'paired';
 }
@@ -30,6 +42,7 @@ interface ChannelActions {
   markEstablished: () => void;
   noteRekey: () => void;
   setRelayUrl: (relayUrl: string) => void;
+  setRelayDialId: (relayDialId: string) => void;
   setPairedState: (pairedState: ChannelState['pairedState']) => void;
   reset: () => void;
 }
@@ -41,6 +54,7 @@ const initialState: ChannelState = {
   establishedAt: null,
   rekeyCount: 0,
   relayUrl: null,
+  relayDialId: null,
   pairedState: 'unknown',
 };
 
@@ -68,6 +82,8 @@ export const useChannelStore = create<ChannelState & ChannelActions>((set, get) 
   // that rekeys were not happening.
   noteRekey: () => set((state) => ({ rekeyCount: state.rekeyCount + 1 })),
   setRelayUrl: (relayUrl) => set({ relayUrl }),
+  setRelayDialId: (relayDialId) => set({ relayDialId }),
   setPairedState: (pairedState) => set({ pairedState }),
-  reset: () => set({ ...initialState, relayUrl: get().relayUrl, pairedState: get().pairedState }),
+  reset: () =>
+    set({ ...initialState, relayUrl: get().relayUrl, relayDialId: get().relayDialId, pairedState: get().pairedState }),
 }));

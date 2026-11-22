@@ -205,8 +205,9 @@ src/
   voice/           # Dictation hook over the OS speech engines
   observability/   # Sentry crash reporting: the ONLY module allowed to import the SDK, plus
                   #   the pure event/breadcrumb scrubber (lint-enforced, crash-reporting-scope.md),
-                  #   reportContext (the screen and lens tags and the app's two breadcrumb
-                  #   trails) and reportVocabulary (the closed sets those values come from)
+                  #   reportContext (the screen and lens tags, the relay_dial_id tag and the
+                  #   app's two breadcrumb trails) and reportVocabulary (the closed sets those
+                  #   values come from, and the dial id's pinned format)
   lib/             # Shared pure utilities (crypto polyfills)
 ```
 
@@ -312,6 +313,20 @@ suspects is gone, and it keeps arriving in exactly the stall above, where the re
 hearing the phone. All three guards only ever SUPPRESS a teardown; none can add one. The
 measurement recipe and the numbers are in the developer guide's "Measuring the
 background-to-foreground reconnect".
+
+Every one of those dials, the kick and the forced redial included, carries a fresh `&dial=<16
+hex>` id that `RelayTransport` mints from the CSPRNG for that attempt alone, beside `slot` and
+`role`. It exists so that a crash report can be joined to the relay's own record of the same dial
+(why an upgrade was rejected, when and how a socket closed), which nothing the phone receives can
+say: React Native's WebSocket passes JavaScript no handshake response header. The transport
+announces each id through `onDial` (a `DialObservableTransport`, the second mobile-local
+extension of `Transport`) before that dial's state change; `connectionManager` writes it to the
+channel store, and `src/state/connectionBreadcrumbs.ts` puts it on the report as the
+`relay_dial_id` tag, because `src/channel/` may not touch the crash-reporting door. Its own hook
+rather than a read on the state listener, because most redials of a failing retry loop raise no
+state change at all. What the id is and is not, and why it cannot track anyone, is in
+`docs/security.md`'s Relay slots; the wire contract is the desktop repo's
+`docs/integrations/mobile-bridge/relay-transport.md`.
 
 **Correction, same issue: the budget does not accumulate across background stretches.** This
 section and `connectionManager.ts` both used to reason about exhausting the 6h budget over many

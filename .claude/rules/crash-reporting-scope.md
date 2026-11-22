@@ -88,8 +88,9 @@ scrubber is therefore a second line of defence, never the control itself.
   `DROPPED_DEFAULT_INTEGRATIONS`. `tests/unit/crashReporting.test.ts` pins the INSTALLED SDK's
   full default-integration list, so the next default an upgrade adds fails CI until it is
   reviewed here, rather than shipping because nothing asked.
-- **The app itself ADDS exactly four things to the payload, and this is the whole list.** Each is
-  a bare count or a member of a closed set; none is content; none is a capture call.
+- **The app itself ADDS exactly five things to the payload, and this is the whole list.** Each is
+  a bare count, a member of a closed set, or (item 5 alone) a random value checked against a fixed
+  format; none is content; none is a capture call.
   1. A breadcrumb, category `app.memory`: when the OS reports memory pressure,
      `src/observability/memoryPressure.ts` records a count of warnings this launch and nothing
      else - no byte figure, no free text, no session content.
@@ -108,11 +109,30 @@ scrubber is therefore a second line of defence, never the control itself.
      (`TRAIL_SILENT_SCREEN_NAMES` in `reportVocabulary.ts`).
   4. A breadcrumb, category `app.connection`, carrying `{ state }` where `state` is one of
      `connecting`, `connected`, `established`, `reconnecting`, `closed`, `board-snapshot`, with
-     the state repeated as its `message` for the same reason. No relay address, no project, no
-     count of anything the desktop sent, no rekey, and nothing about pairing.
+     the state repeated as its `message` for the same reason. Once the session connection has
+     dialed, it also carries `dial`, item 5's id as it stood when the step was recorded, and the
+     message becomes `<state> <dial>`. No relay address, no project, no count of anything the
+     desktop sent, no rekey, and nothing about pairing.
+  5. A scope tag, `relay_dial_id`: the `&dial=` id of the session connection's most recent relay
+     dial, so an event can be joined to the relay's own record of that dial. The id is minted by
+     `RelayTransport` from the CSPRNG at every dial attempt, never per install, pairing or
+     session, is not derived from the slot, and grants nothing (`docs/security.md`, Relay slots;
+     the wire contract is the desktop repo's `docs/integrations/mobile-bridge/relay-transport.md`).
+     **It is the one value on
+     this list that is not a count or a closed-set member**, because a random id cannot be one;
+     what a closed set guarantees for the others, its pinned format guarantees for it: exactly 16
+     lowercase hex characters (`isRelayDialId` in `reportVocabulary.ts`), so a 32-hex slot id or
+     any text is refused. It is absent until the first dial of a launch and replaced on every
+     dial, never cleared and never a sentinel, so one /sentry join step reads one format in the
+     mobile and desktop projects alike. The name is pinned and shared with the desktop's project;
+     do not rename it. **Only the session connection writes it**: the pairing ceremony's
+     transport dials with an id too, and nothing subscribes to it, for the pairing bullet's
+     reason (`tests/unit/crashReportingConfinement.test.ts` holds `onDial` to its one call site in
+     `src/connection/connectionManager.ts`).
 
-  Items 2 to 4 (task #152, 2026-11-18) are written only by `src/observability/reportContext.ts`,
-  and every value is checked there, at runtime, against the closed sets in
+  Items 2 to 4 (task #152, 2026-11-18) and item 5 (the dial-correlation work, 2026-11-21) are
+  written only by `src/observability/reportContext.ts`, and every value is checked there, at
+  runtime, against the closed sets and the one format in
   `src/observability/reportVocabulary.ts`: a caller cannot widen what leaves by casting, and a
   resolved path handed to the door comes out as `unknown`. The React half
   (`src/navigation/screenTracking.tsx`) reads expo-router's `useSegments()`, never
@@ -123,7 +143,9 @@ scrubber is therefore a second line of defence, never the control itself.
   Which connection transitions are worth a slot is decided in
   `src/state/connectionBreadcrumbs.ts` (each state once per connection cycle, so a retry loop or
   a busy board cannot spend the trail), which watches the stores so that neither
-  `src/connection/` nor the banned `src/channel/` records anything.
+  `src/connection/` nor the banned `src/channel/` records anything. The same file writes item
+  5's tag from the channel store's `relayDialId`, which `connectionManager` fills from the
+  transport's `onDial`: the channel mints the id and never touches the door.
   This list, with the bullet above, is the canonical enumeration;
   `docs/security.md` mirrors it, so an addition here has to land there in the same change.
 - **JS breadcrumbs are allowlisted, not denylisted.** An unanticipated category must be dropped
@@ -243,6 +265,16 @@ adopted:
   busy board is re-read on a 300 ms debounce, and a rekey arrives every two minutes or so. Any
   one of them would spend the 100-entry trail and evict the screen crumbs that say where the
   user was, which is the failure MOBILE-H already demonstrated with the native SDK's crumbs.
+- **A breadcrumb per relay dial** (considered 2026-11-21, with item 5). The same retry loop
+  redials on the same floor, and in it the transport state does not change at all, so a crumb
+  per dial would spend the trail exactly as above. The `relay_dial_id` tag answers "which dial"
+  for any event, and the `app.connection` crumbs already recorded carry the dial current at each
+  step, which says which dial dropped and which came back without a slot of its own.
+- **CF-Ray, or the slot id, as the dial join key.** React Native's WebSocket gives JavaScript no
+  handshake response header (read at react-native 0.88.1: `websocketOpen` carries `id` and
+  `protocol` only on both platforms), a failed dial has no response at all, and a slot id must
+  never reach Sentry and is logged by the relay in no form. A client-minted id is the only key
+  both sides can record.
 
 **What the app-added tags and breadcrumbs are known to reach, and how it is known.** Three
 different strengths of evidence, kept apart on purpose (see
@@ -282,6 +314,12 @@ different strengths of evidence, kept apart on purpose (see
   reports one, so that event rests on the source read above); real iOS hardware; a real NDK
   signal crash on Android; and a `lens` TAG with a real value, because both crash rows live in
   Settings, so `lens` has arrived as `none` on every tag and with real values only in the trail.
+- **Item 5 (`relay_dial_id`, and `dial` on the connection crumbs) has not been observed on a
+  delivered event at all.** It takes the same top-level `setTag` and allowlisted `addBreadcrumb`
+  path as items 2 to 4, so the source reads above cover it, but every delivered event so far came
+  from the in-process demo desktop, which dials no relay and so never sets it. Proving it needs a
+  crash-test build paired with a real desktop over a relay, and the join itself needs the relay's
+  side released; do both together, and record the run in the developer guide.
 
 **The trail is a ring the native SDKs share, so the TAG is the durable answer.** Raising the cap
 to 100 does not stop sentry-cocoa's `device.event` crumbs filling it on a phone left alone for
@@ -426,7 +464,13 @@ how often.
   trail entry per arrival whichever of the screen and the lens is reported first, and keeps
   the two pairing screens off the trail while still tagging them),
   `tests/unit/connectionBreadcrumbs.test.ts` (each state once per connection cycle, and a
-  deliberate close is recorded), `tests/components/ScreenTracker.test.tsx` (the tracker under
+  deliberate close is recorded; a redial writes the dial tag and spends no crumb, and each crumb
+  carries the dial current when it was recorded), `tests/unit/relayTransportReconnect.test.ts`
+  and `tests/unit/relayTransport.test.ts` (a fresh dial id on every dial path, announced before
+  the dial's state change and present on a real upgrade request),
+  `tests/unit/connectionManagerDialWiring.test.ts` (subscribed before the first dial,
+  unsubscribed on teardown), the `onDial` scan in `tests/unit/crashReportingConfinement.test.ts`
+  (one subscriber, so the pairing ceremony's dials stay out), `tests/components/ScreenTracker.test.tsx` (the tracker under
   expo-router's REAL `useSegments`, red when it is swapped for the resolved pathname),
   `tests/unit/rootLayoutWiring.test.ts` (the tracker is mounted, once, outside the Stack) and
   `tests/unit/bundleEntry.test.ts` (the scope's starting tags are set straight after init).

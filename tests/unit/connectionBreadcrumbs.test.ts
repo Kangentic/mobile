@@ -29,12 +29,30 @@ import {
  * The observability door reaches Sentry, which does not load under vitest, so
  * it is mocked by specifier and what it was asked to record is read back.
  */
-const doorState = vi.hoisted(() => ({ recorded: [] as string[] }));
+const doorState = vi.hoisted(() => ({
+  recorded: [] as string[],
+  /** The dial each recorded crumb carried, parallel to `recorded`. */
+  recordedDials: [] as (string | null)[],
+  /** Every `relay_dial_id` tag write, in order. */
+  taggedDials: [] as unknown[],
+  /** Every door call, tag or crumb, in the order it was made. */
+  order: [] as string[],
+}));
 vi.mock('@/observability/reportContext', () => ({
-  recordConnectionState: (state: string) => {
+  recordConnectionState: (state: string, dialId: string | null = null) => {
     doorState.recorded.push(state);
+    doorState.recordedDials.push(dialId);
+    doorState.order.push(`crumb:${state}`);
+  },
+  setReportedRelayDial: (dialId: unknown) => {
+    doorState.taggedDials.push(dialId);
+    doorState.order.push('tag');
   },
 }));
+
+/** Two well-formed dial ids, as RelayTransport would mint them. */
+const DIAL_A = '0123456789abcdef';
+const DIAL_B = 'fedcba9876543210';
 
 function channelEvent(transportState: TransportState, established = false): ConnectionTrailEvent {
   return { kind: 'channel', transportState, established };
@@ -205,10 +223,19 @@ describe('registerConnectionBreadcrumbs', () => {
     // so two snapshots in one test need the clock to move between them.
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-11-18T19:38:50.000Z'));
-    useChannelStore.setState({ transportState: 'idle', established: false, establishedAt: null, everEstablished: false });
+    useChannelStore.setState({
+      transportState: 'idle',
+      established: false,
+      establishedAt: null,
+      everEstablished: false,
+      relayDialId: null,
+    });
     useBoardStore.getState().reset();
     doorState.recorded.length = 0;
-    unregister = registerConnectionBreadcrumbs();
+    doorState.recordedDials.length = 0;
+    doorState.taggedDials.length = 0;
+    doorState.order.length = 0;
+    unregister =registerConnectionBreadcrumbs();
   });
 
   afterEach(() => {
@@ -292,8 +319,111 @@ describe('registerConnectionBreadcrumbs', () => {
 
   it('stops recording once unregistered', () => {
     unregister();
+    useChannelStore.getState().setRelayDialId(DIAL_A);
     openAndEstablish();
 
     expect(doorState.recorded).toEqual([]);
+    expect(doorState.taggedDials).toEqual([]);
+  });
+
+  /**
+   * The relay dial id: a TAG per dial, never a crumb per dial. A retry loop
+   * against an absent desktop redials on a five-second floor for as long as it
+   * lasts, and in that loop the transport state does not change at all, so the
+   * only thing moving is the id.
+   *
+   * Mutation seen failing: recording a `reconnecting` crumb whenever the dial
+   * id changes fails the crumb assertion (Expected [], Received five
+   * `reconnecting` entries).
+   */
+  it('writes the tag for every redial of a retry loop and spends no crumb on any of them', () => {
+    openAndEstablish();
+    useChannelStore.getState().setTransportState('reconnecting');
+    doorState.recorded.length = 0;
+    doorState.taggedDials.length = 0;
+
+    const loopIds = ['1111111111111111', '2222222222222222', '3333333333333333', '4444444444444444', '5555555555555555'];
+    for (const dialId of loopIds) useChannelStore.getState().setRelayDialId(dialId);
+
+    expect(doorState.taggedDials).toEqual(loopIds);
+    expect(doorState.recorded).toEqual([]);
+  });
+
+  /**
+   * Each crumb carries the dial that was current when it was recorded, which
+   * is how the trail says which dial dropped and which one came back without a
+   * slot of its own. The transport announces a dial before that dial's state
+   * change, and connectionManager writes them to the store in that order, so
+   * `connecting` already carries the id of the dial that caused it.
+   *
+   * Mutation seen failing: passing `null` instead of the store's id to
+   * recordConnectionState fails the first assertion (Received [null, null,
+   * null]).
+   */
+  it('puts the current dial on each crumb: the dropped one on reconnecting, the new one after', () => {
+    useChannelStore.getState().setRelayDialId(DIAL_A);
+    openAndEstablish();
+    expect(doorState.recordedDials).toEqual([DIAL_A, DIAL_A, DIAL_A]);
+
+    // The link drops: the transport says reconnecting BEFORE the redial mints.
+    useChannelStore.getState().setTransportState('reconnecting');
+    useChannelStore.getState().setRelayDialId(DIAL_B);
+    useChannelStore.getState().setTransportState('connected');
+    useChannelStore.getState().markEstablished();
+
+    expect(doorState.recorded).toEqual(['connecting', 'connected', 'established', 'reconnecting', 'connected', 'established']);
+    expect(doorState.recordedDials).toEqual([DIAL_A, DIAL_A, DIAL_A, DIAL_A, DIAL_B, DIAL_B]);
+    expect(doorState.taggedDials).toEqual([DIAL_A, DIAL_B]);
+  });
+
+  /**
+   * One store write can change the dial AND the transport state. The tag is
+   * written first, so a crumb recorded by that same write already sits beside
+   * the tag that names its dial (an event captured between the two calls would
+   * otherwise carry the new crumb and the old tag).
+   *
+   * Mutation seen failing: moving the `setReportedRelayDial` block below the
+   * `advance(...)` call in the channel subscription fails the order assertion
+   * (Expected ['tag', 'crumb:connecting'], Received ['crumb:connecting', 'tag']).
+   */
+  it('writes the dial tag before the crumb when one store write changes both', () => {
+    useChannelStore.setState({ relayDialId: DIAL_B, transportState: 'connecting' });
+
+    expect(doorState.order).toEqual(['tag', 'crumb:connecting']);
+    expect(doorState.taggedDials).toEqual([DIAL_B]);
+    expect(doorState.recordedDials).toEqual([DIAL_B]);
+  });
+
+  it('keeps the dial across the store reset, so the closed crumb names the dial being closed', () => {
+    useChannelStore.getState().setRelayDialId(DIAL_A);
+    openAndEstablish();
+    doorState.recorded.length = 0;
+    doorState.recordedDials.length = 0;
+
+    useChannelStore.getState().reset();
+
+    expect(doorState.recorded).toEqual(['closed']);
+    expect(doorState.recordedDials).toEqual([DIAL_A]);
+  });
+
+  /**
+   * The tag only ever holds a dial id: absent until the first dial, then the
+   * most recent one, never cleared. A store write that leaves the id as it was
+   * (any other field) or holds none must not reach the door.
+   *
+   * Mutation seen failing: dropping the `next.relayDialId !== null` check
+   * fails the final assertion (Received [DIAL_A, null]: the cleared id
+   * reached the door).
+   */
+  it('writes no tag before the first dial, for an unchanged id, or for a cleared one', () => {
+    useChannelStore.getState().setTransportState('connecting');
+    expect(doorState.taggedDials).toEqual([]);
+
+    useChannelStore.getState().setRelayDialId(DIAL_A);
+    useChannelStore.getState().setRelayDialId(DIAL_A);
+    useChannelStore.getState().noteRekey();
+    useChannelStore.setState({ relayDialId: null });
+
+    expect(doorState.taggedDials).toEqual([DIAL_A]);
   });
 });
