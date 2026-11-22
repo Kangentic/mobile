@@ -24,6 +24,8 @@ vi.mock('@/connection/connectionManager', () => ({
   requireVerbClient: () => ({ readTranscriptWindow }),
 }));
 vi.mock('@/connection/bootstrap', () => ({ runBootstrap: vi.fn() }));
+// actions.ts reaches the crash-reporting door, whose Sentry import reads native modules at load.
+vi.mock('@/observability/crashReporting', () => ({ reportHandledError: vi.fn() }));
 // wipeDesktopContent also clears settingsStore, which persists via
 // expo-secure-store - fake it so the vitest (node) run has no native module.
 vi.mock('expo-secure-store', () => ({
