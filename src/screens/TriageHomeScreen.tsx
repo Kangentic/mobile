@@ -32,7 +32,7 @@ import {
 } from '@/state/activityStore';
 import { priorityLevelFor } from '@/lib/priority';
 import { noteTaskOpened } from '@/navigation/taskOpenIntent';
-import { selectPriorityScale, selectTaskColumn, useBoardStore } from '@/state/boardStore';
+import { selectPriorityScale, selectShowTaskLabels, selectShowTaskPriority, selectTaskColumn, useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
 import { useSettingsStore } from '@/state/settingsStore';
 import {
@@ -671,6 +671,11 @@ const ActivityRow = React.memo(function ActivityRow({
   const column = useBoardStore((state) => selectTaskColumn(state, entry.taskId));
   const boardColumns = useBoardStore((state) => state.boardsByProjectId[entry.projectId]?.columns ?? null);
   const priorityScale = useBoardStore((state) => selectPriorityScale(state, entry.projectId));
+  // The desktop's card Priority and Labels switches (protocol 0.29.0), from
+  // the task's OWN board, as the ticket number is. They read on until that
+  // board loads, so a row never draws its labels late.
+  const showPriority = useBoardStore((state) => selectShowTaskPriority(state, entry.projectId));
+  const showLabels = useBoardStore((state) => selectShowTaskLabels(state, entry.projectId));
 
   /**
    * Which of the desktop card's states this row is in (cardSessionDisplay):
@@ -892,6 +897,8 @@ const ActivityRow = React.memo(function ActivityRow({
         // Never the fallback stand-in's: it cannot tell, so it draws no strip.
         automationsDisabled={locatedTask?.automations_disabled === true}
         priorityLevel={priorityLevelFor(locatedTask?.priority, priorityScale)}
+        showPriority={showPriority}
+        showLabels={showLabels}
         bodyText={bodyText}
         bodyNumberOfLines={SNIPPET_LINES}
         bodyMinHeight={snippetSlotHeight}
@@ -966,6 +973,8 @@ const SessionlessTaskRow = React.memo(function SessionlessTaskRow({
   const respawn = useActivityStore((state) => selectTaskRespawn(state, task.id));
   const sessionDisplay = cardSessionDisplay({ session: null, respawn, task });
   const priorityScale = useBoardStore((state) => selectPriorityScale(state, projectId));
+  const showPriority = useBoardStore((state) => selectShowTaskPriority(state, projectId));
+  const showLabels = useBoardStore((state) => selectShowTaskLabels(state, projectId));
 
   const openTask = useCallback(() => {
     // An open of the task, for the resume on open (protocol 0.28.0): a paused
@@ -986,6 +995,8 @@ const SessionlessTaskRow = React.memo(function SessionlessTaskRow({
       columnStrip={columnStrip}
       automationsDisabled={task.automations_disabled === true}
       priorityLevel={priorityLevelFor(task.priority, priorityScale)}
+      showPriority={showPriority}
+      showLabels={showLabels}
       bodyText={collapseToSnippetText(task.description)}
       bodyNumberOfLines={SNIPPET_LINES}
       bodyMinHeight={theme.typography.caption.lineHeight * SNIPPET_LINES}

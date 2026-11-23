@@ -161,6 +161,7 @@ function seedBoard({
   resumeOnOpenOffered = false,
   queuePlace = null,
   startBlockedReason = null,
+  pausedBy = null,
 }: {
   sessionId?: string | null;
   resumable?: boolean;
@@ -172,6 +173,7 @@ function seedBoard({
   resumeOnOpenOffered?: boolean;
   queuePlace?: BoardTaskWire['queue_place'];
   startBlockedReason?: BoardTaskWire['start_blocked_reason'];
+  pausedBy?: BoardTaskWire['paused_by'];
 } = {}): void {
   useBoardStore.setState({
     projects: [{ id: 'project-1', name: 'Alpha' }],
@@ -190,10 +192,13 @@ function seedBoard({
             workflow,
             queue_place: queuePlace,
             start_blocked_reason: startBlockedReason,
+            paused_by: pausedBy,
           }),
         },
         snapshotAt,
         showTicketNumbers: true,
+        showTaskPriority: true,
+        showTaskLabels: true,
         view: 'full',
         taskCountsByColumnId: {},
         commandTerminals: [],
@@ -1334,8 +1339,9 @@ describe('SessionScreen resume on open', () => {
   function seedPausedTask({
     resumeOnOpenOffered = true,
     snapshotAt = CURRENT_SNAPSHOT_AT,
-  }: { resumeOnOpenOffered?: boolean; snapshotAt?: number } = {}): void {
-    seedBoard({ sessionId: null, resumable: true, paused: true, resumeOnOpenOffered, snapshotAt });
+    pausedBy = 'idle',
+  }: { resumeOnOpenOffered?: boolean; snapshotAt?: number; pausedBy?: BoardTaskWire['paused_by'] } = {}): void {
+    seedBoard({ sessionId: null, resumable: true, paused: true, resumeOnOpenOffered, snapshotAt, pausedBy });
   }
 
   beforeEach(() => {
@@ -1494,6 +1500,62 @@ describe('SessionScreen resume on open', () => {
     expect(screen.getByText('Resume session')).toBeTruthy();
     expect(screen.queryByTestId('session-resume-error')).toBeNull();
     expect(screen.getByTestId('session-resume-button').props.accessibilityState).toEqual(expect.objectContaining({ disabled: false }));
+  });
+
+  /**
+   * Protocol 0.29.0: who paused it reaches the line under Resume through the
+   * row's `paused_by` (SessionScreen's selector and prop pass), and the line
+   * is held back while an open of the task waits to be decided, because that
+   * open is about to resume it. Mutations seen failing: the prop pass dropped
+   * (the at-rest cases found no node), and `openPending` ignored by
+   * SessionScreen (the waiting case found the node while the open waited).
+   */
+  describe('the pause line under Resume', () => {
+    it.each([
+      ['idle', 'Paused while idle.'],
+      ['held', 'Stays paused until resumed.'],
+    ] as const)('draws the %s line for a paused task opened with no open to decide', async (pausedBy, line) => {
+      seedPausedTask({ pausedBy });
+      await renderSessionScreen();
+
+      expect(screen.getByTestId('session-resume-pause-note')).toHaveTextContent(line);
+    });
+
+    it('draws no line for the desktop\'s own pause', async () => {
+      seedPausedTask({ pausedBy: 'system' });
+      await renderSessionScreen();
+
+      expect(screen.getByTestId('session-resume-button')).toBeTruthy();
+      expect(screen.queryByTestId('session-resume-pause-note')).toBeNull();
+    });
+
+    it('holds the line back while an open waits for a current board, and shows it once the desktop declines the resume', async () => {
+      resumeTaskOnOpenMock.mockImplementationOnce(async (taskId: string) => {
+        useResumeStore.getState().markResuming(taskId, Date.now(), 'open');
+      });
+      // A push tap into a warm app: the cached row predates this connection.
+      seedPausedTask({ pausedBy: 'idle', snapshotAt: ESTABLISHED_AT - 500 });
+      noteTaskOpened('task-1');
+      await renderSessionScreen();
+
+      expect(resumeTaskOnOpenMock).not.toHaveBeenCalled();
+      expect(screen.getByTestId('session-resume-button')).toBeTruthy();
+      expect(screen.queryByTestId('session-resume-pause-note')).toBeNull();
+
+      // The fresh board lands: the open is sent, and reads as resuming.
+      await act(() => {
+        seedPausedTask({ pausedBy: 'idle', snapshotAt: CURRENT_SNAPSHOT_AT });
+      });
+      expect(resumeTaskOnOpenMock).toHaveBeenCalledTimes(1);
+      expect(screen.getByText('Resuming agent...')).toBeTruthy();
+      expect(screen.queryByTestId('session-resume-pause-note')).toBeNull();
+
+      // The desktop skipped the resume (not-eligible): the line says what happened.
+      await act(() => {
+        useResumeStore.getState().clear('task-1');
+      });
+      expect(screen.getByTestId('session-resume-pause-note')).toHaveTextContent('Paused while idle.');
+    });
   });
 });
 

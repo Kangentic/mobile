@@ -245,3 +245,85 @@ describe('pausing a static task', () => {
     expect(eventsFor('transcript', STATIC_SESSION_ID)).toHaveLength(0);
   });
 });
+
+/**
+ * Protocol 0.29.0, as the mock sends it (task #161, decisions A1 and B1): who
+ * paused each paused row, and the desktop's card Priority and Labels switches
+ * at their default. Read back through a real board snapshot, so the parse the
+ * app runs is the one under test.
+ *
+ * On the resume on open: the mock now keys it on `paused_by === 'idle'`, where
+ * it used to key on the row's shape (a parked row still names its session).
+ * The two rules agree on every row the mock can reach today, so these cases
+ * pin the outcomes, not which rule produced them.
+ */
+describe('who paused a task, and the card switches (protocol 0.29.0)', () => {
+  const MOCK_PAUSED_TASK_ID = 'mock-task-paused';
+  const STATIC_TASK_ID = MOCK_IDLE_STATIC_SESSION.taskId;
+  /** Longer than the mock's resume gap (2.5 s), so the successor has bound. */
+  const RESUME_SETTLED_AFTER_MS = 3_000;
+
+  async function projectHolding(taskId: string): Promise<string> {
+    for (const projectId of MOCK_PROJECT_IDS) {
+      const snapshot = await controller.verbs.readBoardSubscribe(projectId, { view: 'full' });
+      if (snapshot.tasks.some((task) => task.id === taskId)) return projectId;
+    }
+    throw new Error(`no board holds ${taskId}`);
+  }
+
+  async function boardRow(taskId: string) {
+    const projectId = await projectHolding(taskId);
+    const snapshot = await controller.verbs.readBoardSubscribe(projectId, { view: 'full' });
+    const row = snapshot.tasks.find((task) => task.id === taskId);
+    if (row === undefined) throw new Error(`the board lost ${taskId}`);
+    return { projectId, row };
+  }
+
+  it('sends both card switches on, in both projects', async () => {
+    for (const projectId of MOCK_PROJECT_IDS) {
+      const snapshot = await controller.verbs.readBoardSubscribe(projectId, { view: 'full' });
+      expect(snapshot.showTaskPriority, projectId).toBe(true);
+      expect(snapshot.showTaskLabels, projectId).toBe(true);
+    }
+  });
+
+  it('says the idle timeout paused the parked card, and resumes it on an open', async () => {
+    const { projectId, row } = await boardRow(MOCK_PAUSED_TASK_ID);
+    expect(row.paused).toBe(true);
+    expect(row.paused_by).toBe('idle');
+
+    await expect(controller.verbs.startSession({ taskId: MOCK_PAUSED_TASK_ID, projectId, trigger: 'open' })).resolves.toEqual({
+      ok: true,
+      outcome: 'starting',
+    });
+  });
+
+  it('says a person paused a task, declines an open of it, and clears who paused it on a Resume', async () => {
+    const { projectId } = await boardRow(STATIC_TASK_ID);
+    await expect(controller.verbs.pauseSession({ taskId: STATIC_TASK_ID, projectId })).resolves.toEqual({ ok: true });
+    await vi.advanceTimersByTimeAsync(PAUSE_SHUTDOWN_DONE_AFTER_MS);
+
+    const paused = (await boardRow(STATIC_TASK_ID)).row;
+    expect(paused.paused).toBe(true);
+    expect(paused.paused_by).toBe('held');
+
+    // A person's pause is never lifted by an open.
+    await expect(controller.verbs.startSession({ taskId: STATIC_TASK_ID, projectId, trigger: 'open' })).resolves.toEqual({
+      ok: true,
+      outcome: 'not-eligible',
+    });
+
+    // The Resume button's start lifts it, and who paused it follows `paused`.
+    await expect(controller.verbs.startSession({ taskId: STATIC_TASK_ID, projectId })).resolves.toEqual({ ok: true, outcome: 'starting' });
+    await vi.advanceTimersByTimeAsync(RESUME_SETTLED_AFTER_MS);
+    const resumed = (await boardRow(STATIC_TASK_ID)).row;
+    expect(resumed.paused).toBe(false);
+    expect(resumed.paused_by).toBeNull();
+  });
+
+  it('reads nobody on a row nothing paused', async () => {
+    const { row } = await boardRow(STATIC_TASK_ID);
+    expect(row.paused).toBe(false);
+    expect(row.paused_by).toBeNull();
+  });
+});

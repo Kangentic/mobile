@@ -47,6 +47,8 @@ export function seedCommandTerminalBoard({
         commandTerminalsOffered: offered,
         earlierConversationsOffered: earlierOffered,
         resumeOnOpenOffered: false,
+        showTaskPriority: true,
+        showTaskLabels: true,
         priorities: null,
       },
     },

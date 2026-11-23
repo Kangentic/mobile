@@ -50,6 +50,8 @@ function board(tasks: BoardTaskWire[]): ProjectBoard {
     commandTerminalsOffered: false,
     earlierConversationsOffered: false,
     resumeOnOpenOffered: false,
+    showTaskPriority: true,
+    showTaskLabels: true,
     priorities: null,
   };
 }

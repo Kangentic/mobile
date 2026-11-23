@@ -366,6 +366,48 @@ describe('TaskCard', () => {
       expect(screen.queryByTestId(`${STATUS_BAR}-spinner`)).toBeNull();
     });
 
+    /**
+     * Who paused it (protocol 0.29.0's `paused_by`, desktop 4fe1dfbdb): the
+     * idle timeout's pause reads "Paused while idle", every other pause and an
+     * older desktop keep "Paused". Same glyph either way. Mutations seen
+     * failing: TaskCard not passing `paused_by` through (the idle case), and
+     * the footer using `pausedFooterLabel` ahead of the blocked start (the
+     * blocked case).
+     */
+    describe('who paused it', () => {
+      it('reads "Paused while idle" for the idle timeout\'s pause, under the same pause circle', async () => {
+        await renderTaskCard({ task: boardTaskFixture({ paused: true, paused_by: 'idle' }), sessionDisplay: { kind: 'suspended' } });
+        expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Paused while idle', { exact: true });
+        expect(getLucideGlyph(screen.getByTestId(`${STATUS_BAR}-paused`), CirclePause)).toBeTruthy();
+      });
+
+      it.each([
+        ['a person\'s pause', 'held'],
+        ['the desktop\'s own pause', 'system'],
+        ['a desktop before 0.29.0', null],
+        ['a value this phone does not know', 'scheduled'],
+      ])('keeps "Paused" for %s', async (_label, pausedBy) => {
+        await renderTaskCard({ task: boardTaskFixture({ paused: true, paused_by: pausedBy }), sessionDisplay: { kind: 'suspended' } });
+        expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Paused', { exact: true });
+      });
+
+      it('keeps "Paused" for a row with no key at all', async () => {
+        const rowWithoutKey: BoardTaskWire = boardTaskFixture({ paused: true });
+        delete rowWithoutKey.paused_by;
+        await renderTaskCard({ task: rowWithoutKey, sessionDisplay: { kind: 'suspended' } });
+        expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Paused', { exact: true });
+      });
+
+      it('lets a blocked start\'s words beat an idle pause', async () => {
+        await renderTaskCard({
+          task: boardTaskFixture({ paused: true, paused_by: 'idle', start_blocked_reason: 'worktree-missing' }),
+          sessionDisplay: { kind: 'suspended' },
+        });
+        expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Worktree missing');
+        expect(screen.queryByText('Paused while idle')).toBeNull();
+      });
+    });
+
     it('shows the desktop\'s own step, verbatim, for a respawn in flight', async () => {
       await renderTaskCard({ sessionDisplay: { kind: 'preparing', label: 'Switching model...' }, usage: usageFixture() });
       expect(screen.getByTestId(`${STATUS_BAR}-label`)).toHaveTextContent('Switching model...');
@@ -918,6 +960,55 @@ describe('TaskCard', () => {
     it('draws no meter with the rest of the reference chrome when showMetaRow is false', async () => {
       await renderTaskCard({ priorityLevel: URGENT, showMetaRow: false });
       expect(screen.queryByTestId(`${BASE_TEST_ID}-priority`)).toBeNull();
+    });
+
+    it('closes up with the desktop\'s Priority switch off, as for a task with no priority', async () => {
+      await renderTaskCard({ ...FULL_ROW, showPriority: false });
+      expect(titleRowOrder()).toEqual(['status', 'title', 'display-id', 'pr']);
+    });
+  });
+
+  /**
+   * The desktop's Settings > Task > Cards switches (protocol 0.29.0,
+   * desktop 18f351747): Priority off hides the meter, Labels off hides the
+   * labels row, and neither touches the PR glyph or the attachment count,
+   * which is why they are not `showMetaRow`. Mutations seen failing: either
+   * switch left out of its gate (the off cases), and either switch wired
+   * through `showMetaRow` (the PR glyph and attachment case).
+   */
+  describe('the desktop\'s card switches', () => {
+    const LABELLED_PRIORITY_TASK = boardTaskFixture({ labels: ['backend'], pr_number: 42, pr_state: 'open' });
+
+    it('draws the meter and the labels by default', async () => {
+      await renderTaskCard({ task: LABELLED_PRIORITY_TASK, priorityLevel: URGENT });
+      expect(screen.getByTestId(`${BASE_TEST_ID}-priority`)).toBeTruthy();
+      expect(screen.getByTestId(`${BASE_TEST_ID}-labels`)).toHaveTextContent('backend');
+    });
+
+    it('hides only the meter with Priority off', async () => {
+      await renderTaskCard({ task: LABELLED_PRIORITY_TASK, priorityLevel: URGENT, showPriority: false });
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-priority`)).toBeNull();
+      expect(screen.getByTestId(`${BASE_TEST_ID}-labels`)).toHaveTextContent('backend');
+    });
+
+    it('hides only the labels row with Labels off', async () => {
+      await renderTaskCard({ task: LABELLED_PRIORITY_TASK, priorityLevel: URGENT, showLabels: false });
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-labels`)).toBeNull();
+      expect(screen.queryByText('backend')).toBeNull();
+      expect(screen.getByTestId(`${BASE_TEST_ID}-priority`)).toBeTruthy();
+    });
+
+    it('keeps the PR glyph and the attachment count with both off', async () => {
+      await renderTaskCard({
+        task: boardTaskFixture({ labels: ['backend'], pr_number: 42, pr_state: 'open', attachment_count: 2 }),
+        priorityLevel: URGENT,
+        showPriority: false,
+        showLabels: false,
+      });
+      expect(screen.getByTestId(`${BASE_TEST_ID}-pr`)).toBeTruthy();
+      expect(screen.getByTestId(`${BASE_TEST_ID}-attachments`)).toBeTruthy();
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-priority`)).toBeNull();
+      expect(screen.queryByTestId(`${BASE_TEST_ID}-labels`)).toBeNull();
     });
   });
 

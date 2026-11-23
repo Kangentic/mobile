@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { resumeTaskOnOpen } from '@/connection/actions';
-import { claimTaskOpen, subscribeTaskOpens } from '@/navigation/taskOpenIntent';
+import { claimTaskOpen, isTaskOpenPending, subscribeTaskOpens } from '@/navigation/taskOpenIntent';
 import { selectResumeOnOpenOffered, selectTaskRow, useBoardStore } from '@/state/boardStore';
 import { useChannelStore } from '@/state/channelStore';
 
@@ -27,6 +27,15 @@ import { useChannelStore } from '@/state/channelStore';
  * a screen still open, a reconnect, a re-subscribe or a return from a sheet is
  * not an open, and nothing re-claims it: only a new open does. An older desktop
  * (no `resumeOnOpenOffered`) gets nothing, and keeps its Resume button.
+ *
+ * Returns whether an open is waiting on that first look (`openPending`). The
+ * Resume panel holds back its pause line meanwhile (protocol 0.29.0): a push
+ * tap waits for a board read on the current connection, and "Paused while
+ * idle." under the button for that whole wait would read as the open having
+ * been declined, when it is about to resume the task. Once the open is sent the
+ * attempt reads `resuming` at once (`resumeTaskOnOpen` marks it before its
+ * request), so the line stays away; a declined open clears the attempt and the
+ * line shows, which is the desktop's own case for it.
  */
 export function useResumeOnOpen({
   taskId,
@@ -36,24 +45,32 @@ export function useResumeOnOpen({
   taskId: string | null;
   projectId: string | null;
   offered: boolean;
-}): void {
+}): boolean {
   // The claim, held by this screen until it is decided. A ref plus a counter:
   // the ref is the claim itself (a re-render must not re-decide it), the
   // counter is what makes the deciding effect look again after a claim.
   const claimed = useRef(false);
   const [claimCount, setClaimCount] = useState(0);
+  // The ref above decides; this is its render-visible copy for the caller, so
+  // every place that sets or clears `claimed` sets it too. Seeded from the slot
+  // itself, because the claim runs in an effect, after the first frame has drawn.
+  const [openPending, setOpenPending] = useState(() => taskId !== null && isTaskOpenPending(taskId));
   useEffect(() => {
     if (taskId === null) return undefined;
     const claim = (): void => {
       if (!claimTaskOpen(taskId)) return;
       claimed.current = true;
+      setOpenPending(true);
       setClaimCount((count) => count + 1);
     };
     claim();
+    // An open noted for this task that the claim found expired is not pending.
+    if (!claimed.current) setOpenPending(false);
     const unsubscribe = subscribeTaskOpens(claim);
     return () => {
       unsubscribe();
       claimed.current = false;
+      setOpenPending(false);
     };
   }, [taskId]);
 
@@ -67,6 +84,9 @@ export function useResumeOnOpen({
   useEffect(() => {
     if (!claimed.current || !decidable || taskId === null || projectId === null) return;
     claimed.current = false;
+    setOpenPending(false);
     if (offered && resumeOnOpenOffered) void resumeTaskOnOpen(taskId, projectId);
   }, [claimCount, decidable, offered, resumeOnOpenOffered, taskId, projectId]);
+
+  return openPending;
 }

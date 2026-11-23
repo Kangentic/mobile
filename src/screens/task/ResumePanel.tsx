@@ -33,6 +33,13 @@ const GLYPH_SIZE = 16;
  * button: the phone has no hover, and this is where the person decides whether
  * to resume.
  *
+ * Otherwise, who paused it (protocol 0.29.0's `paused_by`, `resumePauseNote`)
+ * puts one line there, as the desktop's task window does (kangentic 4fe1dfbdb,
+ * `pauseNote`): "Stays paused until resumed." for a person's pause, "Paused
+ * while idle." for the idle timeout's. Neither promises a resume. The panel
+ * leaves it out while a resume runs, after one fails (that line speaks
+ * instead) and beside a blocked start's tip, as the desktop does.
+ *
  * Drawn over the terminal pane rather than in place of it: the xterm WebView
  * must never unmount, and the opaque panel hides it exactly as the desktop's
  * body hides its terminal.
@@ -43,6 +50,7 @@ export function ResumePanel({
   attempt,
   pausedWorkflow = null,
   startBlockedTip = null,
+  pauseNote = null,
 }: {
   taskId: string;
   projectId: string;
@@ -50,10 +58,13 @@ export function ResumePanel({
   pausedWorkflow?: ResumeOffer['pausedWorkflow'];
   /** The desktop's words for why the last start never reached an agent (`startBlockedCopy(...).tip`), or null. */
   startBlockedTip?: string | null;
+  /** Who paused it, in the desktop's words (`resumePauseNote`), or null for none. Shown only at rest. */
+  pauseNote?: string | null;
 }): React.JSX.Element {
   const theme = useTheme();
   const router = useRouter();
   const resuming = attempt?.phase === 'resuming';
+  const pauseNoteShown = pauseNote !== null && !resuming && attempt?.phase !== 'failed' && startBlockedTip === null;
   return (
     <View testID="session-resume-panel" style={[styles.panel, { backgroundColor: theme.colors.background, padding: theme.spacing.lg }]}>
       {pausedWorkflow !== null ? (
@@ -86,12 +97,17 @@ export function ResumePanel({
             testID="session-resume-button"
           />
           {startBlockedTip !== null ? (
-            <Text variant="caption" color="muted" style={styles.failure} testID="session-resume-start-blocked">
+            <Text variant="caption" color="muted" style={styles.note} testID="session-resume-start-blocked">
               {startBlockedTip}
             </Text>
           ) : null}
+          {pauseNoteShown ? (
+            <Text variant="caption" color="muted" style={styles.note} testID="session-resume-pause-note">
+              {pauseNote}
+            </Text>
+          ) : null}
           {attempt?.phase === 'failed' ? (
-            <Text variant="caption" color="muted" style={styles.failure} testID="session-resume-error">
+            <Text variant="caption" color="muted" style={styles.note} testID="session-resume-error">
               {attempt.message ?? RESUME_FAILED_MESSAGE}
             </Text>
           ) : null}
@@ -115,7 +131,8 @@ const styles = StyleSheet.create({
   content: {
     alignItems: 'center',
   },
-  failure: {
+  /** The one-line caption under Resume: a blocked start's tip, who paused it, or a failed resume. */
+  note: {
     textAlign: 'center',
   },
 });

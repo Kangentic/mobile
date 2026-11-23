@@ -48,6 +48,8 @@ function seedLiveTask(artifacts: BoardTaskArtifactWire[] | null): void {
         commandTerminalsOffered: false,
         earlierConversationsOffered: false,
         resumeOnOpenOffered: false,
+        showTaskPriority: true,
+        showTaskLabels: true,
         priorities: null,
       },
     },

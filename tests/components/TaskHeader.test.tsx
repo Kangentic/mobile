@@ -50,6 +50,8 @@ function seedLocatedTask(swimlaneId: string = 'lane-todo', taskOverrides: Partia
         commandTerminalsOffered: false,
         earlierConversationsOffered: false,
         resumeOnOpenOffered: false,
+        showTaskPriority: true,
+        showTaskLabels: true,
         priorities: null,
       },
     },
