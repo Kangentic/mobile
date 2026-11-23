@@ -264,6 +264,8 @@ describe('notificationReconciler', () => {
           commandTerminalsOffered: false,
           earlierConversationsOffered: false,
           resumeOnOpenOffered: false,
+          showTaskPriority: true,
+          showTaskLabels: true,
           priorities: null,
         },
       },

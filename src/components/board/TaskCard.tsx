@@ -110,6 +110,21 @@ export interface TaskCardProps {
    */
   showMetaRow?: boolean;
   /**
+   * The desktop's Settings > Task > Cards "Priority" switch (protocol 0.29.0's
+   * `showTaskPriority`, `selectShowTaskPriority`). Off draws no meter and keeps
+   * no room for it, as a task with no priority. Kept apart from `showMetaRow`,
+   * which also hides the PR glyph and the attachment count: the desktop's
+   * switch hides the priority alone. Defaults true, the desktop default.
+   */
+  showPriority?: boolean;
+  /**
+   * The desktop's Settings > Task > Cards "Labels" switch (protocol 0.29.0's
+   * `showTaskLabels`, `selectShowTaskLabels`). Off draws no labels row. Kept
+   * apart from `showMetaRow` for the same reason as `showPriority`. Defaults
+   * true, the desktop default.
+   */
+  showLabels?: boolean;
+  /**
    * The task's priority level (protocol 0.28.0), from `priorityLevelFor`
    * against its project's scale: the equal-bar meter in the title row, after
    * the ticket number and before the PR glyph, as the desktop card draws it
@@ -153,6 +168,8 @@ export function TaskCard({
   waiting = null,
   automationsDisabled = false,
   showMetaRow = true,
+  showPriority = true,
+  showLabels = true,
   priorityLevel = null,
   onPress,
   onLongPress,
@@ -165,7 +182,7 @@ export function TaskCard({
   // to decide how many labels actually fit before falling back to "+N". The
   // labels have it to themselves: the priority is a meter in the title row.
   const [labelsRowWidth, setLabelsRowWidth] = useState<number | null>(null);
-  const priorityShown = showMetaRow && priorityLevel !== null;
+  const priorityShown = showMetaRow && showPriority && priorityLevel !== null;
   const visibleLabelCount =
     labelsRowWidth === null
       ? Math.min(task.labels.length, FALLBACK_LABEL_LIMIT)
@@ -180,14 +197,16 @@ export function TaskCard({
   const hasPr = showMetaRow && task.pr_number !== null;
   const prChip = prChipPresentation(task.pr_state, task.pr_merge_readiness);
   // A card with a priority and no labels has no labels row: the priority
-  // lives in the title row, so nothing else would hold the row open.
-  const hasMetaRow = showMetaRow && task.labels.length > 0;
+  // lives in the title row, so nothing else would hold the row open. The
+  // desktop's Labels switch off takes the row away the same way.
+  const hasMetaRow = showMetaRow && showLabels && task.labels.length > 0;
   const statusFooter = cardStatusFooter({
     display: sessionDisplay,
     usage,
     waiting,
     queuePlace: task.queue_place ?? null,
     startBlockedReason: task.start_blocked_reason ?? null,
+    pausedBy: task.paused_by ?? null,
     testID,
   });
   // The desktop's attachment count (#159 A1): only where its card has no

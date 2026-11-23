@@ -116,6 +116,75 @@ describe('ResumePanel', () => {
     });
   });
 
+  /**
+   * Protocol 0.29.0: who paused it, as one line under the button, in the
+   * desktop's words (desktop 4fe1dfbdb, `TaskDetailBody`'s `pauseNote`). The
+   * panel draws it only at rest, as the desktop does: not while a resume runs,
+   * not after one fails (that line speaks instead) and not beside a blocked
+   * start's tip.
+   *
+   * Mutations seen failing: `pauseNoteShown` forced false (the two drawn
+   * cases found no node), and the three rest conditions dropped from it (each
+   * hidden case found the node; each sets up only its own condition, so it
+   * fails for that one alone).
+   */
+  describe('the pause line', () => {
+    const IDLE_NOTE = 'Paused while idle.';
+    const HELD_NOTE = 'Stays paused until resumed.';
+
+    async function renderWithNote(props: Partial<React.ComponentProps<typeof ResumePanel>>): Promise<void> {
+      await render(
+        <ThemeProvider>
+          <ResumePanel taskId="task-1" projectId={BOARD_PROJECT_ID} attempt={null} {...props} />
+        </ThemeProvider>,
+      );
+    }
+
+    it.each([
+      ['an idle pause', IDLE_NOTE],
+      ['a held pause', HELD_NOTE],
+    ])('draws the line for %s under the Resume button', async (_label, note) => {
+      await renderWithNote({ pauseNote: note });
+
+      expect(screen.getByTestId('session-resume-pause-note')).toHaveTextContent(note);
+      expect(screen.getByTestId('session-resume-button')).toBeTruthy();
+    });
+
+    it('draws nothing for no note (the desktop\'s own pause, or an older desktop)', async () => {
+      await renderWithNote({ pauseNote: null });
+
+      expect(screen.queryByTestId('session-resume-pause-note')).toBeNull();
+    });
+
+    it('draws nothing while a resume runs', async () => {
+      await renderWithNote({ pauseNote: IDLE_NOTE, attempt: { phase: 'resuming', startedAt: 1, origin: 'open' } });
+
+      expect(screen.queryByTestId('session-resume-pause-note')).toBeNull();
+      expect(screen.getByText('Resuming agent...')).toBeTruthy();
+    });
+
+    it('gives way to the failure line after a resume fails', async () => {
+      await renderWithNote({ pauseNote: HELD_NOTE, attempt: { phase: 'failed', message: 'The desktop said no.' } });
+
+      expect(screen.queryByTestId('session-resume-pause-note')).toBeNull();
+      expect(screen.getByTestId('session-resume-error')).toHaveTextContent('The desktop said no.');
+    });
+
+    it('gives way to a blocked start\'s tip', async () => {
+      await renderWithNote({ pauseNote: HELD_NOTE, startBlockedTip: 'Its worktree folder is gone. Resume makes it again from the branch.' });
+
+      expect(screen.queryByTestId('session-resume-pause-note')).toBeNull();
+      expect(screen.getByTestId('session-resume-start-blocked')).toBeTruthy();
+    });
+
+    it('draws nothing for a task of a paused workflow, which offers View workflow alone', async () => {
+      await renderWithNote({ pauseNote: HELD_NOTE, pausedWorkflow: { workflowId: 'workflow-9', homeProjectId: HOME_PROJECT_ID } });
+
+      expect(screen.queryByTestId('session-resume-pause-note')).toBeNull();
+      expect(screen.getByTestId('session-view-workflow')).toBeTruthy();
+    });
+  });
+
   describe('for any other paused task', () => {
     it('keeps the Resume session button, with no View workflow beside it', async () => {
       await renderPanel();

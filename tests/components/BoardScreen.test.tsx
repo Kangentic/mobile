@@ -146,6 +146,8 @@ function seedBoard(): void {
         commandTerminalsOffered: false,
         earlierConversationsOffered: false,
         resumeOnOpenOffered: false,
+        showTaskPriority: true,
+        showTaskLabels: true,
         priorities: null,
       },
     },
@@ -719,6 +721,40 @@ describe('BoardScreen', () => {
       expect(screen.getByTestId('board-card-task-1')).toBeTruthy();
       expect(screen.queryByTestId('board-card-task-1-priority')).toBeNull();
     });
+
+    /**
+     * The desktop's card Priority and Labels switches (protocol 0.29.0) reach
+     * the Board through BoardTaskCard, which the Done column and the workflow
+     * canvas share. Mutation seen failing: dropping `showPriority=` /
+     * `showLabels=` from BoardTaskCard's TaskCard left both on the card.
+     */
+    it('hides the meter and the labels when the board turns the desktop\'s switches off', async () => {
+      seedPriority(4);
+      useBoardStore.setState((state) => {
+        const board = state.boardsByProjectId['project-1'];
+        return {
+          boardsByProjectId: {
+            ...state.boardsByProjectId,
+            'project-1': {
+              ...board,
+              showTaskPriority: false,
+              showTaskLabels: false,
+              tasksById: { 'task-1': { ...board.tasksById['task-1'], labels: ['backend'] } },
+            },
+          },
+        };
+      });
+      await render(
+        <ThemeProvider>
+          <BoardScreen />
+        </ThemeProvider>,
+      );
+
+      expect(screen.getByTestId('board-card-task-1')).toBeTruthy();
+      expect(screen.queryByTestId('board-card-task-1-priority')).toBeNull();
+      expect(screen.queryByTestId('board-card-task-1-labels')).toBeNull();
+      expect(screen.queryByText('backend')).toBeNull();
+    });
   });
 
   /**
@@ -1028,6 +1064,8 @@ describe('BoardScreen', () => {
           commandTerminalsOffered: false,
           earlierConversationsOffered: false,
           resumeOnOpenOffered: false,
+          showTaskPriority: true,
+          showTaskLabels: true,
           priorities: null,
         },
         'project-2': {
@@ -1043,6 +1081,8 @@ describe('BoardScreen', () => {
           commandTerminalsOffered: false,
           earlierConversationsOffered: false,
           resumeOnOpenOffered: false,
+          showTaskPriority: true,
+          showTaskLabels: true,
           priorities: null,
         },
       },
@@ -1094,6 +1134,8 @@ describe('BoardScreen', () => {
         commandTerminalsOffered,
         earlierConversationsOffered: false,
         resumeOnOpenOffered: false,
+        showTaskPriority: true,
+        showTaskLabels: true,
         priorities: null,
       };
     }
@@ -1230,6 +1272,8 @@ describe('BoardScreen', () => {
             commandTerminalsOffered: false,
             earlierConversationsOffered: false,
             resumeOnOpenOffered: false,
+            showTaskPriority: true,
+            showTaskLabels: true,
             priorities: null,
           },
         },

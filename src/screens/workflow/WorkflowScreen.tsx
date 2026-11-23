@@ -26,7 +26,7 @@ import { WorkflowGlyph } from '@/components/board/WorkflowGlyph';
 import { openProjectBoard } from '@/connection/actions';
 import { controlWorkflow, fetchWorkflowDetail } from '@/connection/workflowActions';
 import { priorityLevelFor } from '@/lib/priority';
-import { selectColumnsOrdered, selectPriorityScale, useBoardStore, type ProjectBoard } from '@/state/boardStore';
+import { selectColumnsOrdered, selectPriorityScale, selectShowTaskPriority, useBoardStore, type ProjectBoard } from '@/state/boardStore';
 import { selectWorkflowDetailRead, useWorkflowStore } from '@/state/workflowStore';
 import { normalizeWorkflowState, type WorkflowStateName } from '@/workflow/workflowState';
 import { WORKFLOW_DONE_SECTION_KEY, groupWorkflowMembers, type WorkflowMember, type WorkflowSection } from '@/workflow/workflowView';
@@ -364,7 +364,11 @@ function CompactTaskCard({ member, priority }: { member: WorkflowMember; priorit
   // The task's own board decides, as every other card's number does.
   const showTicketNumbers = useBoardStore((state) => state.boardsByProjectId[member.projectId]?.showTicketNumbers ?? true);
   const priorityScale = useBoardStore((state) => selectPriorityScale(state, member.projectId));
-  const priorityLevel = priorityLevelFor(priority, priorityScale);
+  // The desktop's card Priority switch (protocol 0.29.0) hides the meter here
+  // too, as on its Done card. This card draws no labels, so the Labels switch
+  // has nothing to hide.
+  const showPriority = useBoardStore((state) => selectShowTaskPriority(state, member.projectId));
+  const priorityLevel = showPriority ? priorityLevelFor(priority, priorityScale) : null;
   const cardTestID = `workflow-compact-${member.taskId ?? member.key}`;
   // A finished task opens its run, as a card in the Board's Done column does.
   // A planned task and one on an unloaded board have nothing to open yet.

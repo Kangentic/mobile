@@ -314,7 +314,8 @@ src/
                   #   agentWait: the desktop's wait-kind rule (protocol 0.26.0) that picks the
                   #   bubble, shield or envelope and the Command Terminal activity line, and the
                   #   protocol 0.28.0 card rules ported from the desktop: queuePlace, priority,
-                  #   startBlocked and taskArtifacts; plus priorityMeter, the equal-bar meter's
+                  #   startBlocked and taskArtifacts, and protocol 0.29.0's pausedBy (who paused
+                  #   a task, in the desktop's words); plus priorityMeter, the equal-bar meter's
                   #   rules from @kangentic/branding's meter.json, kangentic #1160)
 tests/
   unit/           # vitest (pure TS, no RN runtime) - includes the loopback-transport + stub-desktop-peer helpers

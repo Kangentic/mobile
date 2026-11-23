@@ -52,6 +52,18 @@ export function claimTaskOpen(taskId: string, now: number = Date.now()): boolean
   return now - open.notedAt <= TASK_OPEN_CLAIM_WINDOW_MS;
 }
 
+/**
+ * Whether an open of this task is waiting to be claimed, without claiming it.
+ * For a screen's FIRST render only, which runs before the effect that claims:
+ * `useResumeOnOpen` seeds its `openPending` from it, so the Resume panel does
+ * not draw its pause line for a frame on an open about to resume the task.
+ * Never a substitute for `claimTaskOpen`.
+ */
+export function isTaskOpenPending(taskId: string, now: number = Date.now()): boolean {
+  const open = pendingOpen;
+  return open !== null && open.taskId === taskId && now - open.notedAt <= TASK_OPEN_CLAIM_WINDOW_MS;
+}
+
 /** Called on every noted open, so a screen already mounted for that task can claim it. */
 export function subscribeTaskOpens(onOpen: () => void): () => void {
   subscribers.add(onOpen);

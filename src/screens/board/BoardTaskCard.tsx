@@ -8,7 +8,7 @@ import { cardSessionDisplay, toCardSession } from '@/components/board/cardSessio
 import { buildJourneyTrack } from '@/components/board/columnTrack';
 import { noteTaskOpened } from '@/navigation/taskOpenIntent';
 import { priorityLevelFor } from '@/lib/priority';
-import { selectPriorityScale, sessionlessTaskStatus, useBoardStore } from '@/state/boardStore';
+import { selectPriorityScale, selectShowTaskLabels, selectShowTaskPriority, sessionlessTaskStatus, useBoardStore } from '@/state/boardStore';
 import { useActivityStore, selectTaskRespawn, selectWaitingSince } from '@/state/activityStore';
 import { workflowStripLabel } from '@/workflow/workflowState';
 import { workflowWaitingFooter } from '@/workflow/workflowWaiting';
@@ -111,6 +111,10 @@ export const BoardTaskCard = React.memo(function BoardTaskCard({
   const projectName = useBoardStore((state) => state.projects.find((project) => project.id === projectId)?.name ?? null);
   const priorityScale = useBoardStore((state) => selectPriorityScale(state, projectId));
   const priorityLevel = priorityLevelFor(task.priority, priorityScale);
+  // The desktop's card Priority and Labels switches (protocol 0.29.0), which
+  // reach the Done column and workflow canvas cards through this card too.
+  const showPriority = useBoardStore((state) => selectShowTaskPriority(state, projectId));
+  const showLabels = useBoardStore((state) => selectShowTaskLabels(state, projectId));
 
   // Task-keyed, not session-keyed, and that is the entire point: during a
   // swap the task's session_id is null, so `activityEntry` above is null and
@@ -168,6 +172,8 @@ export const BoardTaskCard = React.memo(function BoardTaskCard({
       waiting={waiting}
       automationsDisabled={task.automations_disabled === true}
       priorityLevel={priorityLevel}
+      showPriority={showPriority}
+      showLabels={showLabels}
       onPress={openTask}
       onLongPress={onLongPress}
     />

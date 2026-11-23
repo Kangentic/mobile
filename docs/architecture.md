@@ -1408,7 +1408,12 @@ the desktop card's bottom-bar switch, strings verbatim): a still clock and "Queu
 and the desktop's own step ("Switching model...", "Creating worktree..."), a still pause circle and
 "Paused", or, for a running session that has not reported its model yet, a spinner and "Starting
 agent..." ("Resuming agent..." for a session the desktop spawned as a resume, the snapshot's
-`resuming`). An ended session has no footer. None of these lines draws a track under it, as the
+`resuming`). A paused card says who paused it from the row's `paused_by` (protocol 0.29.0,
+desktop 4fe1dfbdb, `src/lib/pausedBy.ts`): "Paused while idle" when the idle timeout paused it
+(`idle`), and "Paused" for a person's pause (`held`), the desktop's own (`system`: a quit, a column
+move, a settings restart), an unknown value, and an older desktop that sends none. The words say
+what happened and nothing more: whether an open resumes the task is the desktop's call.
+An ended session has no footer. None of these lines draws a track under it, as the
 desktop's status line has drawn none since d0aff06d4, so a card grows by the usage bar's track when
 its agent reports a model (task #141). A queued card says its place in line from the row's
 `queue_place` (protocol 0.28.0, `src/lib/queuePlace.ts`): "Next in line...", "1 task ahead...",
@@ -1443,7 +1448,17 @@ tall, 2 apart, radius 1, and unlit at 30%. The bar's height is the title's capit
 (meter.json's `alignment`), so the row's center alignment centers it. The meter is decorative;
 its wrapper carries "Priority: <level>" for a screen reader. The labels row holds labels only, so a
 card with a priority and no labels has no labels row. An older desktop sends no scale, so no meter
-draws. Two deviations from the desktop's row are forced: the PR keeps its glyph in the title row's
+draws. The desktop's Settings > Task > Cards Priority and Labels switches (protocol 0.29.0's
+`showTaskPriority` and `showTaskLabels` on the board snapshot, desktop 18f351747) hide the meter and
+the labels row on every card: the Board with its Done column, the Agents feed, workflow canvas cards
+and the workflow view's compact card. A hidden meter keeps no room, as for a task with no priority.
+They are `TaskCard`'s own `showPriority` and `showLabels`, apart from `showMetaRow`, because the
+switches leave the PR glyph and the attachment count alone. Each card reads its task's own board
+(`selectShowTaskPriority`, `selectShowTaskLabels`), which reads on until that board loads and when
+an older desktop sends neither key, the desktop default. The desktop raises no board event for its
+settings, so a change arrives with the next snapshot. Surfaces outside the card draw neither today
+(the long-press hub, the completed task), as the desktop's task window keeps both.
+Two deviations from the desktop's row are forced: the PR keeps its glyph in the title row's
 corner, where the desktop draws a PR pill in a link row under the title and keeps the corner for its
 Browser globe; and there is no globe, because the wire carries no browser state and the phone could
 not close a desktop Browser pane anyway.
@@ -1578,6 +1593,15 @@ the desktop then leaves paused (it decides whether a resume would start fresh on
 phase) and the 20 s bound all clear it to the plain Resume button with no error line, since an
 open is not a request the person can fail. A task whose last start never reached its agent shows the
 desktop's reason under the Resume button (`start_blocked_reason`, above).
+Otherwise the Resume panel puts one line under the button saying who paused the task (protocol
+0.29.0, the desktop task window's `pauseNote`): "Stays paused until resumed." for a person's pause,
+"Paused while idle." for the idle timeout's, and nothing for the desktop's own pause or an older
+desktop. It draws only at rest: not while a resume runs, not after one fails (that line speaks
+instead) and not beside a blocked start's reason. It is also held back while an open of the task
+waits to be decided (`useResumeOnOpen` returns `openPending`, seeded on the first render from the
+intent slot by `isTaskOpenPending`): a push tap waits for a board read on the current connection, and
+"Paused while idle." under the button for that wait would read as a declined open when the task is
+about to resume. So the idle line shows where the desktop's does: on a task an open did not resume.
 
 **Chat on a paused task** (protocol 0.26.0, named by 0.27.0). A `send-user-message` to a task's
 session with no running agent (paused, queued or exited) is HELD by the desktop for the task's next

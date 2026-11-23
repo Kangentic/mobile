@@ -39,6 +39,7 @@ import { ResumePanel } from './ResumePanel';
 import { QueuedPanel } from './QueuedPanel';
 import { RESUME_FAILED_MESSAGE, useResumeOffer } from './useResumeOffer';
 import { useResumeOnOpen } from './useResumeOnOpen';
+import { resumePauseNote } from '@/lib/pausedBy';
 import { startBlockedCopy } from '@/lib/startBlocked';
 import { pausedComposerSessionId, resolveCurrentSessionId } from './sessionResolution';
 import type { SessionMode } from './SessionModeToggle';
@@ -883,7 +884,7 @@ export function SessionScreen(): React.JSX.Element {
   // The resume on open (protocol 0.28.0): opening an idle-paused task resumes
   // it, as opening it on the desktop does. The panel then reads "Resuming
   // agent..." through the same attempt a Resume tap would make.
-  useResumeOnOpen({ taskId, projectId, offered: resumeOffer.offered });
+  const openPending = useResumeOnOpen({ taskId, projectId, offered: resumeOffer.offered });
   // A task of a paused workflow gets the same panel, holding View workflow in
   // place of the Resume the desktop would refuse (design screen 5).
   const resumePanelShown = (resumeOffer.offered || resumeOffer.pausedWorkflow !== null) && projectId !== null;
@@ -896,6 +897,10 @@ export function SessionScreen(): React.JSX.Element {
   // Why the last start never reached its agent (protocol 0.28.0), under Resume.
   const startBlockedReason = useBoardStore((state) => selectTaskRow(state, taskId)?.start_blocked_reason ?? null);
   const startBlockedTip = startBlockedCopy(startBlockedReason)?.tip ?? null;
+  // Who paused it (protocol 0.29.0), as one line under Resume. Held back while
+  // an open of this task waits to be decided: that open is about to resume it.
+  const pausedBy = useBoardStore((state) => selectTaskRow(state, taskId)?.paused_by ?? null);
+  const pauseNote = openPending ? null : resumePauseNote(pausedBy);
   const taskColumn = useBoardStore((state) => selectTaskColumn(state, taskId));
   // A failed Resume's line, wherever the user is looking: the terminal lens
   // has it in the Resume panel, so the footer carries it in the other two (a
@@ -1033,6 +1038,7 @@ export function SessionScreen(): React.JSX.Element {
                   attempt={resumeOffer.attempt}
                   pausedWorkflow={resumeOffer.pausedWorkflow}
                   startBlockedTip={startBlockedTip}
+                  pauseNote={pauseNote}
                 />
               ) : queuedPanelShown ? (
                 <QueuedPanel place={queuePlace} column={taskColumn} />

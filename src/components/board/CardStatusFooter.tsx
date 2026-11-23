@@ -3,6 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import { CircleExclamationPoint, CirclePause, Clock, LoaderCircle, Paperclip } from 'lucide-react-native';
 import type { BoardTaskQueuePlaceWire, SessionUsageWire } from '@kangentic/protocol';
 import { ContextUsageBar, Row, StatusSpinner, Text, useTheme } from '@/components';
+import { pausedFooterLabel } from '@/lib/pausedBy';
 import { queuedCardLabel, queuedCardTip } from '@/lib/queuePlace';
 import { startBlockedCopy, type StartBlockedCopy } from '@/lib/startBlocked';
 import type { WorkflowWaitingFooter } from '@/workflow/workflowWaiting';
@@ -20,7 +21,6 @@ const ATTACHMENT_GLYPH_GAP = 6;
 /** The desktop's wording, verbatim (TaskCard.tsx's bottom-bar switch). */
 const STARTING_AGENT_LABEL = 'Starting agent...';
 const RESUMING_AGENT_LABEL = 'Resuming agent...';
-const PAUSED_LABEL = 'Paused';
 
 export interface CardStatusFooterProps {
   display: CardSessionDisplay;
@@ -35,6 +35,8 @@ export interface CardStatusFooterProps {
   queuePlace?: BoardTaskQueuePlaceWire | null;
   /** The board row's `start_blocked_reason` (protocol 0.28.0): why its last start never reached an agent. */
   startBlockedReason?: string | null;
+  /** The board row's `paused_by` (protocol 0.29.0): who paused it, which picks a paused card's words (`pausedFooterLabel`). */
+  pausedBy?: string | null;
   /** The card's testID: the usage bar keys off it as `-usage`, a status bar as `-status-bar`. */
   testID: string;
 }
@@ -54,10 +56,14 @@ export interface CardStatusFooterProps {
  *     `queue_place`): "Next in line...", "1 task ahead...", "N tasks
  *     ahead...", or "Queued..." when no place is known. The desktop's hover
  *     tip ("Waiting for a slot in Merge.") becomes the accessibility label.
- *   - suspended: a still pause circle, "Paused"; or, when the row says its
+ *   - suspended: a still pause circle and "Paused", or "Paused while idle"
+ *     when the row says the idle timeout paused it (protocol 0.29.0's
+ *     `paused_by`, `pausedFooterLabel`; a person's or the desktop's own pause,
+ *     and an older desktop, keep "Paused"); or, when the row says its
  *     last start never reached an agent (`start_blocked_reason`), the
  *     desktop's warning words in its warning tone ("Worktree missing",
- *     "Folder missing", "Didn't start"), with the reason as the label
+ *     "Folder missing", "Didn't start"), with the reason as the label, in
+ *     place of either
  *   - exited: the same start-blocked words when the row carries a reason,
  *     else a workflow task's wait when it waits in To Do (a STILL spinner
  *     shape, since a task waiting on another is not loading, or the pause
@@ -84,6 +90,7 @@ export function cardStatusFooter({
   waiting = null,
   queuePlace = null,
   startBlockedReason = null,
+  pausedBy = null,
   testID,
 }: CardStatusFooterProps): React.JSX.Element | null {
   switch (display.kind) {
@@ -113,7 +120,7 @@ export function cardStatusFooter({
     case 'suspended': {
       const blocked = startBlockedCopy(startBlockedReason);
       if (blocked !== null) return <StartBlockedBar copy={blocked} testID={`${testID}-status-bar`} />;
-      return <StatusBar glyph="pause" label={PAUSED_LABEL} testID={`${testID}-status-bar`} />;
+      return <StatusBar glyph="pause" label={pausedFooterLabel(pausedBy)} testID={`${testID}-status-bar`} />;
     }
     case 'none':
     case 'exited': {

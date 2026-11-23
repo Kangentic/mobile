@@ -2242,6 +2242,10 @@ export function initialTasks(): BoardTaskWire[] {
       resumable: true,
       paused: true,
       paused_session_id: MOCK_PAUSED_SESSION_ID,
+      // The idle timeout paused it (protocol 0.29.0), which is the park this
+      // row's shape models, and what lets an open resume it (start-session's
+      // `trigger: 'open'` below). So its card reads "Paused while idle".
+      paused_by: 'idle',
       branch_name: 'feature/vault-token-migration',
       labels: ['backend', 'payments', 'migration', 'breaking-change'],
       pr_number: 103,
@@ -2628,6 +2632,9 @@ export function initialTasks2(): BoardTaskWire[] {
       paused: true,
       resumable: true,
       paused_session_id: MOCK_BLOCKED_START_SESSION_ID,
+      // A person's Pause (protocol 0.29.0). The blocked start replaces its
+      // words on the card and under Resume all the same.
+      paused_by: 'held',
       branch_name: 'chore/refund-reason-backfill',
       labels: ['payments'],
       start_blocked_reason: 'worktree-missing',
@@ -3411,6 +3418,7 @@ export function archivedTasksFor(projectId: string): BoardTaskWire[] {
         session_id: null,
         paused: true,
         paused_session_id: `${projectId}-archived-session-1`,
+        paused_by: 'system',
         archived_at: '2026-07-22T15:45:00.000Z',
       }),
       boardTaskFixture({
@@ -3443,6 +3451,9 @@ export function archivedTasksFor(projectId: string): BoardTaskWire[] {
       session_id: null,
       paused: true,
       paused_session_id: `${projectId}-archived-session-1`,
+      // The move into Done suspended it: the desktop's own pause (protocol
+      // 0.29.0). An archived card draws no footer, so nothing shows it.
+      paused_by: 'system',
       pr_number: 48,
       pr_url: 'https://github.com/Kangentic/kangentic-mobile/pull/48',
       pr_state: 'merged',
@@ -4371,6 +4382,9 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
         streamingTask.resumable = true;
         streamingTask.paused = true;
         streamingTask.paused_session_id = pausedSessionId;
+        // A person's Pause (protocol 0.29.0): "Paused" on the card, "Stays
+        // paused until resumed." under Resume.
+        streamingTask.paused_by = 'held';
       }
       setTaskSession(null);
     });
@@ -4411,6 +4425,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       task.session_id = null;
       task.paused = true;
       task.paused_session_id = pausedSessionId;
+      task.paused_by = 'held';
       task.resumable = !inDone;
       announceTaskUpdated(task, projectId);
     });
@@ -4513,6 +4528,8 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       task.resumable = false;
       task.paused = false;
       task.paused_session_id = null;
+      // Who paused it follows `paused` exactly (protocol 0.29.0).
+      task.paused_by = null;
       // A start that reached its agent clears the blocked reason (protocol
       // 0.28.0): the desktop sends one only while the task is paused or ended.
       task.start_blocked_reason = null;
@@ -4580,6 +4597,7 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
     task.resumable = false;
     task.paused = false;
     task.paused_session_id = null;
+    task.paused_by = null;
     task.updated_at = new Date().toISOString();
   }
 
@@ -5093,6 +5111,11 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
       // `trigger: 'open'` below), and the desktop's default priority scale.
       resumeOnOpenOffered: true,
       priorities: MOCK_PRIORITY_SCALE,
+      // Protocol 0.29.0: the desktop's card Priority and Labels switches, both
+      // at their default in both projects, so the rig and the store shelves
+      // look like most people's boards. The off state is covered by tests.
+      showTaskPriority: true,
+      showTaskLabels: true,
     } as unknown as JsonValue;
   }
 
@@ -5488,6 +5511,10 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
           // itself once the row leaves the board (reconcileSessionsFromBoards).
           located.task.paused = located.task.paused === true || located.task.session_id !== null;
           located.task.paused_session_id = located.task.paused_session_id ?? located.task.session_id;
+          // A suspend that names nobody keeps who paused first (protocol
+          // 0.29.0): an idle-paused task moved into Done still reads `idle`.
+          // A live agent suspended by the move is the desktop's own pause.
+          located.task.paused_by = located.task.paused_by ?? (located.task.session_id !== null ? 'system' : null);
           located.task.resumable = false;
           located.task.session_id = null;
           const archivedList = archivedDuringSession.get(located.projectId) ?? [];
@@ -5723,15 +5750,15 @@ export function createMockDesktop(options: CreateMockDesktopOptions = {}): MockD
           // The resume on open (protocol 0.28.0), as the desktop's
           // openTaskSession answers it: a live (or queued) session is `live`;
           // a task the idle timeout paused resumes; everything else is
-          // `not-eligible`, never an error. The idle-timeout shape here is a
-          // row the desktop parked IN PLACE (it still names its session); a
-          // person's Pause clears the row's session, which is the shape the
-          // desktop declines. A blocked start is declined too: there is no
-          // plain resume of a task whose worktree has to be made again.
+          // `not-eligible`, never an error. The row says which pause it was
+          // (protocol 0.29.0's `paused_by`): only `idle` resumes, so a
+          // person's Pause and the desktop's own are declined. A blocked start
+          // is declined too: there is no plain resume of a task whose worktree
+          // has to be made again.
           if (located.task.session_id !== null && located.task.resumable !== true) return ok(request, { ok: true, outcome: 'live' });
           if (startInFlight) return ok(request, { ok: true, outcome: 'starting' });
           const idlePaused =
-            located.task.resumable === true && located.task.session_id !== null && (located.task.start_blocked_reason ?? null) === null;
+            located.task.resumable === true && located.task.paused_by === 'idle' && (located.task.start_blocked_reason ?? null) === null;
           if (!idlePaused) return ok(request, { ok: true, outcome: 'not-eligible' });
           resumePausedTask(located.task, located.projectId);
           return ok(request, { ok: true, outcome: 'starting' });

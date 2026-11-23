@@ -188,6 +188,8 @@ describe('ProjectPickerScreen per-project agent counts', () => {
           commandTerminalsOffered: false,
           earlierConversationsOffered: false,
           resumeOnOpenOffered: false,
+          showTaskPriority: true,
+          showTaskLabels: true,
           priorities: null,
         },
       },

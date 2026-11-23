@@ -115,6 +115,8 @@ function seedStores(): void {
         commandTerminalsOffered: false,
         earlierConversationsOffered: false,
         resumeOnOpenOffered: false,
+        showTaskPriority: true,
+        showTaskLabels: true,
         priorities: null,
       },
     },
@@ -208,6 +210,8 @@ function seedTwoProjectBoards(): void {
         commandTerminalsOffered: false,
         earlierConversationsOffered: false,
         resumeOnOpenOffered: false,
+        showTaskPriority: true,
+        showTaskLabels: true,
         priorities: null,
       },
       'project-2': {
@@ -233,6 +237,8 @@ function seedTwoProjectBoards(): void {
         commandTerminalsOffered: false,
         earlierConversationsOffered: false,
         resumeOnOpenOffered: false,
+        showTaskPriority: true,
+        showTaskLabels: true,
         priorities: null,
       },
     },
@@ -417,6 +423,36 @@ describe('TriageHomeScreen', () => {
 
     const meter = screen.getByTestId('activity-row-sess-1-priority');
     expect(meter.props.accessibilityLabel).toBe('Priority: Urgent');
+  });
+
+  /**
+   * The desktop's card Priority and Labels switches (protocol 0.29.0) reach an
+   * Agents session card from the task's own board. Mutation seen failing:
+   * dropping `showPriority=` / `showLabels=` from ActivityRow's TaskCard left
+   * the meter and the labels on the card.
+   */
+  it('hides the meter and the labels on an Agents session card when the task\'s board turns them off', async () => {
+    seedTaskOnePriority();
+    useBoardStore.setState((state) => {
+      const board = state.boardsByProjectId['project-1'];
+      return {
+        boardsByProjectId: {
+          ...state.boardsByProjectId,
+          'project-1': {
+            ...board,
+            showTaskPriority: false,
+            showTaskLabels: false,
+            tasksById: { ...board.tasksById, 'task-1': { ...board.tasksById['task-1'], labels: ['backend'] } },
+          },
+        },
+      };
+    });
+    await renderHome();
+
+    expect(screen.getByTestId('activity-row-sess-1-title')).toBeTruthy();
+    expect(screen.queryByTestId('activity-row-sess-1-priority')).toBeNull();
+    expect(screen.queryByTestId('activity-row-sess-1-labels')).toBeNull();
+    expect(screen.queryByText('backend')).toBeNull();
   });
 
   it('falls back to a minimal card when a session outlives its board task entry', async () => {
@@ -2332,6 +2368,33 @@ describe('TriageHomeScreen', () => {
 
       const meter = screen.getByTestId('task-row-task-1-priority');
       expect(meter.props.accessibilityLabel).toBe('Priority: Urgent');
+    });
+
+    /**
+     * Mutation seen failing: dropping `showPriority=` / `showLabels=` from
+     * SessionlessTaskRow's TaskCard left the meter and the labels on the card.
+     */
+    it('hides the meter and the labels on a Paused card with no session when the board turns them off (protocol 0.29.0)', async () => {
+      makeTaskOneSessionless({ resumable: true, priority: 4, labels: ['backend'] });
+      seedTaskOnePriority();
+      useBoardStore.setState((state) => ({
+        boardsByProjectId: {
+          ...state.boardsByProjectId,
+          'project-1': { ...state.boardsByProjectId['project-1'], showTaskPriority: false, showTaskLabels: false },
+        },
+      }));
+      await renderHome();
+
+      expect(screen.getByTestId('task-row-task-1-title')).toBeTruthy();
+      expect(screen.queryByTestId('task-row-task-1-priority')).toBeNull();
+      expect(screen.queryByTestId('task-row-task-1-labels')).toBeNull();
+    });
+
+    it('reads "Paused while idle" on a Paused card the idle timeout paused (protocol 0.29.0)', async () => {
+      makeTaskOneSessionless({ resumable: true, paused: true, paused_by: 'idle' });
+      await renderHome();
+
+      expect(screen.getByTestId('task-row-task-1-status-bar-label')).toHaveTextContent('Paused while idle', { exact: true });
     });
 
     it('records an open for the task when the Paused card is tapped, and none for its long press', async () => {

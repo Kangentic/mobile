@@ -20,6 +20,18 @@ export interface ProjectBoard {
   /** The desktop's Layout "Ticket Numbers" setting; absent on the wire (pre-0.6.0 desktop) means true, the desktop default. */
   showTicketNumbers: boolean;
   /**
+   * The desktop's Settings > Task > Cards "Priority" and "Labels" switches
+   * (protocol 0.29.0): whether cards draw the priority meter and the labels
+   * row. Absent on the wire (an older desktop) means true, the desktop
+   * default. They hide each on the Board (Done included), the Agents feed and
+   * workflow cards. Surfaces outside the card (the long-press hub, the
+   * completed task) draw neither today, so the switches have nothing there to
+   * hide; the desktop's task window keeps both. A change arrives with the next
+   * snapshot: the desktop raises no board event for its settings.
+   */
+  showTaskPriority: boolean;
+  showTaskLabels: boolean;
+  /**
    * Which projection `tasksById` holds. 'sessions' carries only the tasks
    * with an agent on them, which is all the Agents feed draws; the Board tab
    * needs 'full' and must not paint until it has one. A pre-0.9.0 desktop
@@ -385,6 +397,8 @@ export const useBoardStore = create<BoardStoreState>((set, get) => ({
         tasksById: Object.fromEntries(snapshot.tasks.map((task) => [task.id, task])),
         snapshotAt: Date.now(),
         showTicketNumbers: snapshot.showTicketNumbers ?? true,
+        showTaskPriority: snapshot.showTaskPriority ?? true,
+        showTaskLabels: snapshot.showTaskLabels ?? true,
         // A desktop that echoes no view predates the projection and always
         // sends the whole board - absent means full, never "filtered, unknown".
         view: snapshot.view ?? 'full',
@@ -756,6 +770,29 @@ export function selectPriorityScale(
 ): PriorityLevelWire[] | null {
   if (projectId === null) return null;
   return state.boardsByProjectId[projectId]?.priorities ?? null;
+}
+
+/**
+ * Whether the project's cards draw the priority meter (protocol 0.29.0, the
+ * desktop's Priority switch). True until a snapshot says otherwise, so a card
+ * drawn before its board loads keeps the desktop default rather than blinking
+ * its meter in later.
+ */
+export function selectShowTaskPriority(
+  state: { boardsByProjectId: Record<string, ProjectBoard> },
+  projectId: string | null,
+): boolean {
+  if (projectId === null) return true;
+  return state.boardsByProjectId[projectId]?.showTaskPriority ?? true;
+}
+
+/** Whether the project's cards draw the labels row (protocol 0.29.0, the desktop's Labels switch). True until a snapshot says otherwise, as `selectShowTaskPriority`. */
+export function selectShowTaskLabels(
+  state: { boardsByProjectId: Record<string, ProjectBoard> },
+  projectId: string | null,
+): boolean {
+  if (projectId === null) return true;
+  return state.boardsByProjectId[projectId]?.showTaskLabels ?? true;
 }
 
 /**

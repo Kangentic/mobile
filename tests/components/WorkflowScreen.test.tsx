@@ -124,6 +124,8 @@ function seedBoard(workflowState = 'running', swimlaneOf: Record<string, string>
         commandTerminalsOffered: false,
         earlierConversationsOffered: false,
         resumeOnOpenOffered: false,
+        showTaskPriority: true,
+        showTaskLabels: true,
         priorities: null,
       },
     },
@@ -311,6 +313,44 @@ describe('WorkflowScreen', () => {
       expect(indexOf('workflow-compact-task-a-display-id')).toBeLessThan(indexOf('workflow-compact-task-a-priority'));
       expect(screen.queryByTestId('workflow-compact-plan-7-priority')).toBeNull();
       expect(screen.queryByTestId('workflow-compact-task-e-priority')).toBeNull();
+    });
+
+    /**
+     * The desktop's card Priority switch (protocol 0.29.0) hides the compact
+     * card's meter too, from the task's own board, and the number stays.
+     * Mutation seen failing: CompactTaskCard ignoring `selectShowTaskPriority`
+     * (the meter found after the switch went off).
+     */
+    it("hides a done task's priority meter when its board turns the Priority switch off", async () => {
+      const board = useBoardStore.getState().boardsByProjectId[HOME_PROJECT_ID];
+      if (!board) throw new Error('board not seeded');
+      useBoardStore.setState({
+        boardsByProjectId: {
+          [HOME_PROJECT_ID]: {
+            ...board,
+            priorities: [
+              { label: 'None', color: '#6b7280' },
+              { label: 'Low', color: '#3b82f6' },
+              { label: 'Medium', color: '#eab308' },
+              { label: 'High', color: '#f97316' },
+              { label: 'Urgent', color: '#ef4444' },
+            ],
+          },
+        },
+      });
+      patchHomeRows({ 'task-a': { priority: 3 } });
+      await renderWorkflow();
+      // Control: the meter is there while the switch is on.
+      expect(screen.getByTestId('workflow-compact-task-a-priority')).toBeTruthy();
+
+      const seeded = useBoardStore.getState().boardsByProjectId[HOME_PROJECT_ID];
+      if (!seeded) throw new Error('board not seeded');
+      await act(async () => {
+        useBoardStore.setState({ boardsByProjectId: { [HOME_PROJECT_ID]: { ...seeded, showTaskPriority: false } } });
+      });
+
+      expect(screen.queryByTestId('workflow-compact-task-a-priority')).toBeNull();
+      expect(screen.getByTestId('workflow-compact-task-a-display-id')).toBeTruthy();
     });
 
     it('opens the long-press hub for a card\'s task on its own board', async () => {
