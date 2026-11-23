@@ -1,1 +1,6 @@
-This update brings stability fixes and updated libraries throughout the app.
+- A card's priority now shows as a bar meter in its title row, as on the desktop.
+- The Terminals sheet lists your earlier Command Terminal conversations, and a tap resumes one.
+
+With the next desktop update:
+- A task the idle timeout paused reads "Paused while idle".
+- The desktop's card Priority and Labels switches hide them on the phone too.
