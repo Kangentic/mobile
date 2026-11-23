@@ -35,12 +35,14 @@
  * in this file.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import { afterEach, describe, expect, it } from 'vitest';
+
+import { resolveBashExecutable } from '../helpers/bash';
 
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url)).replaceAll('\\', '/');
 const workflowPath = `${repositoryRoot}.github/workflows/ci.yml`;
@@ -113,25 +115,6 @@ function scriptWithoutGitShow(script: string): string {
     GIT_SHOW_LINE,
     '# git show replaced by the test harness: base-app.config.ts is pre-written to $RUNNER_TEMP instead of being fetched from git.',
   );
-}
-
-/**
- * On Windows, `bash` on PATH is usually WSL's, which cannot open a `C:/...`
- * path and fails with a "No such file or directory" that reads like a missing
- * file rather than a wrong interpreter. Git Bash can. Paths come from the
- * environment rather than being hardcoded (.claude/rules/no-personal-info.md).
- */
-function resolveBashExecutable(): string | null {
-  if (process.platform !== 'win32') {
-    return 'bash';
-  }
-  const candidates = [
-    process.env.KANGENTIC_BASH,
-    join(process.env.ProgramFiles ?? 'C:\\Program Files', 'Git', 'bin', 'bash.exe'),
-    join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Git', 'bin', 'bash.exe'),
-  ].filter((candidate): candidate is string => Boolean(candidate));
-
-  return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
 
 const bashExecutable = resolveBashExecutable();
