@@ -67,7 +67,12 @@ app_path="${1:?usage: capture-ios-screenshots.sh <path to .app> <bundle id> <out
 bundle_id="${2:?missing bundle id}"
 output_directory="${3:?missing output directory}"
 
-# The 6.9-inch shelf. Both models render 440x956pt at @3x = 1320x2868.
+# The 6.9-inch shelf. The iPhone 17 and 16 Pro Max render 440x956pt at @3x =
+# 1320x2868. The iPhone 18 Pro Max is preferred first only because the xcode-27
+# runner image carries neither of the other two; its size is UNVERIFIED until a
+# capture run passes the assertion at the end of this script. If it fails that
+# assertion, create a 17 Pro Max from its device type with `simctl create`; do
+# not loosen the size check.
 REQUIRED_WIDTH=1320
 REQUIRED_HEIGHT=2868
 
@@ -81,6 +86,7 @@ devices_json="${RUNNER_TEMP:-/tmp}/simulator-devices.json"
 xcrun simctl list devices available --json > "$devices_json"
 
 device_id="$(node scripts/pickIosSimulator.mjs "$devices_json" \
+  --prefer 'iPhone 18 Pro Max' \
   --prefer 'iPhone 17 Pro Max' \
   --prefer 'iPhone 16 Pro Max' || true)"
 

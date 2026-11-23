@@ -910,7 +910,7 @@ The build and test workflows in `.github/workflows/` (alongside `cla.yml`, the C
 | `ci.yml` | every PR, push to `main` | `ubuntu-24.04` (`macos-15-intel` for the NSE crypto job) | lint (plus `sync:branding:check` for brand-asset drift), typecheck, the unit tier (unsharded) and the sharded component tier, native config, the NSE crypto swiftc check, and the release-counter preflight on PRs |
 | `e2e.yml` (workflow name: `Emulator`) | every PR, push to `main` | `ubuntu-24.04` | builds the e2e APK, runs `.maestro/smoke.yaml` (the required gate) and `.maestro/paired` (advisory) on separate emulators |
 | `build-android.yml` | `workflow_dispatch`, `v*` tags | `ubuntu-24.04` | signed APK/AAB, optional Play submit, then the Play listing screenshots after a full production release |
-| `build-ios.yml` | `workflow_dispatch` | `macos-latest` | unsigned simulator compile check, or a signed `.ipa` with an optional TestFlight upload, or (`-f submit=appstore`) the upload plus the two App Store stages. `-f screenshots=true` instead captures the App Store 6.9-inch listing frames on a booted simulator (experimental, ~45 min per attempt) |
+| `build-ios.yml` | `workflow_dispatch` | `xcode-27` for the two compile jobs, `macos-latest` for the TestFlight upload, `ubuntu-24.04` for the App Review stage | unsigned simulator compile check, or a signed `.ipa` with an optional TestFlight upload, or (`-f submit=appstore`) the upload plus the two App Store stages. `-f screenshots=true` instead captures the App Store 6.9-inch listing frames on a booted simulator (experimental, ~45 min per attempt) |
 | `app-store-check.yml` | `workflow_dispatch` | `ubuntu-24.04` | read-only preflight for `submit=appstore` (`prepareAppStoreRelease.mjs --mode check`), including the listing screenshots against the committed frames; writes nothing |
 | `store-listing.yml` | `workflow_dispatch` | `ubuntu-24.04` | the committed listing screenshots against both stores: `mode=check` reads only, `mode=sync` uploads behind each store's release environment. See "Getting the frames onto the listings" |
 
@@ -921,13 +921,16 @@ that rolls out a release's build job and its E2E gate could each land on a diffe
 commit to show for it. `tests/unit/buildWorkflow.test.ts` fails on any Linux job that is not on the
 pinned label. To move to a newer image: dispatch `e2e.yml` and `build-android.yml` once on a branch
 that names it, and if both are green, change the label in every workflow and the test together.
-The macOS jobs in `build-ios.yml` stay on `macos-latest`: no migration of that label is announced,
-and pinning it would not hold Xcode still anyway, since `build-ios.yml` builds with the image's
-default Xcode and the image changes that default within a macOS version. The one exception is
-`NSE crypto (swiftc)` in `ci.yml`, which runs on `macos-15-intel`: `macos-latest` is the arm64 pool,
-which GitHub flagged as capacity constrained, and on 2026-11-17 that job was cancelled twice with
-no runner ("not acquired by Runner of type hosted even after multiple attempts"). It compiles plain
-Swift with `swiftc`, so the CPU changes nothing it proves.
+The macOS jobs are not on one label. The two jobs in `build-ios.yml` that compile (`simulator` and
+`device`) run on `xcode-27` and select a pinned Xcode point release, `IOS_XCODE_VERSION`, because
+Apple's ITMS-90725 requires the iOS 27 SDK from April 2027 and the `macos-latest` image carries no
+Xcode 27. See "The SDK comes with the runner image" in the iOS without a Mac section. Its TestFlight
+upload job stays on `macos-latest`, because it compiles nothing. `NSE crypto (swiftc)` in `ci.yml`
+runs on `macos-15-intel`: `macos-latest` is the arm64 pool, which GitHub flagged as capacity
+constrained, and on 2026-11-17 that job was cancelled twice with no runner ("not acquired by Runner
+of type hosted even after multiple attempts"). It compiles plain Swift with `swiftc`, so the CPU
+changes nothing it proves. It stays off `xcode-27`, which has no Intel image: it uploads nothing,
+so 90725 does not reach it.
 
 ### What each check on a PR means
 
@@ -1823,7 +1826,7 @@ carries no "Required" badge, which is how the checks list says it cannot block a
 section claimed EAS Workflows on cloud iOS simulators was "the only supported path to iOS E2E
 without a Mac". That was never true in practice: there is no `.eas/workflows/` directory in this
 repo on any branch, so nothing was ever wired. The route it dismissed is the one that works:
-`build-ios.yml -f screenshots=true` boots a simulator on a free `macos-latest` runner with
+`build-ios.yml -f screenshots=true` boots a simulator on a free `xcode-27` runner with
 `xcrun simctl` and drives `.maestro/screenshots/store-capture.yaml` through seven screens by testID,
 with no Apple Developer account and no EAS spend. That is how the WKWebView terminal was finally
 executed on iOS, and it renders.
@@ -2573,15 +2576,55 @@ as depending on EAS to build with them.
 breaks. It costs one of the 15 free monthly iOS cloud builds and enters a low-priority queue that
 can take hours, which is precisely why it is the fallback and not the path.
 
-**The SDK comes with the runner image, and Apple has set a deadline on it.** The jobs run on
-`macos-latest` with whatever Xcode that image defaults to: for v1.5.1 build 25 that was the
-`macos-26-arm64` image, Xcode 26.6 and the iOS 26.5 SDK. The upload of that build (run
-44440772099) carried Apple's warning 90725: starting April 2027, apps must be built with the iOS 27
-SDK or later (Xcode 27 or later) to be uploaded or submitted. Nothing fails today. Before April
-2027, read a `build-ios.yml` run's `Device (signed .ipa)` job: the Runner Image group in its setup
-names the image, and the `xcodebuild archive` line names the Xcode
-(`/Applications/Xcode_<version>.app`). If the image has not moved to Xcode 27 by then, the workflow
-has to select it.
+**The SDK comes with the runner image, and Apple has set a deadline on it.** v1.5.1 build 25 (run
+44440772099) and v1.6.0 build 26 (run 45114271164) were built on `macos-latest`, the
+`macos-26-arm64` image, with Xcode 26.6 and the iOS 26.5 SDK. Both uploads drew Apple's warning
+ITMS-90725: from April 2027, App Store Connect refuses an upload or submission that was not built
+with the iOS 27 SDK or later (Xcode 27 or later). An earlier version of this paragraph said that if
+the image had not moved by then, "the workflow has to select it". That was wrong. The `macos-26`
+image carries Xcode 26.0.1 through 26.6 and no Xcode 27 at all, so no `xcode-select` on it can help.
+Xcode 27 ships only on a separate runner LABEL, `xcode-27` (arm64 only, on a macOS 27 base).
+
+So the fix (task #163) is a label plus a pin:
+
+- **The label.** The two jobs that compile, `simulator` and `device`, run on `runs-on: xcode-27`.
+  The upload jobs compile nothing and stay where they were: `submit-testflight` on `macos-latest`
+  (altool) and `submit-app-review` on `ubuntu-24.04`.
+- **The pin.** The first step of each compile job, `Select the pinned Xcode`, runs `xcode-select` on
+  `/Applications/Xcode_<IOS_XCODE_VERSION>.app`. `IOS_XCODE_VERSION` is set once at the top of
+  `build-ios.yml` to 27.1, the version Expo's own `sdk-58` EAS image builds with. It is a point
+  release rather than the image default because the default moves with image updates, and that
+  would change the compiler between two builds of the same commit. If the pinned Xcode is missing
+  from the image, the step fails and lists what is installed. It never falls back.
+- **The guard.** `.github/scripts/verify-ios-sdk.sh` reads `DTSDKName`, `DTPlatformVersion` and
+  `DTXcode` from the built app's `Info.plist`, and `scripts/checkIosSdk.mjs` fails the run when the
+  SDK or the Xcode major is below `MINIMUM_IOS_SDK_MAJOR` (27). It runs in three places:
+  - the simulator job, so the weekly cron catches a drift first
+  - `verify-ios-signature.sh` in the device job, on the exported `.ipa`
+  - `verify-ios-signature.sh` again in `submit-testflight`, right before altool
+- **The test.** `tests/unit/buildWorkflow.test.ts` holds the two `runs-on` labels and
+  `IOS_XCODE_VERSION` to the same major, and that major to the floor. A `runs-on` edit back to
+  `macos-latest` therefore fails on the pull request rather than in an Apple email.
+
+The EAS fallback needs none of this: Expo's `sdk-58` and `latest` images already build with Xcode
+27.1.
+
+**Moving to the next Xcode:**
+
+1. Change both `runs-on` labels and `IOS_XCODE_VERSION` in one commit. `runs-on` cannot read `env`,
+   so they are separate literals, and the unit test fails if they disagree.
+2. Expect one cold `pod install`. The CocoaPods cache key and its `restore-keys` carry
+   `IOS_XCODE_VERSION`, so Pods prepared by one Xcode never restore into a build by another.
+3. When Apple raises the floor, raise `MINIMUM_IOS_SDK_MAJOR` in `scripts/checkIosSdk.mjs`.
+
+To see what a build actually used, read the `Select the pinned Xcode` step, which names the Xcode
+and the iOS SDK, and the `iOS SDK floor` line, which prints the three stamps.
+
+Linking against the iOS 27 SDK also changes behaviour. Expo's SDK 58 changelog says iOS 27 requires
+the scene-based lifecycle (already generated here) and "makes iPhone apps resizable", and that
+`requireFullScreen` no longer opts an app out of resizing. `app.config.ts` sets
+`orientation: 'portrait'` and `supportsTablet: false`, so check on an iOS 27 device that the app
+stays portrait or resizes cleanly when rotated.
 
 `cli.appVersionSource: "local"` is a CLI-wide setting, not an Android-only one, so `ios.buildNumber`
 in `app.config.ts` is hand-bumped for the same reason `android.versionCode` is. App Store Connect

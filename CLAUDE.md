@@ -346,6 +346,10 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   profiles through it), androidAbis.mjs, checkInstallDrift.mjs (the
                   #   pretypecheck stale-node_modules guard), the store preflights
                   #   checkPlayVersionCode.mjs / checkAppStoreBuild.mjs,
+                  #   checkIosSdk.mjs (the ITMS-90725 SDK floor: build-ios.yml
+                  #   holds every built app to it through
+                  #   .github/scripts/verify-ios-sdk.sh, and its
+                  #   MINIMUM_IOS_SDK_MAJOR is the one place the floor lives),
                   #   prepareAppStoreRelease.mjs (the two App Store stages of
                   #   `build-ios.yml -f submit=appstore`: prepare, then submit; the
                   #   `screenshots` mode that puts the committed iPhone frames on the
