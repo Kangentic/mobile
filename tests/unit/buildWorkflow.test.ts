@@ -25,12 +25,17 @@
  * because a Linux job left on `ubuntu-latest` changes image with no commit.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { MINIMUM_IOS_SDK_MAJOR } from '../../scripts/checkIosSdk.mjs';
+import { resolveBashExecutable } from '../helpers/bash';
+
+const bashExecutable = resolveBashExecutable();
 
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 const workflowPath = `${repositoryRoot}.github/workflows/build-android.yml`;
@@ -975,7 +980,8 @@ describe('build-ios crash-test probe', () => {
 describe('build-ios simulator compile cost', () => {
   it('builds one simulator architecture, not both', () => {
     // `generic/platform=iOS Simulator` resolves ARCHS to `arm64 x86_64`, and
-    // macos-latest is arm64, so the x86_64 half is compiled and discarded.
+    // the xcode-27 runners are arm64 only, so the x86_64 half is compiled and
+    // discarded. (Measured on macos-latest, which was arm64 too.)
     // MEASURED on run 30464295817: 4664 Objects-normal/x86_64 outputs against
     // 5335 arm64, all under Pods.build, in a 21m 07s step. The app target
     // already excluded x86_64; the pod targets did not, and only a
@@ -1007,6 +1013,219 @@ describe('build-ios simulator compile cost', () => {
     // depends on. The device job's own Pods cache had already been evicted when
     // this was measured, so it was costing budget and returning nothing.
     expect(withoutComments(readIosJob('simulator'))).not.toContain('actions/cache');
+  });
+});
+
+/**
+ * ITMS-90725: from April 2027 App Store Connect refuses an upload that was not
+ * built with the iOS 27 SDK. Builds 25 and 26 were built on `macos-latest`, whose
+ * image carries no Xcode 27 at all, so the fix is a runner LABEL plus a pinned
+ * point release. This group holds the two together, and both to the floor that
+ * scripts/checkIosSdk.mjs enforces on the built app. A `runs-on` edit back to an
+ * older label fails here, on the pull request, instead of in an Apple email after
+ * an upload.
+ *
+ * Read through parseYaml and withoutComments: the workflow's own comments name
+ * both `xcode-27` and `macos-latest`, so a raw text match would stay green with
+ * the setting deleted.
+ */
+describe('build-ios toolchain pin (ITMS-90725)', () => {
+  interface ToolchainStep {
+    name?: string;
+    run?: string;
+    uses?: string;
+    with?: Record<string, string>;
+  }
+  interface ToolchainJob {
+    'runs-on'?: string;
+    steps?: ToolchainStep[];
+  }
+  const toolchainWorkflow = parseYaml(iosWorkflowSource) as {
+    env?: Record<string, string>;
+    jobs: Record<string, ToolchainJob>;
+  };
+  const compileJobs = ['simulator', 'device'];
+  const pinnedXcode = String(toolchainWorkflow.env?.IOS_XCODE_VERSION ?? '');
+  const pinnedXcodeMajor = pinnedXcode.split('.')[0];
+
+  function selectStepIndex(steps: ToolchainStep[]): number {
+    return steps.findIndex((step) => withoutComments(step.run ?? '').includes('sudo xcode-select -s "$xcode_app"'));
+  }
+
+  it('pins a point release of Xcode, at or above the SDK floor', () => {
+    expect(pinnedXcode).toMatch(/^\d+\.\d+(\.\d+)?$/);
+    expect(Number(pinnedXcodeMajor)).toBeGreaterThanOrEqual(MINIMUM_IOS_SDK_MAJOR);
+  });
+
+  it.each(compileJobs)('runs the %s job on the xcode label of the pinned major', (jobName) => {
+    const runner = toolchainWorkflow.jobs[jobName]['runs-on'] ?? '';
+    const labelMatch = /^xcode-(\d+)$/.exec(runner);
+    expect(labelMatch, `build-ios.yml job "${jobName}" runs on "${runner}"`).not.toBeNull();
+    expect(labelMatch?.[1]).toBe(pinnedXcodeMajor);
+  });
+
+  it.each(compileJobs)('selects the pinned Xcode in the %s job before CocoaPods runs', (jobName) => {
+    const steps = toolchainWorkflow.jobs[jobName].steps ?? [];
+    const selectIndex = selectStepIndex(steps);
+    const podInstallIndex = steps.findIndex((step) => (step.run ?? '').trim() === 'pod install');
+    expect(selectIndex).toBeGreaterThan(-1);
+    expect(podInstallIndex).toBeGreaterThan(selectIndex);
+
+    const selectRun = withoutComments(steps[selectIndex].run ?? '');
+    expect(selectRun).toContain('/Applications/Xcode_${IOS_XCODE_VERSION}.app');
+    // A missing pinned Xcode must fail, never fall back to the image default.
+    expect(selectRun).toContain('exit 1');
+  });
+
+  it('keeps the two select steps identical', () => {
+    const [simulatorSelect, deviceSelect] = compileJobs.map((jobName) => {
+      const steps = toolchainWorkflow.jobs[jobName].steps ?? [];
+      return withoutComments(steps[selectStepIndex(steps)]?.run ?? '');
+    });
+    expect(simulatorSelect).not.toBe('');
+    expect(deviceSelect).toBe(simulatorSelect);
+  });
+
+  it('prefers the iPhone 18, 17 then 16 Pro Max simulator for the screenshot capture, in that order', () => {
+    // The first available preference wins, so the order is the behaviour: the
+    // xcode-27 image carries an iPhone 18 simulator, and the older two keep the
+    // capture working if the label ever moves back.
+    const captureScript = withoutComments(readIosScript('capture-ios-screenshots.sh'));
+    const preferred = [...captureScript.matchAll(/--prefer '([^']+)'/g)].map((match) => match[1]);
+    expect(preferred).toEqual(['iPhone 18 Pro Max', 'iPhone 17 Pro Max', 'iPhone 16 Pro Max']);
+  });
+
+  describe.skipIf(!bashExecutable)('the Select the pinned Xcode step, executed', () => {
+    // The step's body is run as written, from the parsed YAML. Only the
+    // /Applications prefix is redirected into a sandbox, because the test cannot
+    // create /Applications, and sudo, xcodebuild, xcode-select and xcrun are
+    // stubbed on PATH. A substring check cannot pin the two guards apart: each
+    // has its own `exit 1`, so either satisfies one on its own.
+    // A list, not one slot: a test that loops over versions makes a sandbox per run.
+    const sandboxDirectories: string[] = [];
+
+    afterEach(() => {
+      while (sandboxDirectories.length > 0) {
+        const directory = sandboxDirectories.pop();
+        if (directory) rmSync(directory, { recursive: true, force: true });
+      }
+    });
+
+    function writeStub(binDirectory: string, name: string, body: string): void {
+      const stubPath = join(binDirectory, name);
+      writeFileSync(stubPath, `#!/bin/sh\n${body}\n`, 'utf8');
+      chmodSync(stubPath, 0o755);
+    }
+
+    function runSelectStep(
+      jobName: string,
+      options: { installedXcodeDirectory: string | null; reportedVersionLine: string }
+    ): { status: number; stdout: string } {
+      if (!bashExecutable) throw new Error('resolveBashExecutable returned null; the suite should have been skipped.');
+      const steps = toolchainWorkflow.jobs[jobName].steps ?? [];
+      const stepBody = steps[selectStepIndex(steps)]?.run ?? '';
+
+      const sandboxDirectory = mkdtempSync(join(tmpdir(), 'select-xcode-'));
+      sandboxDirectories.push(sandboxDirectory);
+      const applicationsDirectory = join(sandboxDirectory, 'Applications').replaceAll('\\', '/');
+      mkdirSync(applicationsDirectory);
+      if (options.installedXcodeDirectory !== null) {
+        mkdirSync(join(applicationsDirectory, options.installedXcodeDirectory));
+      }
+      const sandboxedBody = stepBody.replaceAll('/Applications/', `${applicationsDirectory}/`);
+      // Fails loudly if the step stops spelling its paths this way, rather than
+      // running against the real /Applications.
+      expect(sandboxedBody, 'the step body reaches /Applications').not.toBe(stepBody);
+      expect(sandboxedBody).not.toContain('"/Applications/');
+
+      const binDirectory = join(sandboxDirectory, 'bin');
+      mkdirSync(binDirectory);
+      writeStub(binDirectory, 'sudo', 'exit 0');
+      writeStub(binDirectory, 'xcode-select', 'echo /stub/xcode/Developer');
+      writeStub(binDirectory, 'xcrun', 'echo 27.1');
+      writeStub(binDirectory, 'xcodebuild', 'printf \'%s\\nBuild version 99Z\\n\' "$STUB_XCODE_VERSION_LINE"');
+      const scriptPath = join(sandboxDirectory, 'step.sh');
+      writeFileSync(scriptPath, sandboxedBody, 'utf8');
+
+      try {
+        const stdout = execFileSync(bashExecutable, [scriptPath.replaceAll('\\', '/')], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: {
+            ...process.env,
+            PATH: `${binDirectory}${delimiter}${process.env.PATH ?? ''}`,
+            IOS_XCODE_VERSION: '27.1',
+            STUB_XCODE_VERSION_LINE: options.reportedVersionLine,
+          },
+        });
+        return { status: 0, stdout };
+      } catch (error) {
+        const failed = error as { status?: number; stdout?: string };
+        return { status: failed.status ?? -1, stdout: failed.stdout ?? '' };
+      }
+    }
+
+    it.each(compileJobs)('%s: fails when the pinned Xcode is not installed, naming what is', (jobName) => {
+      // xcodebuild would report the right version, so only the existence guard can fail this.
+      const run = runSelectStep(jobName, {
+        installedXcodeDirectory: 'Xcode_26.6.app',
+        reportedVersionLine: 'Xcode 27.1',
+      });
+      expect(run.status).toBe(1);
+      expect(run.stdout).toContain('is not on this runner image');
+      expect(run.stdout).toContain('Xcode_26.6.app');
+    });
+
+    it.each(compileJobs)('%s: fails when the selected Xcode reports a different version', (jobName) => {
+      // The directory exists, so only the version check can fail this. 27.10 is
+      // the case a prefix match without the dot would let through.
+      for (const reportedVersionLine of ['Xcode 27.10', 'Xcode 26.6']) {
+        const run = runSelectStep(jobName, { installedXcodeDirectory: 'Xcode_27.1.app', reportedVersionLine });
+        expect(run.status, reportedVersionLine).toBe(1);
+        expect(run.stdout, reportedVersionLine).toContain('rather than Xcode 27.1');
+      }
+    });
+
+    it.each(compileJobs)('%s: passes for the pinned Xcode and its patch releases', (jobName) => {
+      for (const reportedVersionLine of ['Xcode 27.1', 'Xcode 27.1.1']) {
+        const run = runSelectStep(jobName, { installedXcodeDirectory: 'Xcode_27.1.app', reportedVersionLine });
+        expect(run.status, reportedVersionLine).toBe(0);
+        expect(run.stdout, reportedVersionLine).toContain(`Selected ${reportedVersionLine}`);
+      }
+    });
+  });
+
+  it('leaves the TestFlight upload on macos-latest, since it compiles nothing', () => {
+    // And it must not try to select an Xcode its image does not carry.
+    expect(toolchainWorkflow.jobs['submit-testflight']['runs-on']).toBe('macos-latest');
+    expect(selectStepIndex(toolchainWorkflow.jobs['submit-testflight'].steps ?? [])).toBe(-1);
+  });
+
+  it('keys the device Pods cache, and its restore prefix, on the pinned Xcode', () => {
+    // runner.os is `macOS` on every image, so a key without the Xcode restored
+    // Pods prepared by the previous one on the first build after a move.
+    const cacheStep = (toolchainWorkflow.jobs.device.steps ?? []).find((step) =>
+      String(step.uses ?? '').startsWith('actions/cache@')
+    );
+    expect(cacheStep?.with?.key).toContain('${{ env.IOS_XCODE_VERSION }}');
+    expect(cacheStep?.with?.['restore-keys']).toContain('${{ env.IOS_XCODE_VERSION }}');
+  });
+
+  it('checks the built SDK in the simulator job, after the app bundle is verified', () => {
+    const steps = toolchainWorkflow.jobs.simulator.steps ?? [];
+    const bundleIndex = steps.findIndex((step) => step.name === 'Verify an app bundle was produced');
+    const sdkIndex = steps.findIndex((step) =>
+      withoutComments(step.run ?? '').includes('bash .github/scripts/verify-ios-sdk.sh')
+    );
+    expect(bundleIndex).toBeGreaterThan(-1);
+    expect(sdkIndex).toBeGreaterThan(bundleIndex);
+  });
+
+  it('checks the built SDK inside the .ipa verification the device and submit jobs run', () => {
+    expect(withoutComments(readIosScript('verify-ios-signature.sh'))).toContain(
+      'bash .github/scripts/verify-ios-sdk.sh "$app_path"'
+    );
+    expect(withoutComments(readIosScript('verify-ios-sdk.sh'))).toContain('node scripts/checkIosSdk.mjs');
   });
 });
 

@@ -234,6 +234,14 @@ if [ "$nse_short_version" != "$short_version" ] || [ "$nse_build_number" != "$bu
   fail "The extension is $nse_short_version ($nse_build_number) but the app is $short_version ($build_number). App Store Connect rejects a mismatched pair at upload."
 fi
 
+# 8. The SDK it was built with (ITMS-90725). Builds 25 and 26 were built with the
+#    iOS 26.5 SDK and drew Apple's warning by email, after the upload; from April
+#    2027 App Store Connect refuses such an upload outright. This script runs in
+#    the device job after the export and again in submit-testflight on the
+#    downloaded .ipa, so the floor is checked right before altool. Its own script
+#    so the simulator job can run the same check on its .app.
+bash .github/scripts/verify-ios-sdk.sh "$app_path"
+
 echo "Verified a distribution-signed .ipa:"
 echo "  bundle id     $info_bundle_id"
 echo "  version       $short_version (build $build_number)"

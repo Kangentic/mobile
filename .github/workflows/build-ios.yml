@@ -23,6 +23,13 @@ name: Build iOS
 #
 # Dispatch only, deliberately. A native iOS build is 20 to 40 minutes, which is
 # far too slow for a PR gate; ci.yml stays the gate.
+#
+# The two jobs that COMPILE (simulator, device) run on the `xcode-27` runner
+# label and select the Xcode point release pinned by IOS_XCODE_VERSION below. The
+# upload jobs compile nothing and stay where they were. Apple's ITMS-90725 is the
+# reason: from April 2027 App Store Connect refuses an upload that was not built
+# with the iOS 27 SDK, and `macos-latest` (the macos-26 image) carries no Xcode 27.
+# See "The SDK comes with the runner image" in docs/developer-guide.md.
 
 on:
   workflow_dispatch:
@@ -104,6 +111,17 @@ env:
   # bumping means editing both plus .claude/rules/e2e-maestro-runs.md together.
   MAESTRO_VERSION: '2.12.1'
   MAESTRO_CLI_NO_ANALYTICS: '1'
+  # The Xcode the two compile jobs select, by point release. Pinned rather than
+  # left to the image default, which moves between image updates and would change
+  # the compiler between two builds of the same commit. 27.1 is the version Expo's
+  # own sdk-58 EAS image builds with.
+  #
+  # It must exist on the image the compile jobs' `runs-on: xcode-<major>` label
+  # provides, and `runs-on` cannot read env, so change the label and this value
+  # together. tests/unit/buildWorkflow.test.ts holds both to the SDK floor in
+  # scripts/checkIosSdk.mjs. Workflow-level so the two jobs share one value; the
+  # upload jobs never read it.
+  IOS_XCODE_VERSION: '27.1'
 
 jobs:
   # An unsigned iOS simulator build. Its purpose is not distribution: it proves
@@ -117,7 +135,9 @@ jobs:
     # AND `inputs.target != 'simulator'` are BOTH true on a cron run, which would
     # quietly fire a signed device build every Monday.
     if: github.event_name == 'schedule' || inputs.target != 'device'
-    runs-on: macos-latest
+    # The same label and pinned Xcode as the device job, so the weekly compile
+    # check and the store capture build with the release toolchain.
+    runs-on: xcode-27
     timeout-minutes: 90
     env:
       # Same shape as the device job's. Read ONLY by the crash-test probe
@@ -160,6 +180,39 @@ jobs:
           set -euo pipefail
           echo "::error::crash_test / nse_probe and screenshots=true are mutually exclusive: the screenshot capture boots its own simulator and skips the launch step the probes drive. Dispatch them as separate runs."
           exit 1
+
+      # PIN THE XCODE before anything touches the toolchain: CocoaPods, simctl
+      # and xcodebuild all resolve through xcode-select. See IOS_XCODE_VERSION at
+      # the top of this file for why a point release and not the image default.
+      #
+      # A missing pinned Xcode FAILS rather than falling back to the default: a
+      # fallback is exactly how a build would quietly move to an SDK nobody
+      # chose. The error lists what the image does carry, so the fix (a new
+      # IOS_XCODE_VERSION, or a new runs-on label) is one read away. The device
+      # job runs the identical step.
+      - name: Select the pinned Xcode
+        run: |
+          set -euo pipefail
+          xcode_app="/Applications/Xcode_${IOS_XCODE_VERSION}.app"
+          if [ ! -d "$xcode_app" ]; then
+            installed="$(ls -d /Applications/Xcode_*.app 2>/dev/null || true)"
+            echo "::error::$xcode_app is not on this runner image, so the pinned Xcode cannot be selected. Installed: ${installed//$'\n'/ }"
+            exit 1
+          fi
+          sudo xcode-select -s "$xcode_app"
+          # Captured, then cut, rather than piped into `head`: under pipefail a
+          # reader that exits early can fail the pipeline with SIGPIPE (see
+          # smoke-ios-simulator.sh).
+          version_output="$(xcodebuild -version)"
+          selected="${version_output%%$'\n'*}"
+          case "$selected" in
+            "Xcode $IOS_XCODE_VERSION" | "Xcode $IOS_XCODE_VERSION".*) ;;
+            *)
+              echo "::error::Selected $xcode_app, but xcodebuild reports \"$selected\" rather than Xcode $IOS_XCODE_VERSION."
+              exit 1
+              ;;
+          esac
+          echo "Selected $selected at $(xcode-select -p), iOS SDK $(xcrun --sdk iphoneos --show-sdk-version)."
 
       - uses: actions/checkout@v7
 
@@ -361,8 +414,8 @@ jobs:
           # once and compiling it twice.
           #
           # `generic/platform=iOS Simulator` resolves ARCHS to ARCHS_STANDARD,
-          # which for the simulator SDK is `arm64 x86_64`. macos-latest runners
-          # are arm64 (see the node-cache-macOS-arm64-npm cache key), and the
+          # which for the simulator SDK is `arm64 x86_64`. The xcode-27 runners
+          # are arm64 only (the label has no Intel image), and the
           # simulator the steps below boot is therefore arm64 too, so every
           # x86_64 object compiled here is thrown away. MEASURED on run
           # 30464295817: 4664 `Objects-normal/x86_64/` outputs against 5335
@@ -468,6 +521,16 @@ jobs:
             echo "Produced $SCHEME.app.dSYM for the Sentry upload phase."
           fi
           echo "app-path=$app_path" >> "$GITHUB_OUTPUT"
+
+      # The SDK floor (ITMS-90725), read from what the build stamped into the app
+      # rather than trusted from the runner label. The weekly cron is the only
+      # regular iOS run, so this is where a runs-on that drifted back to an older
+      # image gets caught, long before a release needs a device build. The device
+      # job runs the same script inside its .ipa verification.
+      - name: Verify the SDK meets the App Store floor
+        env:
+          APP_PATH: ${{ steps.verify.outputs.app-path }}
+        run: bash .github/scripts/verify-ios-sdk.sh "$APP_PATH"
 
       # Compiling is not running. Until this step existed the iOS app had never
       # been launched anywhere, so a missing Info.plist key, a native module that
@@ -721,8 +784,9 @@ jobs:
       # EXPERIMENTAL, and opt-in for a reason. Maestro's iOS driver needs Facebook's
       # idb_companion, and there is an open upstream issue where a recent
       # macOS + Xcode pairing breaks its simulator connection entirely
-      # (mobile-dev-inc/Maestro#2906). This runner is on Xcode 26.5, so it may
-      # simply not work.
+      # (mobile-dev-inc/Maestro#2906). This job selects the pinned Xcode
+      # (IOS_XCODE_VERSION) on a macOS 27 image, a pairing that driver has not
+      # been run on here yet, so it may simply not work.
       #
       # Gated behind an input rather than folded into the default path: the launch
       # smoke above is now a proven, reliable signal, and an experiment with a known
@@ -1130,7 +1194,9 @@ jobs:
   device:
     name: Device (signed .ipa)
     if: github.event_name != 'schedule' && inputs.target != 'simulator'
-    runs-on: macos-latest
+    # The job ITMS-90725 is about: what this archives is what reaches App Store
+    # Connect. Xcode 27 exists only on this label; see IOS_XCODE_VERSION.
+    runs-on: xcode-27
     timeout-minutes: 90
     outputs:
       artifact-name: ${{ steps.name.outputs.artifact-name }}
@@ -1182,6 +1248,29 @@ jobs:
           set -euo pipefail
           echo "::error::submit=appstore needs ASC_API_KEY_BASE64, ASC_KEY_ID and ASC_ISSUER_ID, with the key on the App Manager role. The Apple ID and app-specific password fallback can upload, but cannot prepare or submit an App Store version. Use submit=testflight for an upload only."
           exit 1
+
+      # Identical to the simulator job's step of the same name; its comment
+      # carries the reasoning. Keep the two in step.
+      - name: Select the pinned Xcode
+        run: |
+          set -euo pipefail
+          xcode_app="/Applications/Xcode_${IOS_XCODE_VERSION}.app"
+          if [ ! -d "$xcode_app" ]; then
+            installed="$(ls -d /Applications/Xcode_*.app 2>/dev/null || true)"
+            echo "::error::$xcode_app is not on this runner image, so the pinned Xcode cannot be selected. Installed: ${installed//$'\n'/ }"
+            exit 1
+          fi
+          sudo xcode-select -s "$xcode_app"
+          version_output="$(xcodebuild -version)"
+          selected="${version_output%%$'\n'*}"
+          case "$selected" in
+            "Xcode $IOS_XCODE_VERSION" | "Xcode $IOS_XCODE_VERSION".*) ;;
+            *)
+              echo "::error::Selected $xcode_app, but xcodebuild reports \"$selected\" rather than Xcode $IOS_XCODE_VERSION."
+              exit 1
+              ;;
+          esac
+          echo "Selected $selected at $(xcode-select -p), iOS SDK $(xcrun --sdk iphoneos --show-sdk-version)."
 
       - uses: actions/checkout@v7
 
@@ -1301,14 +1390,21 @@ jobs:
       # returned nothing, the key was the literal `macOS-pods-`, and one frozen
       # tree restored on every build. pod install on an Expo project is minutes
       # of downloads, and it still reconciles whatever a restore-key brings back.
+      #
+      # The pinned Xcode is in the key AND in restore-keys. `runner.os` is
+      # `macOS` on every macOS image, so without it the first build on a new
+      # Xcode would restore Pods prepared by the previous one: the old prefix
+      # `<os>-pods-` prefix-matched every macos-26 entry. pod install would
+      # probably reconcile that, but one cold install per Xcode move removes the
+      # question, and the restore prefix can no longer reach across Xcodes.
       - name: Cache CocoaPods
         uses: actions/cache@v6
         with:
           path: |
             ios/Pods
             ~/Library/Caches/CocoaPods
-          key: ${{ runner.os }}-pods-${{ hashFiles('package-lock.json') }}
-          restore-keys: ${{ runner.os }}-pods-
+          key: ${{ runner.os }}-pods-xcode-${{ env.IOS_XCODE_VERSION }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: ${{ runner.os }}-pods-xcode-${{ env.IOS_XCODE_VERSION }}-
 
       - name: Install pods
         working-directory: ios
@@ -1586,7 +1682,13 @@ jobs:
   #
   # macOS because `xcrun altool` is the uploader. It re-verifies what it
   # downloaded rather than trusting the build job, which is both stronger and
-  # what caught a bad Android artifact twice.
+  # what caught a bad Android artifact twice. That re-verification includes the
+  # SDK floor, through the preinstalled node (this job runs no npm install).
+  #
+  # It stays on macos-latest rather than the compile jobs' xcode-27 label: it
+  # compiles nothing, so ITMS-90725 (an SDK rule) does not reach it, and the
+  # newer label has its own capacity queue. Move it only if altool on this
+  # image has trouble with an .ipa built by the newer Xcode.
   submit-testflight:
     name: Submit (TestFlight)
     needs: device
