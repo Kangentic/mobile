@@ -21,11 +21,12 @@
  * through Git Bash on Windows.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
+
+import { resolveBashExecutable } from '../helpers/bash';
 
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url)).replaceAll('\\', '/');
 const workflowPath = `${repositoryRoot}.github/workflows/e2e.yml`;
@@ -72,25 +73,6 @@ function readGateScript(): string {
     throw new Error(`Step "${GATE_STEP_NAME}" has no \`run:\` script to execute.`);
   }
   return gateStep.run;
-}
-
-/**
- * On Windows, `bash` on PATH is usually WSL's, which cannot open a `C:/...` path
- * and fails with a "No such file or directory" that reads like a missing file
- * rather than a wrong interpreter. Git Bash can. Paths come from the environment
- * rather than being hardcoded (.claude/rules/no-personal-info.md).
- */
-function resolveBashExecutable(): string | null {
-  if (process.platform !== 'win32') {
-    return 'bash';
-  }
-  const candidates = [
-    process.env.KANGENTIC_BASH,
-    join(process.env.ProgramFiles ?? 'C:\\Program Files', 'Git', 'bin', 'bash.exe'),
-    join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Git', 'bin', 'bash.exe'),
-  ].filter((candidate): candidate is string => Boolean(candidate));
-
-  return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
 
 const bashExecutable = resolveBashExecutable();

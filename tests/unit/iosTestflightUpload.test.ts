@@ -16,36 +16,16 @@
  * through Git Bash on Windows.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+
+import { resolveBashExecutable } from '../helpers/bash';
 
 // Forward slashes on purpose. A backslash path handed to bash as an argument has
 // its separators eaten, which surfaces as a confusing "No such file or directory"
 // for a file that plainly exists.
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url)).replaceAll('\\', '/');
 const harnessPath = `${repositoryRoot}tests/unit/fixtures/runUploadWithStubbedAltool.sh`;
-
-/**
- * On Windows, `bash` on PATH is usually WSL's, which cannot open a `C:/...` path
- * at all and fails with a "No such file or directory" that looks like a missing
- * file rather than a wrong interpreter. Git Bash can, and is what the rest of the
- * repository's tooling uses. Paths are derived from the environment rather than
- * hardcoded (.claude/rules/no-personal-info.md).
- */
-function resolveBashExecutable(): string | null {
-  if (process.platform !== 'win32') {
-    return 'bash';
-  }
-  const candidates = [
-    process.env.KANGENTIC_BASH,
-    join(process.env.ProgramFiles ?? 'C:\\Program Files', 'Git', 'bin', 'bash.exe'),
-    join(process.env.LOCALAPPDATA ?? '', 'Programs', 'Git', 'bin', 'bash.exe'),
-  ].filter((candidate): candidate is string => Boolean(candidate));
-
-  return candidates.find((candidate) => existsSync(candidate)) ?? null;
-}
 
 const bashExecutable = resolveBashExecutable();
 
