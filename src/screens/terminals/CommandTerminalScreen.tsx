@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Pressable, StyleSheet, View } from 'react-native';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useReducedMotion } from 'react-native-reanimated';
 import { ActivityMarkIcon, ConnectionBanner, IconButton, Row, Screen, Stack, Text, useTheme } from '@/components';
@@ -48,6 +48,9 @@ export const RESUME_FAILED_TITLE = "Couldn't resume conversation";
 const HEADER_MARK_SIZE = 16;
 const STOP_MARK_SIZE = 20;
 
+/** The route's params, one type for the read and the write so their names cannot drift apart. */
+type CommandTerminalRouteParams = { launchId?: string; sessionId?: string; projectId?: string };
+
 function nonEmpty(value: string | undefined): string | null {
   return value !== undefined && value.length > 0 ? value : null;
 }
@@ -87,8 +90,11 @@ function nonEmpty(value: string | undefined): string | null {
  * covers the Chat lens's prompt cards and any surface that forgets the prop.
  */
 export function CommandTerminalScreen(): React.JSX.Element {
-  const params = useLocalSearchParams<{ launchId?: string; sessionId?: string; projectId?: string }>();
+  const params = useLocalSearchParams<CommandTerminalRouteParams>();
   const router = useRouter();
+  // Typed here because expo-router's default param list is empty, which leaves
+  // `setParams` accepting only undefined.
+  const navigation = useNavigation<{ setParams(written: CommandTerminalRouteParams): void }>();
   const launchId = nonEmpty(params.launchId);
   const projectId = nonEmpty(params.projectId);
   const paramSessionId = nonEmpty(params.sessionId);
@@ -109,9 +115,14 @@ export function CommandTerminalScreen(): React.JSX.Element {
   if (!resuming && launch !== null && launch.resumeAgentSessionId !== null) setResuming(true);
   // Written into the route too, so a remount (the OS restoring the screen)
   // binds the same terminal rather than looking for a launch that is gone.
+  // Through the screen's own navigation object, never the router's method of the
+  // same name: that one reads a module-level ref and throws here while it is
+  // null, which cost a person the whole app (Sentry MOBILE-K). This one queues
+  // the write, and for this route rather than whichever one is focused. See
+  // .claude/rules/imperative-router-inside-react.md.
   useEffect(() => {
-    if (boundSessionId !== null && paramSessionId === null) router.setParams({ sessionId: boundSessionId });
-  }, [boundSessionId, paramSessionId, router]);
+    if (boundSessionId !== null && paramSessionId === null) navigation.setParams({ sessionId: boundSessionId });
+  }, [boundSessionId, navigation, paramSessionId]);
 
   useEffect(() => {
     if (boundSessionId === null) return;

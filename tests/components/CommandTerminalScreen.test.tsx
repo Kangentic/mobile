@@ -42,12 +42,20 @@ jest.mock('expo-speech-recognition', () => ({
 let mockParams: { launchId?: string; sessionId?: string; projectId?: string } = {};
 const mockBack = jest.fn();
 const mockReplace = jest.fn();
-const mockSetParams = jest.fn();
+const mockRouterSetParams = jest.fn();
 const mockCanGoBack = jest.fn(() => true);
 // ONE object, as expo-router's own `router` is: the leave effect keys its
 // callback on the router, and a fresh object per render would re-run it (and
 // re-pop) on every render, which no real app does.
-const mockRouter = { back: mockBack, replace: mockReplace, setParams: mockSetParams, canGoBack: mockCanGoBack, push: jest.fn() };
+const mockRouter = { back: mockBack, replace: mockReplace, setParams: mockRouterSetParams, canGoBack: mockCanGoBack, push: jest.fn() };
+// The screen's own navigation object, the one it writes its session through.
+// ONE object for the same reason: expo-router caches it per route, and the
+// write effect keys on it.
+const mockNavigationSetParams = jest.fn();
+const mockNavigation = { setParams: mockNavigationSetParams };
+/** expo-router 58's own words (global-state/router.js, `assertIsMounted`), Sentry MOBILE-K's title. */
+const ROUTER_SET_PARAMS_ERROR =
+  'Attempted to navigate before mounting the Root Layout component. Ensure the Root Layout component is rendering a Slot, or other navigator on the first render.';
 // Whether the screen is the focused route. Focused by default (beforeEach resets
 // it), so a test that never touches it sees the screen as it always was: focused
 // for its whole life. `mockSetFocused` is the test's stand-in for a route being
@@ -64,6 +72,7 @@ jest.mock('expo-router', () => {
   return {
     useLocalSearchParams: () => mockParams,
     useRouter: () => mockRouter,
+    useNavigation: () => mockNavigation,
     // The real one throws outside a navigator. It runs the effect while the
     // route is focused, runs its cleanup on blur, and runs it again when focus
     // returns, which is all the screen's focus-gated leave depends on.
@@ -197,6 +206,8 @@ function inputRow(): ReturnType<typeof screen.getByTestId> {
 describe('CommandTerminalScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // Reset, not only cleared: a throwing implementation outlives clearAllMocks.
+    mockRouterSetParams.mockReset();
     mockCanGoBack.mockReturnValue(true);
     mockIsFocused = true;
     mockFocusListeners.clear();
@@ -239,7 +250,7 @@ describe('CommandTerminalScreen', () => {
       await renderScreen();
 
       expect(openSessionScreenMock).not.toHaveBeenCalled();
-      expect(mockSetParams).not.toHaveBeenCalled();
+      expect(mockNavigationSetParams).not.toHaveBeenCalled();
       expect(mockTerminalTabProps.current?.sessionId).toBeNull();
       expect(mockTerminalTabProps.current?.inputEnabled).toBe(false);
     });
@@ -272,9 +283,70 @@ describe('CommandTerminalScreen', () => {
       expect(openSessionScreenMock).toHaveBeenCalledTimes(1);
       expect(openSessionScreenMock).toHaveBeenCalledWith('terminal-9');
       // Written into the route so a remount binds the same terminal rather than a launch that is gone.
-      expect(mockSetParams).toHaveBeenCalledWith({ sessionId: 'terminal-9' });
+      expect(mockNavigationSetParams).toHaveBeenCalledWith({ sessionId: 'terminal-9' });
       expect(mockTerminalTabProps.current?.sessionId).toBe('terminal-9');
       expect(screen.getByTestId('command-terminal-stop').props.accessibilityState).toEqual(expect.objectContaining({ disabled: false }));
+    });
+
+    /**
+     * Sentry MOBILE-K. The router's `setParams` is the one method on it that is
+     * not queued: it throws at the call site while expo-router's module-level
+     * navigation ref is null, and that happened under this screen, mounted and
+     * focused. The call sat in a passive effect, so the throw reached the root
+     * error boundary and the app became the error screen.
+     *
+     * The mock throws what the library throws. Mutation seen failing: writing
+     * through `router.setParams` again, which is how the screen shipped. The
+     * `act` below rejects with that message and nothing after it runs.
+     */
+    it('binds the started terminal and throws nothing while the router refuses setParams', async () => {
+      mockRouterSetParams.mockImplementation(() => {
+        throw new Error(ROUTER_SET_PARAMS_ERROR);
+      });
+      await renderScreen();
+
+      await act(() => {
+        useCommandTerminalStore.getState().markLaunchStarted(launchId, { sessionId: 'terminal-9', slot: 2, name: 'Command Terminal 2' });
+      });
+
+      expect(openSessionScreenMock).toHaveBeenCalledWith('terminal-9');
+      expect(screen.getByTestId('stub-terminal-tab')).toBeTruthy();
+      expect(mockTerminalTabProps.current?.sessionId).toBe('terminal-9');
+      expect(mockNavigationSetParams).toHaveBeenCalledTimes(1);
+      expect(mockNavigationSetParams).toHaveBeenCalledWith({ sessionId: 'terminal-9' });
+      expect(mockRouterSetParams).not.toHaveBeenCalled();
+    });
+
+    /**
+     * What the write is FOR. A remount (the OS restoring the screen) finds its
+     * launch gone and has only the route to go on, so the params the first mount
+     * wrote have to bind the same terminal, with nothing left to write back.
+     *
+     * Mutation seen failing: seeding `boundSessionId` with null instead of the
+     * route's session (nothing is opened on the second mount).
+     */
+    it('binds the same terminal on a remount, from the session it wrote into the route, once its launch is gone', async () => {
+      mockNavigationSetParams.mockImplementationOnce((written: { sessionId?: string }) => {
+        mockParams = { ...mockParams, ...written };
+      });
+      const { unmount } = await renderScreen();
+      await act(() => {
+        useCommandTerminalStore.getState().markLaunchStarted(launchId, { sessionId: 'terminal-9', slot: 2, name: 'Command Terminal 2' });
+      });
+      expect(mockParams).toEqual({ launchId, projectId: PROJECT_ID, sessionId: 'terminal-9' });
+
+      await unmount();
+      await act(() => {
+        useCommandTerminalStore.getState().clearLaunch(launchId);
+      });
+      openSessionScreenMock.mockClear();
+      mockNavigationSetParams.mockClear();
+      mockTerminalTabProps.current = null;
+      await renderScreen();
+
+      expect(openSessionScreenMock).toHaveBeenCalledWith('terminal-9');
+      expect(mockTerminalTabProps.current).toEqual(expect.objectContaining({ sessionId: 'terminal-9' }));
+      expect(mockNavigationSetParams).not.toHaveBeenCalled();
     });
 
     it('stops the BOUND session, once, and leaves, after the launch started', async () => {
@@ -506,7 +578,7 @@ describe('CommandTerminalScreen', () => {
       expect(screen.getByTestId('command-terminal-title')).toHaveTextContent('Fix the flaky login test');
       expect(openSessionScreenMock).toHaveBeenCalledWith(SESSION_ID);
       // The route already carries the session: nothing to write back.
-      expect(mockSetParams).not.toHaveBeenCalled();
+      expect(mockNavigationSetParams).not.toHaveBeenCalled();
       expect(mockTerminalTabProps.current?.sessionId).toBe(SESSION_ID);
     });
 

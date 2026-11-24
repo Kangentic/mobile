@@ -40,10 +40,12 @@ called `store.assertIsReady()` and threw *"Attempted to navigate before mounting
 component"*, above every route error boundary, so the throw reached the global handler and aborted
 the process. That was the iOS TestFlight cold-start crash on 0.6.3 build 13 (a notification tap,
 452 ms into the process). Two call sites shipped a `try/catch` that could not catch it, because the
-call itself never threw. SDK 58 removed that throw, and with it `isReady` (now `() => true`), which
-MOVED the failure rather than ending it: a stray call now fails at the call site on Android and can
-vanish into a `console.warn` on iOS, and neither is a tap that reaches its screen. A `try/catch` at
-the call site still does not make the navigation happen, so it is still the wrong fix.
+call itself never threw. SDK 58 removed that throw from the queue, and with it `isReady` (now
+`() => true`), which MOVED the failure rather than ending it: a stray call now fails at the call
+site on Android and can vanish into a `console.warn` on iOS, and neither is a tap that reaches its
+screen. A `try/catch` at the call site still does not make the navigation happen, so it is still
+the wrong fix. **`setParams` alone kept the throw**, and it is not a cold-start problem: see the
+rule's last bullets and Sentry MOBILE-K.
 
 ## The rule
 
@@ -60,6 +62,10 @@ the call site still does not make the navigation happen, so it is still the wron
   cannot commit before the container does. So the runner's passive effect never sees the unbound
   router, on either platform. Moving the runner above the container reintroduces the throw. It is
   NOT a child of `<Stack>` and must not become one - `<Stack>` children are route declarations.
+  **This covers mounting only.** The bridge's cleanup unbinds the exported router again, and it has
+  the same layout-phase lifetime as the module-level ref MOBILE-K found null under a live screen
+  (both read from source). That the two go together on a device is inferred, and no event has shown
+  the runner meeting an unbound router.
 - **Do not add a `navigationRef.isReady()` guard to the runner.** It is inert: since SDK 58
   `isReady` is `() => true` (`BaseNavigationContainer.js`), so it would guard nothing while reading
   like a safety check. (On SDK 57 it was worse, reading `false` at the runner and dropping the
@@ -70,7 +76,23 @@ the call site still does not make the navigation happen, so it is still the wron
   render's commit and the passive-effect flush would otherwise be cleared by the consume while the
   older one is performed, inverting the slot's newer-supersedes-older invariant.
 - Hooks and components are unaffected: `Stack`, `Link`, `useRouter`, `useLocalSearchParams`,
-  `useNavigationContainerRef` are all fine anywhere they can legally render.
+  `useNavigationContainerRef` are all fine anywhere they can legally render, with the one exception
+  in the next bullet. What `useRouter()` returns is bound to the navigator's own queue, so the
+  unbound window above does not apply to it.
+- **Never call a router's `setParams`, not even the one from `useRouter()`.** It is the one
+  navigating method that is not queued. `useRouter()` hands out the same module-level function the
+  exported router uses, and that function throws *"Attempted to navigate before mounting the Root
+  Layout component"* at the call site while the module-level `navigationRef` is null
+  (`assertIsMounted` in `global-state/router.js`). That ref has been null under a mounted, focused
+  screen: in MOBILE-K the call sat in a passive effect, so the throw reached the root error boundary
+  and replaced the whole app. Why the ref was null is not proven. **Use `useNavigation().setParams`**,
+  which never reads the ref. It queues the write through the navigator's context with
+  `source: route.key` (`react-navigation/core/useNavigationCache.js`), so it also lands on the
+  calling route, where a router's `setParams` carries no source and writes to whichever route is
+  focused. It needs a type argument, because expo-router's default param list is empty.
+- **`canGoBack` and `canDismiss` read the same ref and answer false instead of throwing**, so false
+  can mean "unknown" as well as "nothing behind". A caller that has to leave needs a false branch
+  that works, as `CommandTerminalScreen` and `SessionScreen` have (`replace('/')`).
 
 ## Enforcement (self-maintaining)
 
@@ -88,7 +110,15 @@ the call site still does not make the navigation happen, so it is still the wron
   `require()` and never a dynamic `import()` - and the second live instance of this bug reached
   the router through `await import('expo-router')`, which the lint rule cannot see. The scan
   covers both the dynamic routes and the static import, and asserts it found files to scan at all
-  so a broken glob cannot pass vacuously.
+  so a broken glob cannot pass vacuously. It also fails on a router's `setParams` in ANY file,
+  the navigator directories included: the one that crashed was in `src/screens/`, where this rule's
+  `paths:` do not load. The scan is text, so it relies on the house name (`const router =
+  useRouter()`) and reads comments as code.
+- **Test (live now):** `tests/components/CommandTerminalRouteParams.test.tsx` pins the library half
+  of the `setParams` bullet against expo-router's real code: the navigation object's write reaches
+  its own route under another one, a router's `setParams` throws and queues nothing with the ref
+  null. Its last `describe` going red means the exception is stale. The call itself is pinned by
+  `tests/components/CommandTerminalScreen.test.tsx`.
 - **Test (live now):** `tests/components/PendingNavigationRunner.test.tsx` pins that one publish
   performs exactly once, survives a remount, and works both when published before mount
   (cold start) and while already mounted (warm). Note the cold-start window is NOT reproducible at
@@ -103,7 +133,8 @@ the call site still does not make the navigation happen, so it is still the wron
 ## Scope
 
 Authored code under `src/**` and `app/**` that is not rendered inside the root navigator.
-`src/screens/**` and `src/components/**` render inside it by construction and are exempt;
+`src/screens/**` and `src/components/**` render inside it by construction and are exempt, except
+from the `setParams` ban, which has no exempt directory;
 `src/navigation/**` is the one place allowed to perform a published navigation. Does not govern
 `app/+native-intent.ts`'s `redirectSystemPath`, whose timing expo-router owns (it must still not
 throw - see the comment in that file).

@@ -37,7 +37,7 @@ const restrictedRouterImportPaths = [
     name: 'expo-router',
     importNames: ['router'],
     message:
-      "Publish to the pending slot in '@/navigation/pendingNavigation' instead of calling expo-router's imperative router here - outside a mounted navigator it enqueues a navigation that throws fatally when drained. Hooks and components (Stack, Link, useRouter, useLocalSearchParams) are fine. See .claude/rules/imperative-router-inside-react.md.",
+      "Publish to the pending slot in '@/navigation/pendingNavigation' instead of calling expo-router's imperative router here - outside a mounted navigator it enqueues a navigation that throws fatally when drained. Hooks and components (Stack, Link, useRouter, useLocalSearchParams) are fine, except a router's setParams: use useNavigation().setParams. See .claude/rules/imperative-router-inside-react.md.",
   },
 ];
 
