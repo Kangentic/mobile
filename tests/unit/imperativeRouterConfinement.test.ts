@@ -1,14 +1,15 @@
 /**
  * expo-router's imperative `router` singleton must only be reached from code
- * that renders inside the mounted root navigator.
+ * that renders inside the mounted root navigator, and no router's `setParams`
+ * may be called from anywhere.
  *
- * `router.push`/`navigate` do not navigate. They append to expo-router's
- * routingQueue and return; the queue is drained inside a React effect that
- * calls `store.assertIsReady()` and throws 'Attempted to navigate before
- * mounting the Root Layout component' when no navigator child has mounted. On a
- * native cold start that window is real, the drain effect sits above every
- * route error boundary, and the throw aborts the process. That was the iOS
- * TestFlight cold-start crash on 0.6.3 build 13, reached by a notification tap.
+ * `router.push`/`navigate` do not navigate. They append to a queue held in React
+ * state and return. Since SDK 58 the singleton THROWS until the navigation
+ * container commits, and a failure draining the queue is only a console.warn, so
+ * a stray call fails at the call site or is silently lost. Through SDK 57 the
+ * drain itself threw, above every route error boundary, and aborted the process:
+ * the iOS TestFlight cold-start crash on 0.6.3 build 13, reached by a
+ * notification tap.
  *
  * WHY A SCAN AND NOT JUST THE LINT RULE. `eslint.config.mjs` bans the static
  * `import { router } from 'expo-router'` outside the allowed directories, but
@@ -37,6 +38,22 @@ const ALLOWED_DIRECTORIES = ['src/screens/', 'src/components/', 'src/navigation/
 
 /** Any non-static route to the module: require() or a dynamic import(). */
 const DYNAMIC_ROUTES = [/require\(\s*['"]expo-router['"]\s*\)/, /import\(\s*['"]expo-router['"]\s*\)/];
+
+/**
+ * `setParams` reached through a router: the exported singleton or the object
+ * `useRouter()` returns, called on either or destructured from either. Relies on
+ * the house name for that object (`const router = useRouter()`), reads comments
+ * as code, and leaves `navigation.setParams(...)`, the call to make instead, alone.
+ */
+const ROUTER_SET_PARAMS = [
+  /\brouter\s*\??\.\s*setParams\b/,
+  /\buseRouter\(\s*\)\s*\??\.\s*setParams\b/,
+  /\{[^{}]*\bsetParams\b[^{}]*\}\s*=\s*(?:useRouter\(\s*\)|router\b)/,
+];
+
+function reachesRouterSetParams(source: string): boolean {
+  return ROUTER_SET_PARAMS.some((pattern) => pattern.test(source));
+}
 
 function collectSourceFiles(directory: string, collected: string[]): void {
   for (const entry of readdirSync(path.join(repoRoot, directory), { withFileTypes: true })) {
@@ -94,6 +111,48 @@ describe('imperative router confinement', () => {
         const source = readFileSync(path.join(repoRoot, relativePath), 'utf8');
         return staticRouterImport.test(source);
       });
+
+    expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * Sentry MOBILE-K. `setParams` is the one navigating method expo-router 58 does
+ * not queue: it throws at the call site while the module-level navigation ref is
+ * null, and that happened under a mounted, focused screen. `useRouter()` is no
+ * protection, because its `setParams` is the same function.
+ *
+ * EVERY file is scanned, the navigator directories included: the call that
+ * crashed was in src/screens, which renders inside the navigator and is exempt
+ * from everything above.
+ *
+ * Mutation seen failing: the call as it shipped in CommandTerminalScreen.tsx,
+ * which the scan names.
+ */
+describe("a router's setParams", () => {
+  it.each([
+    ["the singleton, or the hook's object", 'router.setParams({ sessionId });'],
+    ['an optional call', 'router?.setParams({ sessionId });'],
+    ["the hook's object inline", 'useRouter().setParams({ sessionId });'],
+    ['destructured from the hook', 'const { setParams } = useRouter();'],
+    ['destructured beside others', 'const { back, setParams: writeParams } = router;'],
+  ])('is matched as %s (or the scan below proves nothing)', (_shape, source) => {
+    expect(reachesRouterSetParams(source)).toBe(true);
+  });
+
+  it.each([
+    ["the screen's own navigation object", 'navigation.setParams({ sessionId });'],
+    ['useNavigation inline', 'useNavigation().setParams({ sessionId });'],
+    ['the other router methods', 'const { back, canGoBack } = useRouter(); router.back();'],
+    ['a type that names it', 'useNavigation<{ setParams(params: RouteParams): void }>();'],
+  ])('is not matched as %s', (_shape, source) => {
+    expect(reachesRouterSetParams(source)).toBe(false);
+  });
+
+  it('is called nowhere in src or app', () => {
+    const offenders = sourceFiles().filter((relativePath) =>
+      reachesRouterSetParams(readFileSync(path.join(repoRoot, relativePath), 'utf8')),
+    );
 
     expect(offenders).toEqual([]);
   });
