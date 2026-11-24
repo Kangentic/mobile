@@ -39,20 +39,39 @@ const ALLOWED_DIRECTORIES = ['src/screens/', 'src/components/', 'src/navigation/
 /** Any non-static route to the module: require() or a dynamic import(). */
 const DYNAMIC_ROUTES = [/require\(\s*['"]expo-router['"]\s*\)/, /import\(\s*['"]expo-router['"]\s*\)/];
 
-/**
- * `setParams` reached through a router: the exported singleton or the object
- * `useRouter()` returns, called on either or destructured from either. Relies on
- * the house name for that object (`const router = useRouter()`), reads comments
- * as code, and leaves `navigation.setParams(...)`, the call to make instead, alone.
- */
-const ROUTER_SET_PARAMS = [
-  /\brouter\s*\??\.\s*setParams\b/,
-  /\buseRouter\(\s*\)\s*\??\.\s*setParams\b/,
-  /\{[^{}]*\bsetParams\b[^{}]*\}\s*=\s*(?:useRouter\(\s*\)|router\b)/,
+/** Where a file gives a router a name of its own: the hook's object bound to one, or the singleton imported as one. */
+const ROUTER_NAME_BINDINGS = [
+  /\b(\w+)\s*=\s*useRouter\(\s*\)/g,
+  /import\s*\{[^}]*\brouter\s+as\s+(\w+)[^}]*\}\s*from\s*['"]expo-router['"]/g,
 ];
 
+/** The inside of a destructuring pattern, one level of nesting allowed (a nested pattern, or a default with braces). */
+const PATTERN_BODY = '(?:[^{}]|\\{[^{}]*\\})*';
+
+function routerNames(source: string): string[] {
+  const names = ['router'];
+  for (const binding of ROUTER_NAME_BINDINGS) {
+    for (const [, name] of source.matchAll(binding)) {
+      if (name !== undefined) names.push(name);
+    }
+  }
+  return names;
+}
+
+/**
+ * `setParams` reached through a router: the exported singleton or the object
+ * `useRouter()` returns, called on either or destructured from either, under the
+ * house name (`router`) or any name the file itself gives one. A router handed in
+ * under another name (a prop, a parameter) is out of its reach, and it reads
+ * comments as code. `navigation.setParams(...)`, the call to make instead, is
+ * left alone.
+ */
 function reachesRouterSetParams(source: string): boolean {
-  return ROUTER_SET_PARAMS.some((pattern) => pattern.test(source));
+  const router = `(?:\\b(?:${routerNames(source).join('|')})\\b|\\buseRouter\\(\\s*\\))`;
+  return [
+    new RegExp(`${router}\\s*[?!]?\\.\\s*setParams\\b`),
+    new RegExp(`\\{${PATTERN_BODY}\\bsetParams\\b${PATTERN_BODY}\\}\\s*=\\s*${router}`),
+  ].some((pattern) => pattern.test(source));
 }
 
 function collectSourceFiles(directory: string, collected: string[]): void {
@@ -122,20 +141,27 @@ describe('imperative router confinement', () => {
  * null, and that happened under a mounted, focused screen. `useRouter()` is no
  * protection, because its `setParams` is the same function.
  *
- * EVERY file is scanned, the navigator directories included: the call that
- * crashed was in src/screens, which renders inside the navigator and is exempt
- * from everything above.
+ * Every .ts and .tsx file under src and app is scanned, the navigator
+ * directories included: the call that crashed was in src/screens, which renders
+ * inside the navigator and is exempt from everything above.
  *
- * Mutation seen failing: the call as it shipped in CommandTerminalScreen.tsx,
- * which the scan names.
+ * Mutations seen failing: the call as it shipped in CommandTerminalScreen.tsx,
+ * which the scan names; and a scan that knew only the name `router` and flat
+ * destructuring, which missed every nested, renamed and aliased row.
  */
 describe("a router's setParams", () => {
   it.each([
     ["the singleton, or the hook's object", 'router.setParams({ sessionId });'],
     ['an optional call', 'router?.setParams({ sessionId });'],
+    ['a non-null call', 'router!.setParams({ sessionId });'],
     ["the hook's object inline", 'useRouter().setParams({ sessionId });'],
     ['destructured from the hook', 'const { setParams } = useRouter();'],
     ['destructured beside others', 'const { back, setParams: writeParams } = router;'],
+    ['destructured after a nested pattern', 'const { options: { href }, setParams } = router;'],
+    ['destructured with a default of its own', 'const { back, setParams = () => {} } = useRouter();'],
+    ["the hook's object under another name", 'const nav = useRouter(); nav.setParams({ sessionId });'],
+    ['the singleton under an alias', "import { router as appRouter } from 'expo-router';\nappRouter.setParams({ sessionId });"],
+    ['destructured from an alias', 'const nav = useRouter(); const { setParams } = nav;'],
   ])('is matched as %s (or the scan below proves nothing)', (_shape, source) => {
     expect(reachesRouterSetParams(source)).toBe(true);
   });
@@ -143,6 +169,8 @@ describe("a router's setParams", () => {
   it.each([
     ["the screen's own navigation object", 'navigation.setParams({ sessionId });'],
     ['useNavigation inline', 'useNavigation().setParams({ sessionId });'],
+    ['a navigation object under another name', 'const nav = useNavigation(); nav.setParams({ sessionId });'],
+    ['a navigation object beside a router', 'const nav = useRouter(); nav.back(); navigation.setParams({ sessionId });'],
     ['the other router methods', 'const { back, canGoBack } = useRouter(); router.back();'],
     ['a type that names it', 'useNavigation<{ setParams(params: RouteParams): void }>();'],
   ])('is not matched as %s', (_shape, source) => {

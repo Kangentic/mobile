@@ -12,6 +12,11 @@
  * Nothing here mounts a navigation container, so expo-router's module-level
  * navigation ref is null throughout, which is the state MOBILE-K met.
  *
+ * Mutations seen failing, each standing in for the library changing: the
+ * dispatched action without its `source` (the file diff takes the write), as
+ * REPLACE_PARAMS (the launch and project are lost), and a navigation ref with a
+ * value (the router's `setParams` no longer throws).
+ *
  * Why not `renderRouter`: see PendingNavigationDedupe.test.tsx, whose seeding of
  * the stack this follows.
  */
@@ -66,7 +71,8 @@ function paramsOf(state: StackRouterState, routeName: string): object | undefine
 /**
  * The action the terminal screen's own navigation object dispatches for
  * `setParams`, built by expo-router's real per-route cache over a navigator that
- * only records. The recording stands where `useNavigationHelpers` enqueues.
+ * only records. The recording stands where `useNavigationHelpers` enqueues, and
+ * the cast is because the options carry only what building that action reads.
  */
 async function dispatchedSetParams(router: StackRouterInstance, state: StackRouterState, written: object): Promise<StackRouterAction> {
   const dispatched: StackRouterAction[] = [];

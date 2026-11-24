@@ -44,8 +44,8 @@ call itself never threw. SDK 58 removed that throw from the queue, and with it `
 `() => true`), which MOVED the failure rather than ending it: a stray call now fails at the call
 site on Android and can vanish into a `console.warn` on iOS, and neither is a tap that reaches its
 screen. A `try/catch` at the call site still does not make the navigation happen, so it is still
-the wrong fix. **`setParams` alone kept the throw**, and it is not a cold-start problem: see the
-rule's last bullets and Sentry MOBILE-K.
+the wrong fix. **`setParams` alone kept the throw**, and it is not a cold-start problem: see its
+bullet below and Sentry MOBILE-K.
 
 ## The rule
 
@@ -76,25 +76,28 @@ rule's last bullets and Sentry MOBILE-K.
   render's commit and the passive-effect flush would otherwise be cleared by the consume while the
   older one is performed, inverting the slot's newer-supersedes-older invariant.
 - Hooks and components are unaffected: `Stack`, `Link`, `useRouter`, `useLocalSearchParams`,
-  `useNavigationContainerRef` are all fine anywhere they can legally render, with the one exception
-  in the next bullet. What `useRouter()` returns is bound to the navigator's own queue, so the
-  unbound window above does not apply to it.
+  `useNavigationContainerRef` are all fine anywhere they can legally render, except that a router's
+  `setParams` is never called. The object `useRouter()` returns is never the unbound one, because
+  its queued methods (`push`, `navigate`, `replace`, `back` and the dismisses) take the queue from
+  React context (`global-state/useRouterActions.js`). Its `setParams`, `canGoBack` and `canDismiss`
+  are not queued: they read the module-level `navigationRef`.
 - **Never call a router's `setParams`, not even the one from `useRouter()`.** It is the one
   navigating method that is not queued. `useRouter()` hands out the same module-level function the
   exported router uses, and that function throws *"Attempted to navigate before mounting the Root
-  Layout component"* at the call site while the module-level `navigationRef` is null
-  (`assertIsMounted` in `global-state/router.js`). That ref has been null under a mounted, focused
-  screen: in MOBILE-K the call sat in a passive effect, so the throw reached the root error boundary
-  and replaced the whole app. Why the ref was null is not proven. **Use `useNavigation().setParams`**,
+  Layout component"* at the call site while `navigationRef` is null (`assertIsMounted` in
+  `global-state/router.js`). That ref has been null under a mounted, focused screen: in MOBILE-K the
+  call sat in a passive effect, so the throw reached the root error boundary and replaced the whole
+  app. Why the ref was null is not proven. **Use `useNavigation().setParams`**,
   which never reads the ref. It queues the write through the navigator's context with
   `source: route.key` (`react-navigation/core/useNavigationCache.js`), so it also lands on the
   calling route, where a router's `setParams` carries no source and writes to whichever route is
   focused. It needs a type argument, because expo-router's default param list is empty.
-- **`canGoBack` and `canDismiss` read the same ref and answer false instead of throwing**, so false
-  can mean "unknown" as well as "nothing behind". A SCREEN that has to leave needs a false branch
-  that works, as `CommandTerminalScreen` and `SessionScreen` have (`replace('/')`). A sheet that
-  closes itself with no else (`CommandTerminalsScreen`, `WorkflowsScreen`, `TaskArtifactsScreen`)
-  stays open instead, which is harmless: the person can still dismiss it.
+- **`canGoBack` and `canDismiss` read the same ref and answer false instead of throwing** (the
+  exported router's throw while it is unbound, like the rest of it), so false can mean "unknown" as
+  well as "nothing behind". A SCREEN that has to leave needs a false branch that works, as
+  `CommandTerminalScreen` and `SessionScreen` have (`replace('/')`). A sheet that closes itself with
+  no else (`CommandTerminalsScreen`, `WorkflowsScreen`, `TaskArtifactsScreen`) stays open instead,
+  which is harmless: the person can still dismiss it.
 
 ## Enforcement (self-maintaining)
 
@@ -112,10 +115,12 @@ rule's last bullets and Sentry MOBILE-K.
   `require()` and never a dynamic `import()` - and the second live instance of this bug reached
   the router through `await import('expo-router')`, which the lint rule cannot see. The scan
   covers both the dynamic routes and the static import, and asserts it found files to scan at all
-  so a broken glob cannot pass vacuously. It also fails on a router's `setParams` in ANY file,
-  the navigator directories included: the one that crashed was in `src/screens/`, where this rule's
-  `paths:` do not load. The scan is text, so it relies on the house name (`const router =
-  useRouter()`) and reads comments as code.
+  so a broken glob cannot pass vacuously. It also fails on a router's `setParams` in every `.ts` and
+  `.tsx` file there, the navigator directories included: the one that crashed was in
+  `src/screens/`, where this rule's `paths:` do not load. The scan is text. It knows the name
+  `router`, any name a file binds `useRouter()` to and any alias a file imports the singleton as,
+  so a router handed in as a prop or a parameter under another name is review's to catch, and it
+  reads comments as code.
 - **Test (live now):** `tests/components/CommandTerminalRouteParams.test.tsx` pins the library half
   of the `setParams` bullet against expo-router's real code: the navigation object's write reaches
   its own route under another one, a router's `setParams` throws and queues nothing with the ref
