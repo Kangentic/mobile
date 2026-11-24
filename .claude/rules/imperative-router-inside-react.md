@@ -91,8 +91,10 @@ rule's last bullets and Sentry MOBILE-K.
   calling route, where a router's `setParams` carries no source and writes to whichever route is
   focused. It needs a type argument, because expo-router's default param list is empty.
 - **`canGoBack` and `canDismiss` read the same ref and answer false instead of throwing**, so false
-  can mean "unknown" as well as "nothing behind". A caller that has to leave needs a false branch
-  that works, as `CommandTerminalScreen` and `SessionScreen` have (`replace('/')`).
+  can mean "unknown" as well as "nothing behind". A SCREEN that has to leave needs a false branch
+  that works, as `CommandTerminalScreen` and `SessionScreen` have (`replace('/')`). A sheet that
+  closes itself with no else (`CommandTerminalsScreen`, `WorkflowsScreen`, `TaskArtifactsScreen`)
+  stays open instead, which is harmless: the person can still dismiss it.
 
 ## Enforcement (self-maintaining)
 
