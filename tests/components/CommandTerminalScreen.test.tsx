@@ -7,6 +7,7 @@ import { ThemeProvider, darkTerminalTheme } from '@/components';
 import { ScreenMotionOverride } from '@/components/motion/ScreenMotion';
 import {
   CommandTerminalScreen,
+  type CommandTerminalRouteParams,
   RESUME_FAILED_TITLE,
   RESUMING_CONVERSATION_CAPTION,
   START_FAILURE_HOLD_MS,
@@ -39,7 +40,7 @@ jest.mock('expo-speech-recognition', () => ({
   useSpeechRecognitionEvent: jest.fn(),
 }));
 
-let mockParams: { launchId?: string; sessionId?: string; projectId?: string } = {};
+let mockParams: CommandTerminalRouteParams = {};
 const mockBack = jest.fn();
 const mockReplace = jest.fn();
 const mockRouterSetParams = jest.fn();
@@ -289,8 +290,8 @@ describe('CommandTerminalScreen', () => {
     });
 
     /**
-     * Sentry MOBILE-K. The router's `setParams` is the one method on it that is
-     * not queued: it throws at the call site while expo-router's module-level
+     * Sentry MOBILE-K. The router's `setParams` is the one navigating method that
+     * is not queued: it throws at the call site while expo-router's module-level
      * navigation ref is null, and that happened under this screen, mounted and
      * focused. The call sat in a passive effect, so the throw reached the root
      * error boundary and the app became the error screen.
@@ -326,7 +327,7 @@ describe('CommandTerminalScreen', () => {
      * route's session (nothing is opened on the second mount).
      */
     it('binds the same terminal on a remount, from the session it wrote into the route, once its launch is gone', async () => {
-      mockNavigationSetParams.mockImplementationOnce((written: { sessionId?: string }) => {
+      mockNavigationSetParams.mockImplementationOnce((written: CommandTerminalRouteParams) => {
         mockParams = { ...mockParams, ...written };
       });
       const { unmount } = await renderScreen();

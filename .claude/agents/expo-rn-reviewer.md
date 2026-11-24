@@ -97,8 +97,8 @@ check its README or changelog for New Architecture / Expo SDK compatibility stat
     since SDK 58, so it guards nothing) and any move of that component above or inside the root
     `Stack`. In ANY file, screens and components included, also flag a router's `setParams`
     (exported or from `useRouter()`): it throws at the call site while a module-level ref is null
-    (Sentry MOBILE-K). The fix is `useNavigation().setParams`. The unit scan matches the name
-    `router`, so look for one held under another name.
+    (Sentry MOBILE-K). The fix is `useNavigation().setParams`. The unit scan knows `router` and the
+    names a file gives one itself, so look for one handed in as a prop or a parameter.
 
 11. **Handled failures report through the door.** Against `crash-reporting-scope.md`: a new
     `catch` in a screen or component that shows the user a failure (an inline error note, an

@@ -19,14 +19,13 @@ const restrictedHapticsImportPaths = [
 // that render inside a mounted navigator. Hoisted because it appears in THREE
 // entries for the last-match-wins reason above.
 //
-// `router.push`/`navigate` do not navigate: they append to expo-router's
-// routingQueue and return. The queue is drained inside a React effect that
-// calls `store.assertIsReady()` and throws 'Attempted to navigate before
-// mounting the Root Layout component' when no navigator has mounted. On a
-// native cold start that window is real, the drain sits above every error
-// boundary, and the throw aborts the process - the iOS 0.6.3 build 13
-// TestFlight crash. A try/catch at the call site cannot help, because the call
-// itself never throws.
+// `router.push`/`navigate` do not navigate: they add to a queue held in React
+// state and return. Since SDK 58 the singleton THROWS until the navigation
+// container commits, and a failure draining the queue is only a console.warn,
+// so a stray call fails at the call site or is silently lost. Through SDK 57
+// the drain itself threw, above every error boundary, and aborted the process:
+// the iOS 0.6.3 build 13 TestFlight crash. A try/catch at the call site cannot
+// help, because stopping a throw does not perform the navigation.
 //
 // Note this catches STATIC imports only. `no-restricted-imports` never matches
 // `require()` or a dynamic `import()`, and the second live instance of this bug
@@ -37,7 +36,7 @@ const restrictedRouterImportPaths = [
     name: 'expo-router',
     importNames: ['router'],
     message:
-      "Publish to the pending slot in '@/navigation/pendingNavigation' instead of calling expo-router's imperative router here - outside a mounted navigator it enqueues a navigation that throws fatally when drained. Hooks and components (Stack, Link, useRouter, useLocalSearchParams) are fine, except a router's setParams: use useNavigation().setParams. See .claude/rules/imperative-router-inside-react.md.",
+      "Publish to the pending slot in '@/navigation/pendingNavigation' instead of calling expo-router's imperative router here - outside a mounted navigator the call throws or its navigation is silently lost. Hooks and components (Stack, Link, useRouter, useLocalSearchParams) are fine, except a router's setParams: use useNavigation().setParams. See .claude/rules/imperative-router-inside-react.md.",
   },
 ];
 

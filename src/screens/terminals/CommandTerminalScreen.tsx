@@ -49,7 +49,7 @@ const HEADER_MARK_SIZE = 16;
 const STOP_MARK_SIZE = 20;
 
 /** The route's params, one type for the read and the write so their names cannot drift apart. */
-type CommandTerminalRouteParams = { launchId?: string; sessionId?: string; projectId?: string };
+export type CommandTerminalRouteParams = { launchId?: string; sessionId?: string; projectId?: string };
 
 function nonEmpty(value: string | undefined): string | null {
   return value !== undefined && value.length > 0 ? value : null;
