@@ -93,6 +93,29 @@ All of these, and stop on any failure:
   found 0.20.0 against `^0.23.0`), and then typecheck fails in files the release never touched.
   `npm install` fixes it; run it before `/pull-request`, not halfway through it.
 - `main`'s own CI is green: `gh run list --workflow ci.yml --branch main --limit 1`.
+- **`main` is current with Expo's LIVE SDK version list.** Pull-request CI checks the mapping
+  offline (`Native config (prebuild)` reads only the installed SDK's own list), and the daily
+  `expo-drift.yml` can be up to a day old, so a release checks the live list itself. **Not in this
+  worktree:** its `node_modules` is normally a junction to the main checkout's tree, and the check
+  compares INSTALLED versions, so it would read someone else's. Use a throwaway worktree, outside
+  the main checkout and never at a drive root (the session scratchpad is right). It must have its own
+  `npm ci`, never over a junction.
+  1. `git worktree add --detach <folder> origin/main`, then `npm ci` there.
+  2. Run `npx expo install --check` there.
+  3. **Green:** `git worktree remove <folder>` and carry on.
+  4. **Drift:** run `node scripts/fixExpoDrift.mjs` there. A non-zero exit on a patch stops the
+     release: tell the user which call site its message names, because a hunk that no longer
+     applies needs a person's look.
+  5. Otherwise commit there as its own `chore(deps): take Expo's SDK <N> realignment` commit, then
+     `git cherry-pick <sha>` it onto this branch. It is clean, because this branch sits at
+     `origin/main` (above).
+  6. Run `npm install` here, so this worktree's tree matches the new lockfile, and remove the
+     throwaway worktree.
+
+  The release PR carries that commit: the one exception to "never fold drift into a PR", which the
+  maintainer accepted on 2026-10-22, because a rebase merge keeps it revertable and the release
+  build exercises it. A feature PR never carries one. `docs/developer-guide.md`'s "Expo's live
+  version list" has the background.
 - The platform's secrets exist (`gh secret list`):
   - **Android:** `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`,
     `ANDROID_KEY_PASSWORD`, `GOOGLE_SERVICES_JSON`, `PLAY_SERVICE_ACCOUNT_JSON`. Without the keystore

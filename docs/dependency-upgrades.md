@@ -4,8 +4,8 @@
 SDK mapping allows, and one agent does the upgrade by following
 `.claude/skills/upgrade-deps/apply.md`. The task then runs through Code Review, Testing and Merge
 like any other. It is ported from the desktop repo's skill of the same name. This page says how it
-works here and why it differs: most of this app's native stack is mapped by the Expo SDK, a
-required gate enforces that mapping, and the mapping moves on Expo's server.
+works here and why it differs: most of this app's native stack is mapped by the Expo SDK, gates
+enforce that mapping, and the mapping moves on Expo's server.
 
 There are two ways to run it, and the folder it runs in decides which:
 
@@ -22,11 +22,14 @@ Run it as often as you like. Packages ship daily and Expo moves its mapping with
 nothing here depends on the date: every run reads the newest releases and today's mapping, and
 research already done is skipped. `--dry-run` prints the planned task and files nothing.
 
-It is not the fix for a red `Native config (prebuild)` on `main`. Drift there blocks every pull
-request, and the fast path stays what it was: `npx expo install --fix` (or one
-`npx expo install <package>`) on its own branch cut from `main`. `/upgrade-deps` is a
-research-and-upgrade task that can take hours, and it stops without doing anything while an upgrade
-task is already past To Do. It picks drift up on its normal runs, as the first phase.
+It is not the fix for an open `expo-drift` issue, which the daily `expo-drift.yml` opens when `main`
+falls behind Expo's live SDK list. That fast path is `node scripts/fixExpoDrift.mjs` in a fresh
+worktree off `origin/main` with its own `npm ci`, committed on its own branch: it runs
+`npx expo install --fix`, renames any patch whose package moved, re-applies the patches and runs the
+online check. See "Expo's live version list" in the [developer guide](developer-guide.md).
+`/upgrade-deps` is a research-and-upgrade task that can take hours, and it stops without doing
+anything while an upgrade task is already past To Do. It picks drift up on its normal runs, as the
+first phase.
 
 ## Who does what
 
@@ -40,18 +43,25 @@ task is already past To Do. It picks drift up on its normal runs, as the first p
 
 ## The Expo SDK decides how far a mapped package moves
 
-`npx expo install --check` runs in the required `Native config (prebuild)` check. It fails any
-package the SDK maps that sits outside its mapping, and it reads `dependencies` and `devDependencies`
-alike (read from `@expo/cli`'s `validateDependenciesVersions`). The mapping is wider than the
-`expo-*` packages: SDK 58 maps `typescript` `~6.0.3`, `jest` `~30.5.2`, `@types/jest`,
-`@types/react`, and `react` at exactly 19.3.0. So `npm outdated` and npm's `latest` are the wrong
-answer for a third of this app's dependencies: TypeScript 7 or React 19.3.1 would turn every pull
-request red.
+`npx expo install --check` fails any package the SDK maps that sits outside its mapping, and it
+reads `dependencies` and `devDependencies` alike (read from `@expo/cli`'s
+`validateDependenciesVersions`). The mapping is wider than the `expo-*` packages: SDK 58 maps
+`typescript` `~6.0.3`, `jest` `~30.5.2`, `@types/jest`, `@types/react`, and `react` at exactly
+19.3.0. So `npm outdated` and npm's `latest` are the wrong answer for a third of this app's
+dependencies.
+
+Where each package is caught differs. The required `Native config (prebuild)` check runs the
+command OFFLINE, so it reads only the installed SDK's `expo/bundledNativeModules.json`, which holds
+every `expo-*` package plus `react`, `react-dom`, `react-native` and `jest-expo`: React 19.3.1
+turns a pull request red. `expo` itself, `typescript`, `jest` and the two `@types` packages come only
+from the versions endpoint, so TypeScript 7 passes a pull request and fails `apply.md`'s gates,
+which run online, and the daily `expo-drift.yml` once it reaches `main`.
 
 The script combines the mapping the way the Expo CLI does: the `native-modules` list for the SDK,
 overridden by the `versions` endpoint's `relatedPackages` plus `react`, `react-dom`, `react-native`
 and `expo` itself. The override is how Expo moves an expected version server-side, which is why the
-gate can go red with no change in this repository. If the versions endpoint cannot be read, the
+online check can go red with no change in this repository, and why the required one runs offline.
+If the versions endpoint cannot be read, the
 inventory reports the mapping as `incomplete` and the skill stops, because those packages would
 otherwise look unmapped.
 
@@ -79,7 +89,7 @@ is not mapped and peers only on `react`, so nothing would notice it drifting off
 moves in whichever group moves `react-native`, to the same version.
 
 A newer SDK is its own group, last before the lockfile refresh, because it is the widest change a
-dependency task can carry. The drift group stays beside it, so the required gate can go green even
+dependency task can carry. The drift group stays beside it, so the online check can go green even
 if the SDK phase is dropped. The newer SDK is read off npm's `latest`, never the versions endpoint's
 keys, which can list an SDK still in beta.
 

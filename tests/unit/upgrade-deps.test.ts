@@ -2,7 +2,8 @@
  * /upgrade-deps decides from version numbers what may move, so a wrong answer here files a task that
  * reddens a required gate, downgrades a fix, or spends a research pass nobody needed. On this app the
  * worst wrong answer is a mapped package planned past the Expo SDK mapping: `npx expo install --check`
- * fails on it, devDependencies included, so TypeScript 7 or a react patch would turn every PR red.
+ * fails on it, devDependencies included, so a react patch would turn every PR red, and TypeScript 7
+ * every upgrade phase's gate and the daily expo-drift.yml check.
  *
  * Ported from the desktop repo's test; the Expo SDK, patch and first-party cases are this repo's own.
  *

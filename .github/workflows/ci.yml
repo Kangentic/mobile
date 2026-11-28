@@ -236,13 +236,37 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-node-deps
       # Closes the other half of the gate pre-registered in
-      # .claude/rules/expo-cng.md. This was deliberately left out once, on the
+      # .claude/rules/expo-cng.md, and it stays strict for drift THIS REPOSITORY
+      # causes: a raw `npm install` past the SDK, or a lockfile that takes a mapped
+      # package out of range, fails here. It was deliberately left out once, on the
       # grounds that it would redden an otherwise-green check over cosmetic drift.
       # That reasoning was wrong and cost real time: the drift it would have caught
       # included `expo` itself being three patches behind, and it was masking a
       # config-plugin import that failed under `eas build` while every gate passed.
       # Drift is not cosmetic when the SDK is one of the drifting packages.
+      #
+      # OFFLINE, and on this step only. Online, `--check` also reads Expo's
+      # versions endpoint, which Expo changes on its server with no commit here:
+      # 22 realignments between 2026-07-25 and 2026-11-28, each one turning an
+      # unrelated pull request red, and twice leaving main red for four to five
+      # days, because a red check on main notifies nobody. With EXPO_OFFLINE the
+      # expected versions come only from the installed SDK's own
+      # expo/bundledNativeModules.json (read from @expo/cli's
+      # getVersionedPackages.js and bundledNativeModules.js), so the result is a
+      # function of the lockfile and nothing else.
+      #
+      # What that gives up here: the versions endpoint's own entries, which are
+      # `expo` itself, `typescript`, `jest`, `@types/react` and `@types/jest`.
+      # Every `expo-*` package, `react`, `react-dom`, `react-native` and
+      # `jest-expo` are in bundledNativeModules.json and are still checked.
+      # .github/workflows/expo-drift.yml checks main against Expo's LIVE list every
+      # day and opens an issue when it moves; scripts/fixExpoDrift.mjs is the fix.
+      #
+      # Never put EXPO_OFFLINE on the job: the two prebuild steps below share it,
+      # and neither may run offline.
       - name: Check for dependency drift
+        env:
+          EXPO_OFFLINE: '1'
         run: npx expo install --check
 
       - name: Generate the native Android project

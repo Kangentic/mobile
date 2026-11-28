@@ -30,7 +30,8 @@ agent that never saw your research can do the work. You do not change code, run 
 tasks. The only files you write are briefs under the cache path your prompt names.
 
 Ported from the desktop repo's agent. What differs here is the Expo SDK: most of the native stack
-is mapped by it, and `npx expo install --check` is a required gate.
+is mapped by it, and `npx expo install --check` gates every upgrade phase (online), every pull
+request (offline, against the installed SDK's own list) and `main` daily (online, `expo-drift.yml`).
 
 Your prompt gives you, per group: the packages with `installed` and `target` versions, whether each
 is an exact pin, a runtime dependency or native, any `peerConflicts`, the group's `sdkRole`, each

@@ -5,10 +5,12 @@
  * whether earlier research still answers it.
  *
  * Why a script: on this app the answer to "what can move" is not `npm outdated`. Most of the native
- * stack is mapped by the Expo SDK, and `npx expo install --check` is a REQUIRED gate that fails any
- * mapped package outside its mapping, devDependencies included (`typescript`, `jest` and
- * `@types/jest` are mapped too, so TypeScript 7 would redden it). The mapping also moves on Expo's
- * server with no change in this repo. So a mapped package's target comes from the mapping, a move
+ * stack is mapped by the Expo SDK, and `npx expo install --check` fails any mapped package outside
+ * its mapping, devDependencies included (`typescript`, `jest` and `@types/jest` are mapped too, so
+ * TypeScript 7 would redden it). It gates every upgrade phase online, every pull request offline
+ * (where the installed SDK's own list still catches `expo-*` and `react`, but not `typescript`),
+ * and main daily through .github/workflows/expo-drift.yml. The mapping also moves on Expo's server
+ * with no change in this repo. So a mapped package's target comes from the mapping, a move
  * past it is a hold that needs a recorded reason (`expo.install.exclude` plus a row in
  * docs/developer-guide.md), and a newer SDK is a group of its own. Every one of those decisions is a
  * function of version numbers and is never left to a reading of the output.
@@ -495,7 +497,7 @@ const NO_SDK = { installedMajor: null, mapping: {}, exclude: [], next: null };
  * A package can be in `expo-sdk` and a beyond-mapping group at once (drift now, then a hold). A
  * newer SDK adds one more group, every declared package its mapping moves, held ones included,
  * because an SDK upgrade is where a hold is vetted again. The drift group stays beside it, so the
- * required gate can go green even if the SDK phase is dropped.
+ * online check can go green even if the SDK phase is dropped.
  *
  * `packuments` may also hold packages nothing declares, read because a brief's blocker waits on
  * them. Those only supply the blocker check.
@@ -769,7 +771,7 @@ async function readPackuments(names) {
  *
  * `incomplete` names what could not be read for the INSTALLED SDK. Without the versions endpoint,
  * `react`, `react-native`, `typescript`, `jest` and `@types/*` look unmapped, and the registry would
- * plan them past the required gate, so the skill stops on it.
+ * plan them past the mapping `npx expo install --check` enforces, so the skill stops on it.
  */
 async function readSdk(declared, packuments, exclude) {
   const errors = [];

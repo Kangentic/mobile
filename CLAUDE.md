@@ -152,7 +152,9 @@ patches/                      # patch-package patches, applied by the `postinsta
                               #   check the call site, re-apply, rename in the SAME commit as the
                               #   lockfile, because CI's cache key hashes patches/** and a stale
                               #   name is a mismatch warning today and a silent drop when the
-                              #   hunk stops applying.
+                              #   hunk stops applying. scripts/fixExpoDrift.mjs does the rename
+                              #   and the re-apply for an Expo realignment, and stops naming
+                              #   this call site when the hunk no longer applies.
                               #   THE PATCH IS INERT WITHOUT `expo.autolinking.buildFromSource` in
                               #   package.json naming BOTH expo-task-manager and
                               #   unimodules-app-loader: the module ships a prebuilt AAR and is not
@@ -344,7 +346,12 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   `simctl push`es its output),
                   #   mobileInspect.mjs, syncBranding.mjs, easProfile.mjs (CI reads eas.json
                   #   profiles through it), androidAbis.mjs, checkInstallDrift.mjs (the
-                  #   pretypecheck stale-node_modules guard), the store preflights
+                  #   pretypecheck stale-node_modules guard), checkExpoDrift.mjs (the online
+                  #   `expo install --check` that expo-drift.yml runs daily against main, and
+                  #   the one public `expo-drift` issue it opens, rewrites or closes),
+                  #   fixExpoDrift.mjs (the fix that issue names: `expo install --fix`, the
+                  #   patch renames, the re-apply and the online check, in a fresh worktree
+                  #   off origin/main, never a task worktree), the store preflights
                   #   checkPlayVersionCode.mjs / checkAppStoreBuild.mjs,
                   #   checkIosSdk.mjs (the ITMS-90725 SDK floor: build-ios.yml
                   #   holds every built app to it through
@@ -369,6 +376,8 @@ scripts/          # bash-guard.js, dev.mjs, stubDesktopPeer.mjs, buildXtermHtml.
                   #   appScreenshotSets in API 4.5.x. First run against the store on
                   #   2026-11-12, on version 1.5.0), lib/cliArguments.mjs
                   #   (the strict `--flag value` parser the store scripts share),
+                  #   lib/onlineEnvironment.mjs (the EXPO_OFFLINE-free environment both
+                  #   Expo drift scripts run the CLI in),
                   #   waitForReleaseGate.mjs (read-only: polls a release run until a gate
                   #   waits or the run ends, so /release is woken once per gate),
                   #   build-review-pack.mjs (gathers the /code-review diff once into a
@@ -430,6 +439,12 @@ store/whatsnew/               # Release notes (whatsnew-<locale>, 500-char cap) 
   an explicit request, and **never dispatch either mode for Android while a Play submission is
   uploading**, because opening a Play edit invalidates the release's own. See "Getting the frames
   onto the listings" in [docs/developer-guide.md](docs/developer-guide.md).
+- `gh workflow run expo-drift.yml` - checks `main` against Expo's LIVE SDK version list (it also
+  runs daily at 07:30 UTC). `Native config (prebuild)` checks the mapping offline, so Expo moving
+  its list on its server no longer reddens a pull request; this is where that move shows up. **On
+  drift it writes a public issue** (label `expo-drift`), so dispatch it only on request. The fix is
+  `node scripts/fixExpoDrift.mjs` in a fresh worktree off `origin/main` with its own `npm ci`. See
+  "Expo's live version list" in [docs/developer-guide.md](docs/developer-guide.md).
 - The `eas build` wrappers below are **cloud** builds that each spend one of the 15 free monthly
   builds per platform and enter a low-priority queue that can take hours. Prefer the workflows above;
   use these only when a runner will not do:
