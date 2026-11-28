@@ -188,7 +188,7 @@ describe('resumeTaskSession', () => {
  * refresh would only race it.
  */
 describe('resumeTaskSession - refreshing on a live outcome', () => {
-  const establishedConnection = { controller: { session: { isEstablished: true } }, verbs: { label: 'verb client' } };
+  const establishedConnection = { controller: { session: { isEstablished: true } }, verbs: { label: 'verb client' }, demoConnection: false };
   const subscriptions = { label: 'subscription manager' };
 
   /**
@@ -208,7 +208,7 @@ describe('resumeTaskSession - refreshing on a live outcome', () => {
     const attempt = await resumeTaskSession('task-1', 'project-1');
 
     expect(runBootstrap).toHaveBeenCalledTimes(1);
-    expect(runBootstrap).toHaveBeenCalledWith(establishedConnection.verbs, subscriptions);
+    expect(runBootstrap).toHaveBeenCalledWith(establishedConnection.verbs, subscriptions, { demoConnection: false });
     expect(attempt.phase).toBe('resuming');
   });
 
@@ -517,7 +517,7 @@ describe('resumeTaskOnOpen', () => {
   });
 
   describe('after the desktop answers live', () => {
-    const establishedConnection = { controller: { session: { isEstablished: true } }, verbs: { label: 'verb client' } };
+    const establishedConnection = { controller: { session: { isEstablished: true } }, verbs: { label: 'verb client' }, demoConnection: false };
     const subscriptions = { label: 'subscription manager' };
 
     /** The refresh is a no-op without an established connection, so connect one or "refreshed once" could never be true. */
@@ -535,7 +535,7 @@ describe('resumeTaskOnOpen', () => {
       await resumeTaskOnOpen('task-1', 'project-1');
 
       expect(runBootstrap).toHaveBeenCalledTimes(1);
-      expect(runBootstrap).toHaveBeenCalledWith(establishedConnection.verbs, subscriptions);
+      expect(runBootstrap).toHaveBeenCalledWith(establishedConnection.verbs, subscriptions, { demoConnection: false });
       expect(attemptFor()).toMatchObject({ phase: 'resuming', origin: 'open' });
 
       vi.advanceTimersByTime(RESUME_WAIT_MS);

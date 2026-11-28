@@ -1088,9 +1088,20 @@ processes - Notifee's background handler on Android, a separate extension proces
 generated on-device and exchanged via the `register-push` verb on every established bootstrap,
 alongside the device's enabled `categories` (`pushRegistration.ts` - idempotent, re-sent on Expo
 token rotation or a category-preference change, and non-fatal without FCM credentials or against
-an older desktop; `getPushRegistrationStatus()` feeds the Settings UI). Preferences are enforced
-**desktop-side**: the desktop filters outgoing notifications to the device's registered set
-before sealing, so the iOS Notification Service Extension never needs to know about them.
+an older desktop; `getPushRegistrationStatus()` feeds the Settings UI). It is also re-sent,
+although this process already registered, when the bootstrap's project list says the desktop
+holds no registration for this phone (`pushRegistered: false`, protocol 0.30.0: the desktop set a
+corrupt registrations file aside and started empty, Sentry DESKTOP-5H). Only an explicit false
+counts, since an older desktop omits the field, and nothing is sent for the demo pairing or with
+notifications off. Registrations run one at a time, so a re-send while the established
+handshake's own registration is still in flight reaches the desktop once, not twice; a
+registration still pending after 30 seconds (the Expo token fetch has no timeout of its own) stops
+holding back the next one. An unpair's unregister cancels every registration queued before it, so
+none of them can re-register the device afterwards.
+
+Preferences are enforced **desktop-side**: the desktop filters outgoing notifications to the
+device's registered set before sealing, so the iOS Notification Service Extension never needs to
+know about them.
 `pushDecrypt.ts` opens envelopes with the phone's static public key as the AAD and maps the six
 categories (`categoryCopy.ts` - `input-required` / `turn-complete` / `session-failed` /
 `plan-complete` / `spawn-stalled` / `workflow-complete`, named for cross-vendor task-lifecycle

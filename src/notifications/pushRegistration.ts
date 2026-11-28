@@ -17,8 +17,10 @@ import { getPushIdentityPublicKey } from './pushIdentity';
  * Registers this device for E2E-encrypted remote push with the desktop:
  * the device-generated push key plus the Expo push token travel over the
  * established secure channel via the register-push verb. Called
- * fire-and-forget on every established bootstrap; every failure mode is
- * non-fatal and recorded as a status the Settings UI reads.
+ * fire-and-forget on every established bootstrap, and again
+ * (registerPushAgainWithDesktop) when the desktop's project list says it
+ * holds no registration for this phone (protocol 0.30.0); every failure mode
+ * is non-fatal and recorded as a status the Settings UI reads.
  *
  * - 'unavailable-no-fcm': getExpoPushTokenAsync threw (an Android build
  *   without google-services.json, or offline). The app works fully;
@@ -35,6 +37,42 @@ export type PushRegistrarVerbs = Pick<VerbClient, 'registerPush'>;
 let registrationStatus: PushRegistrationStatus = 'pending';
 let registeredThisProcess = false;
 let lastRegisteredCategories: PushCategory[] | null = null;
+/**
+ * Registrations run one at a time, each after the one before it settles, so a
+ * later one reads the state an earlier one left instead of racing it. That is
+ * what lets registerPushAgainWithDesktop send exactly once when the
+ * established-handshake registration is still in flight. The one exception is
+ * a registration still pending after PREVIOUS_REGISTRATION_WAIT_CAP_MS: the
+ * next one stops waiting for it. Never rejects: registerOnce catches
+ * everything.
+ */
+let registrationQueue: Promise<void> = Promise.resolve();
+
+/**
+ * How long a registration waits for the one queued before it. Its register-push
+ * has the capability client's request timeout, but the Expo token fetch has
+ * none of its own (getExpoPushTokenAsync is a bare fetch), so one that never
+ * settled would otherwise hold back every later registration for the rest of
+ * the process, the bootstrap's repair included, where before the queue it held
+ * back only itself. Past the cap the next one runs beside it, as every
+ * registration did before the queue. A cap rather than a timeout on the fetch,
+ * so a slow fetch that would have succeeded still does.
+ */
+const PREVIOUS_REGISTRATION_WAIT_CAP_MS = 30_000;
+
+/**
+ * Moves on at every unregister. A registration notes it when it is queued and,
+ * once it has moved on, neither sends nor records anything. An unpair can land
+ * while a registration waits in the queue or on its token fetch; without this,
+ * that registration would then put the device back on the desktop it just
+ * left, mint a push key after the unpair wiped it, and leave this process
+ * marked registered, so a re-pair with the same desktop (no key change, so no
+ * reset in connectionManager.ts) would skip its own registration. Deliberately
+ * not moved by resetPushRegistrationProcessState: registerPushAgainWithDesktop
+ * resets too, and must not cancel the established-handshake registration it
+ * relies on.
+ */
+let unregisterGeneration = 0;
 
 /** For the Settings UI (workstream B7). */
 export function getPushRegistrationStatus(): PushRegistrationStatus {
@@ -69,9 +107,58 @@ function resolveEasProjectId(): string | undefined {
 /**
  * Idempotent registration: re-run on every established bootstrap, it only
  * hits the wire when this process has not registered yet or the Expo token
- * rotated since the last successful registration. Never throws.
+ * rotated since the last successful registration. Queued behind any
+ * registration still in flight. Never throws.
  */
-export async function registerPushWithDesktop(verbs: PushRegistrarVerbs | null): Promise<void> {
+export function registerPushWithDesktop(verbs: PushRegistrarVerbs | null): Promise<void> {
+  const unregisterGenerationAtQueue = unregisterGeneration;
+  const registration = settledOrCapped(registrationQueue, PREVIOUS_REGISTRATION_WAIT_CAP_MS).then(() =>
+    registerOnce(verbs, unregisterGenerationAtQueue),
+  );
+  registrationQueue = registration;
+  return registration;
+}
+
+/** Resolves once `previous` settles or `capMs` passes, whichever is first. Never rejects. */
+function settledOrCapped(previous: Promise<void>, capMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const capTimer = setTimeout(resolve, capMs);
+    const onPreviousSettled = (): void => {
+      clearTimeout(capTimer);
+      resolve();
+    };
+    previous.then(onPreviousSettled, onPreviousSettled);
+  });
+}
+
+/**
+ * Registers again although this process already registered: the desktop's
+ * project list said it holds no registration for this phone
+ * (`pushRegistered: false`, protocol 0.30.0), for example after it set aside a
+ * corrupt registrations file. Nothing is sent when the user turned
+ * notifications off, which is also why a desktop holds none for them. Never
+ * throws.
+ *
+ * The reset happens NOW, not when this registration's turn in the queue comes.
+ * A registration already in flight that has not reached its idempotence check
+ * yet (the established-handshake one, waiting on its Expo token) then sends,
+ * and the registration queued here finds it done and sends nothing. One
+ * already on the wire (a cold start's, past that check) registers first, and
+ * this one again finds it done. One that already finished without sending
+ * leaves this one to send. Either way the desktop is told once, unless the one
+ * in flight is still pending past PREVIOUS_REGISTRATION_WAIT_CAP_MS, when both
+ * may send and the second only repeats the first. Skipping instead while a
+ * registration is in flight would send nothing at all on a reconnect, where
+ * the in-flight one still believes this process is registered.
+ */
+export function registerPushAgainWithDesktop(verbs: PushRegistrarVerbs): Promise<void> {
+  if (useSettingsStore.getState().backgroundNotificationsMode === 'off') return Promise.resolve();
+  resetPushRegistrationProcessState();
+  return registerPushWithDesktop(verbs);
+}
+
+async function registerOnce(verbs: PushRegistrarVerbs | null, unregisterGenerationAtQueue: number): Promise<void> {
+  const unregisteredSinceQueued = (): boolean => unregisterGeneration !== unregisterGenerationAtQueue;
   try {
     if (!verbs) {
       registrationStatus = 'not-connected';
@@ -101,6 +188,9 @@ export async function registerPushWithDesktop(verbs: PushRegistrarVerbs | null):
       return;
     }
 
+    // Before the key read, so an unregister during the token fetch cannot be
+    // followed by a key minted after the unpair's wipe.
+    if (unregisteredSinceQueued()) return;
     const pushKey = await getOrCreatePushKey();
     const payload: RegisterPushRequestPayload = {
       action: 'register',
@@ -117,8 +207,15 @@ export async function registerPushWithDesktop(verbs: PushRegistrarVerbs | null):
       acceptsClears: true,
     };
 
+    // Again across the key read. registerPush writes its frame synchronously,
+    // so a register that passes this check reaches the desktop ahead of any
+    // later unregister, which then has the last word.
+    if (unregisteredSinceQueued()) return;
     try {
       const response = await verbs.registerPush(payload);
+      // The unregister went out after this register: record nothing, so a
+      // re-pair in this process registers afresh.
+      if (unregisteredSinceQueued()) return;
       if (response.registered) {
         registrationStatus = 'registered';
         registeredThisProcess = true;
@@ -168,6 +265,9 @@ export function resetPushRegistrationProcessState(): void {
  * DeviceNotRegistered handling or roster revocation cleans it up.
  */
 export async function unregisterPushWithDesktop(verbs: PushRegistrarVerbs | null): Promise<void> {
+  // First, before anything can await: every registration queued until now is
+  // cancelled (see unregisterGeneration).
+  unregisterGeneration += 1;
   resetPushRegistrationProcessState();
   if (!verbs) return;
   try {

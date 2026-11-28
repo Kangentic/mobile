@@ -1003,5 +1003,5 @@ export async function unpairLocally(intent: ConnectionTeardownIntent): Promise<v
 export async function refreshSnapshots(): Promise<void> {
   const connection = getActiveConnection();
   if (!connection || !connection.controller.session.isEstablished) return;
-  await runBootstrap(connection.verbs, requireSubscriptions());
+  await runBootstrap(connection.verbs, requireSubscriptions(), { demoConnection: connection.demoConnection });
 }

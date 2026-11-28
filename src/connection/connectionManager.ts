@@ -79,6 +79,8 @@ export interface ActiveConnection {
   controller: ChannelController;
   verbs: VerbClient;
   subscriptions: SubscriptionManager;
+  /** The demo pairing's in-process desktop, which never registers for push (see `demoConnection` in performOpenConnection). */
+  demoConnection: boolean;
 }
 
 /**
@@ -486,7 +488,7 @@ async function performOpenConnection(): Promise<void> {
   let bootstrapInFlight = false;
   const runBootstrapWithRetry = (attempt: number, generation: number): void => {
     bootstrapInFlight = true;
-    void runBootstrap(controller.verbs, subscriptions)
+    void runBootstrap(controller.verbs, subscriptions, { demoConnection })
       .then(() => {
         // A superseded bootstrap leaves the re-read to the newer one, which
         // runs it on its own completion.
@@ -640,7 +642,7 @@ async function performOpenConnection(): Promise<void> {
   }
 
   useChannelStore.getState().setRelayUrl(anchor.relayAddress);
-  activeConnection = { controller, verbs: controller.verbs, subscriptions };
+  activeConnection = { controller, verbs: controller.verbs, subscriptions, demoConnection };
   teardownActiveConnection = teardownThisAttempt;
 
   await controller.connect().catch(() => {
