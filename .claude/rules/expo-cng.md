@@ -39,12 +39,17 @@ unreproducible for any other contributor or CI machine.
   `npm install` takes latest and silently
   drifts against it. Non-Expo packages may use `npm install` normally.
 - After any dependency change, run `npx expo install --check` to confirm nothing drifted.
-- **The drift gate can go red with NO change in this repository.** Expo resolves expected
-  versions server-side, so a mapping can move under a lockfile that never changed: the same tree
-  passed on `main` and failed hours later on a pull request, twice, with react-native-gesture-handler
-  flipping between the 2.32 and 3.1 lines in both directions inside two days. Diagnose a red
-  `Native config (prebuild)` by checking whether the diff touches a manifest at all before
-  assuming the branch caused it.
+- **Expo moves its expected versions with NO change in this repository.** It resolves them
+  server-side, so a mapping can move under a lockfile that never changed: the same tree passed on
+  `main` and failed hours later on a pull request, twice, with react-native-gesture-handler
+  flipping between the 2.32 and 3.1 lines in both directions inside two days, and 22 times
+  between 2026-07-25 and 2026-11-28. So the required check reads the list OFFLINE and cannot go
+  red for that reason any more (see Enforcement). The online `npx expo install --check` you run
+  locally, and the daily `expo-drift.yml`, still can. When the `expo-drift` issue opens, the fix is
+  `node scripts/fixExpoDrift.mjs` in a fresh worktree off `origin/main` with its own `npm ci`,
+  committed on its own branch, never folded into a feature PR (a release PR is the one exception,
+  `.claude/skills/release/SKILL.md` Step 1). A red `Native config (prebuild)` drift step now means
+  the repository moved a mapped package out of range.
 - **`expo.install.exclude` in `package.json` is the deliberate-hold mechanism, and it SILENCES a
   required check.** Listing a package there drops it from `expo install --check` and `--fix`
   entirely, which is correct when the repo has deliberately chosen a version the SDK mapping
@@ -74,7 +79,17 @@ unreproducible for any other contributor or CI machine.
   SDK-resolved dependency drift a PR gate. This was previously deferred on the grounds that it
   would redden a green check over cosmetic drift. That was the wrong call: the drift it would
   have caught included `expo` itself three patches behind, and it was masking the config-plugin
-  failure above. Drift is not cosmetic when the SDK is one of the drifting packages.
+  failure above. Drift is not cosmetic when the SDK is one of the drifting packages. It runs
+  with `EXPO_OFFLINE` on that one step (never the job, whose prebuild steps must stay online), so
+  it compares the lockfile with the installed SDK's own `expo/bundledNativeModules.json` and
+  nothing Expo changes on its server can redden it. What it gives up at PR time, the versions
+  endpoint's own entries (`typescript` among them), is listed in "Expo's live version list" in
+  `docs/developer-guide.md`, which owns that list. `tests/unit/buildWorkflow.test.ts` pins the
+  variable to that step and keeps it off the rest.
+- **Check (live now, daily):** `.github/workflows/expo-drift.yml` runs the ONLINE check against
+  `main` at 07:30 UTC. On drift it opens or rewrites one public issue labelled `expo-drift` and
+  fails, which notifies; once `main` is current it closes the issue. That is where the endpoint's
+  entries are checked, within a day. `scripts/fixExpoDrift.mjs` is the fix it names.
 - **Check (live now, on dispatch):** `.github/workflows/build-android.yml` and
   `build-ios.yml` each also prebuild for real before building, so the same class of breakage
   fails a build even if it somehow reached `main`.

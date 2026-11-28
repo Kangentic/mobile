@@ -1,0 +1,79 @@
+# Checks main against Expo's LIVE SDK version list once a day, and keeps one open
+# issue while main is behind it.
+#
+# WHY THIS EXISTS. `npx expo install --check` compares the lockfile with the versions
+# Expo expects for the SDK, and Expo changes that list on its own server with no
+# commit here: 22 realignments between 2026-07-25 and 2026-11-28, about one every six
+# days. While that check ran online inside the required `Native config (prebuild)`,
+# every move turned an unrelated pull request red, and twice main sat red for four to
+# five days, because a red check on main notifies nobody. ci.yml now runs that step
+# with EXPO_OFFLINE, so the required check depends only on the repository. This
+# workflow is where Expo's live list is still read, on a schedule, against main.
+#
+# On drift, scripts/checkExpoDrift.mjs opens ONE issue labelled `expo-drift` (or
+# rewrites the open one's body) and the job fails. The failed scheduled run is the
+# notification: GitHub sends it to whoever last changed the cron line below. When
+# main is current again, the next run closes the issue with a comment. An Expo outage
+# fails the run and leaves the issue alone. The fix the issue names is
+# scripts/fixExpoDrift.mjs, run in a fresh worktree off origin/main.
+#
+# THE ISSUE IS PUBLIC (this repository is public): it carries package names and
+# versions, the run link and the fix command, and nothing else.
+#
+# NO PULL REQUEST, deliberately. A pull request opened with GITHUB_TOKEN triggers no
+# `pull_request` workflows, and `Release counters (stores)` is required and runs only
+# on `pull_request`, so a bot PR from here could never go green. Extending this to
+# open the fix PR itself needs a GitHub App or a personal access token as a secret,
+# which only the owner can set up; then run fixExpoDrift.mjs here and open the PR
+# with that token.
+#
+# GitHub disables a schedule in a public repository after 60 days with no activity.
+# Re-enable it from the Actions tab if that happens.
+name: Expo drift
+
+on:
+  # 07:30 UTC daily, clear of Monday's 05:00 cache-cleanup.yml and 06:00 build-ios.yml.
+  schedule:
+    - cron: '30 7 * * *'
+  workflow_dispatch:
+
+# Declaring a block sets every unlisted scope to `none`.
+#   contents: read   the checkout.
+#   issues: write    the drift issue and its label. Nothing here pushes, tags or
+#                    opens a pull request, so nothing else is granted.
+permissions:
+  contents: read
+  issues: write
+
+# A dispatch landing on the schedule would race to create the same issue.
+concurrency:
+  group: expo-drift
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Expo version list (live)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # The same lockfile-and-patches key as every ci.yml job, so on main this
+      # restores the entry ci.yml's push run wrote and adds nothing to the Actions
+      # cache budget.
+      - uses: ./.github/actions/setup-node-deps
+      # ONLINE: the script removes EXPO_OFFLINE from the check's environment, and
+      # nothing in this workflow sets it.
+      - name: Check main against Expo's live list
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Only main writes the public issue; a dispatch on any other branch
+          # reports to the job summary alone. A schedule always runs on the default
+          # branch, so `github.ref` is refs/heads/main there. Compared with the
+          # literal rather than github.event.repository.default_branch, which a
+          # schedule event's payload is not documented to carry.
+          WRITE_ISSUE: ${{ github.ref == 'refs/heads/main' }}
+        run: node scripts/checkExpoDrift.mjs

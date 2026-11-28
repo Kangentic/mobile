@@ -1,6 +1,6 @@
 ---
 name: upgrade-deps
-description: Research every npm dependency with a newer eligible release, within what the Expo SDK mapping allows, reading each changelog and migration guide and what the release lets us remove or adopt, and get the upgrade done by one agent. Inside a board task it does the upgrade itself by following apply.md. From a Command Terminal it files one board task for an agent to do that. It never files a follow-up. Reuses earlier research when nothing moved or a known blocker still stands. Use for "update our packages", "upgrade dependencies", or "what can we upgrade". Not the fix for a red `expo install --check` on main: that is a quick `npx expo install --fix` on its own branch.
+description: Research every npm dependency with a newer eligible release, within what the Expo SDK mapping allows, reading each changelog and migration guide and what the release lets us remove or adopt, and get the upgrade done by one agent. Inside a board task it does the upgrade itself by following apply.md. From a Command Terminal it files one board task for an agent to do that. It never files a follow-up. Reuses earlier research when nothing moved or a known blocker still stands. Use for "update our packages", "upgrade dependencies", or "what can we upgrade". Not the fix for an open `expo-drift` issue (main behind Expo's live SDK list): that is `node scripts/fixExpoDrift.mjs` in a fresh worktree off origin/main, on its own branch.
 allowed-tools: Read, Glob, Grep, Write, Edit, Bash(node:*), Bash(npm:*), Bash(npx:*), Bash(git:*), Bash(gh:*), Agent
 argument-hint: [--dry-run] [--refresh] [package or group ...]
 ---
@@ -49,12 +49,17 @@ Actions pins are kept by hand ("What is pinned, and what is deliberately not" in
 `docs/developer-guide.md`). Everything else is up for a full upgrade, majors and exact pins
 included, unless one of these stops it:
 
-- **The Expo SDK mapping.** `npx expo install --check` is a required gate (`Native config
-  (prebuild)`), and it fails any package the SDK maps that sits outside its mapping, devDependencies
-  included: `typescript`, `jest`, `@types/jest`, `@types/react` and `react` are mapped, not just the
-  `expo-*` packages. The inventory gives every package an `sdkRole` (below), so nothing is planned
-  past the mapping without a hold the research earned. A hold means an `expo.install.exclude` entry
-  and a row in the developer guide's hold table (`.claude/rules/expo-cng.md`).
+- **The Expo SDK mapping.** `npx expo install --check` fails any package the SDK maps that sits
+  outside its mapping, devDependencies included: `typescript`, `jest`, `@types/jest`, `@types/react`
+  and `react` are mapped, not just the `expo-*` packages. It gates in three places. The required
+  `Native config (prebuild)` check runs it OFFLINE, against the installed SDK's
+  `bundledNativeModules.json`, which covers every `expo-*` package plus `react`, `react-dom`,
+  `react-native` and `jest-expo`. `expo` itself, `typescript`, `jest` and `@types/*` come only from
+  Expo's versions endpoint, so a pull request no longer catches them: `apply.md`'s gates run the
+  check online, and the daily `expo-drift.yml` catches anything that reaches `main`. The inventory
+  gives every package an `sdkRole` (below), so nothing is planned past the mapping without a hold
+  the research earned. A hold means an `expo.install.exclude` entry and a row in the developer
+  guide's hold table (`.claude/rules/expo-cng.md`).
 - **A downgrade.** The inventory never moves a package below what is installed, whatever `latest`
   says, so never pick a version by hand from `npm outdated`.
 - **A peer range nothing satisfies.** It goes on the record as blocked, with what would clear it.
@@ -90,7 +95,7 @@ means no. Read:
   | `sdkRole` | Means |
   |---|---|
   | none | Not mapped. The registry decides, as on the desktop. |
-  | `drift` | The `expo-sdk` group: every mapped package moving to the newest release its mapping accepts, which `npx expo install` does at once. This is what keeps the required gate green when Expo moves the mapping server-side. |
+  | `drift` | The `expo-sdk` group: every mapped package moving to the newest release its mapping accepts, which `npx expo install` does at once. This keeps `main` current with Expo's live list when Expo moves the mapping server-side, which is what the daily `expo-drift.yml` checks. |
   | `beyond-mapping` | A mapped package with a release past the mapping. Taking it is a hold research has to earn; usually the answer is to stay. |
   | `held` | Already in `expo.install.exclude`, judged by the registry. `holdCanEnd` means the mapping caught up and the exclude entry can come out; kind `unhold` means that is the only work. |
   | `next-sdk` | The `expo-sdk-<N>` group: a newer SDK, every member its mapping moves, held ones included. |

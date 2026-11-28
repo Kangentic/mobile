@@ -913,6 +913,7 @@ The build and test workflows in `.github/workflows/` (alongside `cla.yml`, the C
 | `build-ios.yml` | `workflow_dispatch` | `xcode-27` for the two compile jobs, `macos-latest` for the TestFlight upload, `ubuntu-24.04` for the App Review stage | unsigned simulator compile check, or a signed `.ipa` with an optional TestFlight upload, or (`-f submit=appstore`) the upload plus the two App Store stages. `-f screenshots=true` instead captures the App Store 6.9-inch listing frames on a booted simulator (experimental, ~45 min per attempt) |
 | `app-store-check.yml` | `workflow_dispatch` | `ubuntu-24.04` | read-only preflight for `submit=appstore` (`prepareAppStoreRelease.mjs --mode check`), including the listing screenshots against the committed frames; writes nothing |
 | `store-listing.yml` | `workflow_dispatch` | `ubuntu-24.04` | the committed listing screenshots against both stores: `mode=check` reads only, `mode=sync` uploads behind each store's release environment. See "Getting the frames onto the listings" |
+| `expo-drift.yml` | daily at 07:30 UTC, `workflow_dispatch` | `ubuntu-24.04` | `main` against Expo's LIVE SDK version list (`scripts/checkExpoDrift.mjs`); on drift it opens or rewrites one public issue labelled `expo-drift` and fails, and it closes the issue once `main` is current. See "Expo's live version list" |
 
 **Every Linux job is pinned to `ubuntu-24.04`, never `ubuntu-latest`** (2026-10-19). GitHub moves
 `ubuntu-latest` to Ubuntu 26.04 over several weeks from 2026-10-19 to 2026-11-19
@@ -951,7 +952,7 @@ is the only authority, which is why `/pull-request` reads it rather than trustin
 | `Type check (tsc)` | `ci.yml` | `tsc --noEmit`, behind the `checkInstallDrift.mjs` guard | 22s |
 | `Unit Tests (Vitest)` | `ci.yml` | Runs the whole unit tier. Unsharded, so this job is both the work and the required check | 30s |
 | `Component Tests (Jest)` | `ci.yml` | A thin gate: every `Component Tests (n/2)` shard passed, on **both** platforms | 2s |
-| `Native config (prebuild)` | `ci.yml` | `expo install --check`, prebuild for iOS **and** Android, the Sentry plugin actually wiring itself in (including the Android Gradle Plugin that uploads the R8 mapping, and both generated `sentry.properties` files pinning `defaults.org=kangentic` / `defaults.project=mobile`, since a stale slug 404s the upload during a real release), R8 minification and resource shrinking being enabled, the E2E-only manifest carve-outs landing, the CMake staging block reaching `settings.gradle` and not stacking on a repeat prebuild, the Notification Service Extension target being injected exactly once with its sources and `NSExtensionPointIdentifier`, the app entitlements carrying the shared Keychain group with the application-identifier group **first**, and `android`/`ios` staying untracked | 25-33s |
+| `Native config (prebuild)` | `ci.yml` | `expo install --check` **offline** (the lockfile against the installed SDK's own `bundledNativeModules.json`, so Expo moving its list on its server cannot redden it; see "Expo's live version list"), prebuild for iOS **and** Android, the Sentry plugin actually wiring itself in (including the Android Gradle Plugin that uploads the R8 mapping, and both generated `sentry.properties` files pinning `defaults.org=kangentic` / `defaults.project=mobile`, since a stale slug 404s the upload during a real release), R8 minification and resource shrinking being enabled, the E2E-only manifest carve-outs landing, the CMake staging block reaching `settings.gradle` and not stacking on a repeat prebuild, the Notification Service Extension target being injected exactly once with its sources and `NSExtensionPointIdentifier`, the app entitlements carrying the shared Keychain group with the application-identifier group **first**, and `android`/`ios` staying untracked | 25-33s |
 | `NSE crypto (swiftc)` | `ci.yml` | Compiles the extension's Swift crypto on a macOS runner (the Intel pool, `macos-15-intel`, because the arm64 `macos-latest` pool left it without a runner and cancelled it on 2026-11-17) and opens push envelopes sealed by `@kangentic/protocol`'s own `sealPushEnvelope`, including the published HChaCha20 vector and the tamper / wrong-key / wrong-AAD / stale rejections. The only gate that proves the Swift XChaCha20-Poly1305 is *correct* rather than merely compiling | ~1-2 min |
 | `Release counters (stores)` | `ci.yml` | The hand-managed `versionCode` and `buildNumber` have not been reused. Runs on `pull_request` only | ~15s |
 | `E2E Tests (Maestro)` | `e2e.yml` | A thin gate: `E2E Tests (Smoke)` passed, **or** the suites were legitimately skipped (`no-app-change` or `draft`) and it says which | 3s |
@@ -1094,12 +1095,84 @@ version**. That last one matters as much as the pin itself. Pinning CI alone jus
 a developer on a newer CLI writes a flow that passes locally and fails the gate, with nothing in
 either place explaining why.
 
+#### Expo's live version list (`expo-drift.yml`)
+
+`npx expo install --check` compares the installed versions with the ones Expo expects for the SDK,
+and Expo changes that list on its own server with no commit here. Between 2026-07-25 and 2026-11-28
+it did so 22 times, about once every six days. While `Native config (prebuild)` ran the check
+online, each move turned an unrelated pull request red, where it read as "my branch broke the
+build". Twice `main` sat red for four to five days, because a red check on `main` notifies nobody.
+
+So the check is split in two:
+
+- **On every pull request, offline.** `ci.yml`'s "Check for dependency drift" step sets
+  `EXPO_OFFLINE` on that step alone, never on the job, whose prebuild steps must stay online. The
+  CLI then reads only the installed SDK's `expo/bundledNativeModules.json`, so the result depends
+  on the lockfile alone. That list holds every `expo-*` package plus `react`, `react-dom`,
+  `react-native` and `jest-expo`. What a pull request no longer checks is the versions endpoint's
+  entries: `expo` itself, `typescript`, `jest`, `@types/react` and `@types/jest`.
+- **Daily, online, against `main`.** `.github/workflows/expo-drift.yml` runs
+  `scripts/checkExpoDrift.mjs` at 07:30 UTC. On drift it opens one public issue labelled
+  `expo-drift`, or rewrites the open one's body, and fails. That failed scheduled run is the
+  notification, and GitHub sends it to whoever last edited the cron line. Once `main` is current, the
+  next run closes the issue. A run that cannot reach Expo fails without touching the issue, because
+  the CLI then falls back to the local list and says so only on stderr. Only a run on `main` writes
+  the issue; a dispatch on another branch reports to the job summary.
+
+What was proven, and how (measured on 2026-11-28, on a fresh `npm ci` of `main` at 79c362b, the day
+Expo moved SDK 58 to `expo` ~58.1.0):
+
+| Check on that tree | Exit |
+|---|---|
+| Online | 1, with six packages behind |
+| Offline | 0 |
+| Offline, after `npm install expo-router@57 --no-save` | 1, naming `expo-router` |
+| Offline, after `npm ci` restored it | 0 |
+
+**The fix the issue names is `scripts/fixExpoDrift.mjs`.** It does four things, in order:
+
+1. `npx expo install --fix`. Two rounds is normal, and the CLI runs the second itself.
+2. A `git mv` for each `patches/<package>+<version>.patch` whose package moved.
+3. A re-apply with `npx patch-package --error-on-fail`.
+4. The online check.
+
+It exits non-zero, naming the call site to check, when a hunk no longer applies; that is the one step
+a person must look at.
+
+Run it in a fresh worktree off `origin/main` with its own `npm ci`, outside the main checkout and
+never at a drive root. Never run it in a task worktree. Its `node_modules` is normally a junction to
+the main checkout's, so the installed versions it compares are someone else's, and the script
+refuses a linked `node_modules`. A Gradle daemon there has also held a jar under `node_modules` and
+failed the install with EBUSY.
+
+```
+git fetch origin
+git worktree add --detach <a folder outside the main checkout> origin/main
+cd <that folder>
+npm ci
+node scripts/fixExpoDrift.mjs
+```
+
+Commit the result as its own `chore(deps)` commit on its own branch, open a pull request, and remove
+the worktree. Never fold it into a feature PR. A release PR is the one exception: `/release`'s
+preflight runs the online check itself, and on drift takes the fix as its own commit in the release
+PR (the maintainer's call on 2026-10-22).
+
+**No auto-PR yet, and why.** A pull request opened with `GITHUB_TOKEN` triggers no `pull_request`
+workflows, and `Release counters (stores)` is required and runs only on `pull_request`, so a bot PR
+from the scheduled run could never go green. Extending `expo-drift.yml` to open the fix PR itself
+needs a GitHub App or a personal access token as a repository secret, which only the owner can set
+up. `tests/unit/buildWorkflow.test.ts` pins the workflow as it is today: a daily schedule, `contents:
+read` plus `issues: write` and nothing else, no secret, no push, no pull request, and no
+`EXPO_OFFLINE`.
+
 #### Dependencies held past the Expo SDK mapping (`expo.install.exclude`)
 
-`npx expo install --check` is a required gate (`Native config (prebuild)`), and it validates every
-package in `node_modules/expo/bundledNativeModules.json` plus the SDK's `relatedPackages` (from
-`api.expo.dev/v2/versions/latest`). Listing a package in `package.json`'s `expo.install.exclude`
-SILENCES that gate for it (`.claude/rules/expo-cng.md`), so each entry is a deliberate, vetted hold
+`npx expo install --check` validates every package in `node_modules/expo/bundledNativeModules.json`
+plus the SDK's `relatedPackages` (from `api.expo.dev/v2/versions/latest`). It gates the offline half
+of that list on every pull request (`Native config (prebuild)`), and all of it daily on `main`
+(`expo-drift.yml`, above). Listing a package in `package.json`'s `expo.install.exclude`
+SILENCES both for it (`.claude/rules/expo-cng.md`), so each entry is a deliberate, vetted hold
 and is recorded here with its reason. **`tests/unit/expoInstallExclude.test.ts` fails if an entry
 has no row below or a row has no entry**, so an exclude cannot outlive its reason unnoticed.
 `/upgrade-deps` reads this table and keeps it current: it flags a hold the mapping has caught up

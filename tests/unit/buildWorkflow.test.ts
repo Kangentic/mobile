@@ -1269,15 +1269,153 @@ describe('build-ios screenshot capture driver startup', () => {
   });
 });
 
-describe('ci.yml Native config (prebuild) R8 checks', () => {
-  function readCiJobs(): Record<string, { steps?: { name?: string; run?: string }[] }> {
-    const ciSource = readFileSync(`${repositoryRoot}.github/workflows/ci.yml`, 'utf8');
-    const ci = parseYaml(ciSource) as {
-      jobs: Record<string, { steps?: { name?: string; run?: string }[] }>;
-    };
-    return ci.jobs;
+interface CiStep {
+  name?: string;
+  uses?: string;
+  run?: string;
+  env?: Record<string, string>;
+  with?: Record<string, unknown>;
+}
+interface CiWorkflow {
+  env?: Record<string, string>;
+  jobs: Record<string, { env?: Record<string, string>; steps?: CiStep[] }>;
+}
+
+function readCiWorkflow(): CiWorkflow {
+  return parseYaml(readFileSync(`${repositoryRoot}.github/workflows/ci.yml`, 'utf8')) as CiWorkflow;
+}
+
+function readCiJobs(): CiWorkflow['jobs'] {
+  return readCiWorkflow().jobs;
+}
+
+/**
+ * The drift check reads Expo's version list OFFLINE, from the installed SDK's own
+ * expo/bundledNativeModules.json, so a required check cannot go red because Expo
+ * moved its list on its server: that happened 22 times between 2026-07-25 and
+ * 2026-11-28, each time on an unrelated pull request. expo-drift.yml checks main
+ * against the live list instead. Offline mode must stay on that one step: the
+ * same job runs `expo prebuild` twice, and neither may run offline.
+ */
+describe('ci.yml Native config (prebuild) dependency drift check', () => {
+  function readNativeConfigStep(stepName: string): CiStep {
+    const step = readCiJobs()['native-config'].steps?.find((candidate) => candidate.name === stepName);
+    expect(step, `ci.yml native-config has no step named "${stepName}"`).toBeDefined();
+    return step ?? {};
   }
 
+  it('runs the drift check offline, on that step', () => {
+    const driftStep = readNativeConfigStep('Check for dependency drift');
+    expect(driftStep.run?.trim()).toBe('npx expo install --check');
+    expect(driftStep.env?.EXPO_OFFLINE).toBe('1');
+  });
+
+  it('keeps offline mode off the workflow, the job and both prebuild steps', () => {
+    const workflow = readCiWorkflow();
+    expect(workflow.env?.EXPO_OFFLINE).toBeUndefined();
+    expect(workflow.jobs['native-config'].env?.EXPO_OFFLINE).toBeUndefined();
+    for (const stepName of ['Generate the native Android project', 'Generate the native iOS project']) {
+      const prebuildStep = readNativeConfigStep(stepName);
+      expect(prebuildStep.run).toContain('expo prebuild');
+      expect(prebuildStep.env?.EXPO_OFFLINE).toBeUndefined();
+    }
+    // Exactly one step in the whole workflow names it.
+    const offlineSteps = Object.values(workflow.jobs)
+      .flatMap((job) => job.steps ?? [])
+      .filter((step) => step.env?.EXPO_OFFLINE !== undefined);
+    expect(offlineSteps.map((step) => step.name)).toEqual(['Check for dependency drift']);
+  });
+});
+
+/**
+ * The other half of the offline drift check above: expo-drift.yml reads Expo's LIVE
+ * list against main once a day and keeps one public issue open while main is behind.
+ * It holds a write scope on a public repository's issues and runs unattended, so the
+ * properties that keep it narrow are pinned: it runs on a schedule, it can write
+ * issues and nothing else, it reads no secret, it pushes nothing, and it stays online.
+ */
+describe('expo-drift.yml scheduled live check', () => {
+  interface DriftWorkflow {
+    on: Record<string, unknown>;
+    permissions?: Record<string, string>;
+    env?: Record<string, string>;
+    concurrency?: { group?: string; 'cancel-in-progress'?: boolean };
+    jobs: Record<string, { permissions?: unknown; env?: Record<string, string>; steps?: CiStep[] }>;
+  }
+  const driftSource = readFileSync(`${repositoryRoot}.github/workflows/expo-drift.yml`, 'utf8');
+  const driftWorkflow = parseYaml(driftSource) as DriftWorkflow;
+  const driftSteps = Object.values(driftWorkflow.jobs).flatMap((job) => job.steps ?? []);
+  const checkScriptSource = readFileSync(`${repositoryRoot}scripts/checkExpoDrift.mjs`, 'utf8');
+
+  function checkStep(): CiStep {
+    const step = driftSteps.find((candidate) => candidate.run?.includes('scripts/checkExpoDrift.mjs'));
+    expect(step, 'expo-drift.yml no longer runs scripts/checkExpoDrift.mjs').toBeDefined();
+    return step ?? {};
+  }
+
+  it('runs daily and on demand, and on nothing else', () => {
+    expect(Object.keys(driftWorkflow.on).sort()).toEqual(['schedule', 'workflow_dispatch']);
+    const schedule = driftWorkflow.on.schedule as { cron?: string }[];
+    expect(schedule).toHaveLength(1);
+    // Daily: every field but the minute and hour is a wildcard.
+    expect(schedule[0].cron).toMatch(/^\d{1,2} \d{1,2} \* \* \*$/);
+  });
+
+  it('can read the repository and write issues, and nothing else', () => {
+    expect(driftWorkflow.permissions).toEqual({ contents: 'read', issues: 'write' });
+    for (const job of Object.values(driftWorkflow.jobs)) {
+      expect(job.permissions).toBeUndefined();
+    }
+  });
+
+  it('references no secret', () => {
+    // GITHUB_TOKEN arrives as `github.token`, so even it is not a `secrets.` reference.
+    expect(withoutComments(driftSource)).not.toContain('secrets.');
+    expect(checkStep().env?.GH_TOKEN).toBe('${{ github.token }}');
+  });
+
+  it('pushes nothing and opens no pull request', () => {
+    const code = withoutComments(driftSource);
+    expect(code).not.toMatch(/git push|gh pr |pull-requests|contents: write/);
+    expect(checkScriptSource).not.toMatch(/'push'|'pr'/);
+    const checkout = driftSteps.find((step) => step.uses?.startsWith('actions/checkout'));
+    expect(checkout?.with?.['persist-credentials']).toBe(false);
+  });
+
+  it('checks the LIVE list: nothing sets EXPO_OFFLINE, and the script removes it', () => {
+    expect(driftWorkflow.env?.EXPO_OFFLINE).toBeUndefined();
+    for (const job of Object.values(driftWorkflow.jobs)) {
+      expect(job.env?.EXPO_OFFLINE).toBeUndefined();
+    }
+    for (const step of driftSteps) {
+      expect(step.env?.EXPO_OFFLINE).toBeUndefined();
+    }
+    expect(withoutComments(driftSource)).not.toContain('EXPO_OFFLINE');
+    expect(checkScriptSource).toContain('env: onlineEnvironment(process.env)');
+  });
+
+  it('restores node_modules through the shared composite and adds no cache of its own', () => {
+    expect(driftSteps.some((step) => step.uses === './.github/actions/setup-node-deps')).toBe(true);
+    expect(driftSteps.some((step) => step.uses?.startsWith('actions/cache'))).toBe(false);
+  });
+
+  it('writes the public issue from main only', () => {
+    // A dispatch on a branch must not publish that branch's state as main's.
+    expect(checkStep().env?.WRITE_ISSUE).toBe("${{ github.ref == 'refs/heads/main' }}");
+  });
+
+  it('hands the script the repository and the run link, which the issue writes and its link need', () => {
+    expect(checkStep().env?.GH_REPO).toBe('${{ github.repository }}');
+    expect(checkStep().env?.RUN_URL).toContain('actions/runs/${{ github.run_id }}');
+  });
+
+  it('never lets a dispatch race the schedule or cancel a run halfway through an issue write', () => {
+    expect(driftWorkflow.concurrency?.group).toBe('expo-drift');
+    expect(driftWorkflow.concurrency?.['cancel-in-progress']).toBe(false);
+  });
+});
+
+describe('ci.yml Native config (prebuild) R8 checks', () => {
   it('confirms R8 against the generated gradle.properties, not build.gradle', () => {
     // expo-build-properties writes these as GRADLE PROPERTIES, and the
     // generated release block reads them through findProperty, so
@@ -1411,6 +1549,7 @@ describe('workflow env-gated steps are defined in their own job', () => {
     'cache-cleanup.yml',
     'app-store-check.yml',
     'store-listing.yml',
+    'expo-drift.yml',
   ];
 
   it.each(workflowFiles)('%s gates steps only on env its job defines', (workflowFile) => {
