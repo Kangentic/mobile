@@ -5,7 +5,7 @@
  * the 32-byte push key base64url-encoded, and re-registers only when the
  * Expo token rotates. The status surface feeds the Settings UI.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RegisterPushRequestPayload, RegisterPushResponsePayload } from '@kangentic/protocol';
 
 const secureStoreState = vi.hoisted(() => ({ storedValues: new Map<string, string>() }));
@@ -220,6 +220,143 @@ describe('registerPushWithDesktop', () => {
 
     expect(registerPush).toHaveBeenCalledTimes(3);
     expect(registerPush.mock.calls[2][0].categories).toEqual(defaultCategories);
+  });
+});
+
+describe('registerPushWithDesktop - the registration queue', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    secureStoreState.storedValues.clear();
+    expoNotificationsState.getExpoPushTokenAsync.mockReset();
+    pushIdentityState.getPushIdentityPublicKey.mockReset();
+    pushKeysState.persistNsePushIdentityPublicKey.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Holds the next Expo token fetch until released, so a registration can be caught waiting on it. */
+  function holdNextTokenFetch(tokenValue: string): { release: () => void } {
+    let releaseFetch: (() => void) | null = null;
+    expoNotificationsState.getExpoPushTokenAsync.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseFetch = () => resolve({ type: 'expo', data: tokenValue });
+        }),
+    );
+    return {
+      release: () => {
+        if (!releaseFetch) throw new Error('the held token fetch was never reached');
+        releaseFetch();
+      },
+    };
+  }
+
+  async function flushMicrotasks(): Promise<void> {
+    for (let round = 0; round < 10; round += 1) await Promise.resolve();
+  }
+
+  /**
+   * Mutation seen failing: replacing settledOrCapped(registrationQueue, ...)
+   * with a plain registrationQueue.then(...), after which the second
+   * registration never sends and the 30 s assertion fails.
+   */
+  it('stops waiting for a registration whose token fetch never settles after 30 s, and not before', async () => {
+    vi.useFakeTimers();
+    expoNotificationsState.getExpoPushTokenAsync.mockImplementationOnce(() => new Promise(() => undefined));
+    expoNotificationsState.getExpoPushTokenAsync.mockResolvedValue({ type: 'expo', data: 'ExponentPushToken[alpha]' });
+    const { pushRegistration, registerPush, verbs } = await loadHarness();
+    registerPush.mockResolvedValue({ registered: true });
+
+    void pushRegistration.registerPushWithDesktop(verbs);
+    const secondRegistration = pushRegistration.registerPushWithDesktop(verbs);
+
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(registerPush).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    // Asserted before awaiting, so a registration still stuck behind the first
+    // fails here rather than as a timeout.
+    await vi.waitFor(() => expect(registerPush).toHaveBeenCalledTimes(1));
+    await secondRegistration;
+    expect(registerPush.mock.calls[0][0].action).toBe('register');
+    expect(pushRegistration.getPushRegistrationStatus()).toBe('registered');
+  });
+
+  it('does not wait out the cap when the previous registration settles: a later one runs at once', async () => {
+    vi.useFakeTimers();
+    expoNotificationsState.getExpoPushTokenAsync.mockResolvedValue({ type: 'expo', data: 'ExponentPushToken[alpha]' });
+    const { pushRegistration, registerPush, verbs } = await loadHarness();
+    registerPush.mockResolvedValue({ registered: false });
+
+    await pushRegistration.registerPushWithDesktop(verbs);
+    expect(pushRegistration.getPushRegistrationStatus()).toBe('capability-denied');
+
+    registerPush.mockResolvedValue({ registered: true });
+    await pushRegistration.registerPushWithDesktop(verbs);
+
+    expect(registerPush).toHaveBeenCalledTimes(2);
+    expect(pushRegistration.getPushRegistrationStatus()).toBe('registered');
+  });
+
+  /**
+   * Mutation seen failing: deleting the `unregisterGeneration += 1;` line, after
+   * which the held registration sends a register after the unregister.
+   */
+  it('an unregister cancels a registration waiting on its token fetch: nothing is sent or minted after it', async () => {
+    const heldToken = holdNextTokenFetch('ExponentPushToken[alpha]');
+    expoNotificationsState.getExpoPushTokenAsync.mockResolvedValue({ type: 'expo', data: 'ExponentPushToken[alpha]' });
+    const { pushRegistration, registerPush, verbs } = await loadHarness();
+    registerPush.mockResolvedValue({ registered: true });
+
+    const waitingRegistration = pushRegistration.registerPushWithDesktop(verbs);
+    await flushMicrotasks();
+    await pushRegistration.unregisterPushWithDesktop(verbs);
+
+    heldToken.release();
+    await waitingRegistration;
+
+    expect(registerPush.mock.calls.map(([payload]) => payload.action)).toEqual(['unregister']);
+    // No push key was minted after the unpair's wipe.
+    expect(secureStoreState.storedValues.has('push.decrypt.key')).toBe(false);
+    expect(pushRegistration.getPushRegistrationStatus()).toBe('pending');
+
+    // The cancelled registration left nothing marked registered, so a re-pair
+    // with the same desktop in this process registers afresh.
+    await pushRegistration.registerPushWithDesktop(verbs);
+    expect(registerPush.mock.calls.map(([payload]) => payload.action)).toEqual(['unregister', 'register']);
+    expect(pushRegistration.getPushRegistrationStatus()).toBe('registered');
+  });
+
+  /**
+   * Mutation seen failing: deleting the check after `await verbs.registerPush`,
+   * after which the late answer marks this process registered and the fresh
+   * registration below is skipped as already done.
+   */
+  it('an unregister during a register on the wire stops its answer being recorded', async () => {
+    expoNotificationsState.getExpoPushTokenAsync.mockResolvedValue({ type: 'expo', data: 'ExponentPushToken[alpha]' });
+    const { pushRegistration, registerPush, verbs } = await loadHarness();
+    let answerRegister: (() => void) | null = null;
+    registerPush.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answerRegister = () => resolve({ registered: true });
+        }),
+    );
+    registerPush.mockResolvedValue({ registered: true });
+
+    const registrationOnTheWire = pushRegistration.registerPushWithDesktop(verbs);
+    await vi.waitFor(() => expect(answerRegister).not.toBeNull());
+    await pushRegistration.unregisterPushWithDesktop(verbs);
+    (answerRegister as unknown as () => void)();
+    await registrationOnTheWire;
+
+    expect(pushRegistration.getPushRegistrationStatus()).toBe('pending');
+    expect(secureStoreState.storedValues.has('push.expoToken.lastRegistered')).toBe(false);
+
+    await pushRegistration.registerPushWithDesktop(verbs);
+    expect(registerPush.mock.calls.map(([payload]) => payload.action)).toEqual(['register', 'unregister', 'register']);
   });
 });
 

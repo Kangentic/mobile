@@ -180,6 +180,24 @@ describe('connectionManager bootstrap retry', () => {
   });
 
   /**
+   * The demo flag's other half (the demo anchor is connectionDemoFlag.test.ts):
+   * a connection that is not the demo's tells the bootstrap so, which is what
+   * lets it repair a desktop's missing push registration. Mutation: hard-coding
+   * `true` at the runBootstrap call or in the activeConnection object.
+   */
+  it('hands a non-demo connection to the bootstrap as demoConnection: false', async () => {
+    const { startConnectionLifecycle, getActiveConnection } = await import('@/connection/connectionManager');
+    mockRunBootstrap.mockResolvedValue(undefined);
+
+    startConnectionLifecycle();
+    await waitUntil(() => mockRunBootstrap.mock.calls.length === 1);
+
+    expect(getActiveConnection()?.demoConnection).toBe(false);
+    const bootstrapArguments = mockRunBootstrap.mock.calls[0] as unknown[];
+    expect(bootstrapArguments[2]).toEqual({ demoConnection: false });
+  });
+
+  /**
    * A retry scheduled under one bootstrapGeneration must never fire after a
    * FRESH onEstablished (not a teardown - session.reset() + a new handshake
    * keeps controller.session.isEstablished true throughout) has moved the
