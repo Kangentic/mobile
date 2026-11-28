@@ -113,7 +113,7 @@ describe('bootstrap over loopback', () => {
 
     stub.beginHandshake();
     await flushLoopback();
-    await runBootstrap(verbs, subscriptions);
+    await runBootstrap(verbs, subscriptions, { demoConnection: false });
     await flushLoopback();
 
     // Stores populated.
@@ -237,7 +237,7 @@ describe('bootstrap over loopback', () => {
     // connectionManager's listener, registered after the manager's own, as in
     // production: the bootstrap runs on every established handshake.
     session.onEstablished(() => {
-      void runBootstrap(verbs, subscriptions);
+      void runBootstrap(verbs, subscriptions, { demoConnection: false });
     });
 
     stub.beginHandshake();
